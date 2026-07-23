@@ -13,8 +13,8 @@ use std::{
 use windows::Win32::Foundation::HWND;
 
 use crate::{
-    tray, updater, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig,
-    SimStatus, UiCmd,
+    tray, updater, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer,
+    RumbleConfig, SimStatus, UiCmd,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -48,7 +48,7 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus) {
     });
 }
 
-fn controller_badge_dot(ui: &mut egui::Ui, connected: bool) {
+fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool) {
     let (color, filled) = if connected {
         (Color32::from_rgb(30, 180, 90), true)
     } else {
@@ -59,9 +59,9 @@ fn controller_badge_dot(ui: &mut egui::Ui, connected: bool) {
         ui.colored_label(
             color,
             if connected {
-                "Sidestick: Connected"
+                format!("{label}: Connected")
             } else {
-                "Sidestick: Disconnected"
+                format!("{label}: Disconnected")
             },
         );
     });
@@ -69,6 +69,7 @@ fn controller_badge_dot(ui: &mut egui::Ui, connected: bool) {
 
 pub struct UiState {
     pub controller_connected: Arc<AtomicBool>,
+    pub throttle_connected: Arc<AtomicBool>,
 
     pub status: Arc<Mutex<SimStatus>>,
     pub aircraft_title: Arc<Mutex<String>>,
@@ -160,6 +161,30 @@ impl UiState {
         });
     }
 
+    /// Компактная строка с двумя чекбоксами маршрутизации эффекта на
+    /// устройства: "J" (Combat Joystick R) и "T" (URSA MINOR Throttle).
+    /// Рисуется сразу под соответствующим effect_row/effect_row_hinted.
+    fn device_target_row(ui: &mut egui::Ui, target: &mut EffectDeviceTarget, on_change: &mut bool) {
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+            ui.label(RichText::new("Устройство:").weak().small());
+
+            let cb_j = ui
+                .checkbox(&mut target.enable_joystick, "J")
+                .on_hover_text("Combat Joystick R");
+            if cb_j.changed() {
+                *on_change = true;
+            }
+
+            let cb_t = ui
+                .checkbox(&mut target.enable_throttle, "T")
+                .on_hover_text("WINCTRL URSA MINOR Throttle (РУД)");
+            if cb_t.changed() {
+                *on_change = true;
+            }
+        });
+    }
+
     fn taxi_bound_row(
         ui: &mut egui::Ui,
         name: &str,
@@ -218,7 +243,10 @@ impl eframe::App for UiState {
                 ui.separator();
 
                 let controller_ok = self.controller_connected.load(Ordering::Relaxed);
-                controller_badge_dot(ui, controller_ok);
+                controller_badge_dot(ui, "Sidestick", controller_ok);
+
+                let throttle_ok = self.throttle_connected.load(Ordering::Relaxed);
+                controller_badge_dot(ui, "Throttle", throttle_ok);
 
                 let ac = self.aircraft_title.lock().clone();
                 if !ac.is_empty() {
@@ -290,6 +318,7 @@ impl eframe::App for UiState {
                                  &mut _changed,
                              );
                              cfg.overspeed_enabled = overspeed_enabled;
+                             UiState::device_target_row(ui, &mut cfg.device_targets.overspeed, &mut _changed);
 
                             ui.add_space(8.0);
 
@@ -306,6 +335,7 @@ impl eframe::App for UiState {
                                 Some("Факт. сила на выходе: 0–50 (мягкий фон, ниже удара сжатия стоек)"),
                             );
                             cfg.ground_enabled = ground_enabled;
+                            UiState::device_target_row(ui, &mut cfg.device_targets.ground_roll, &mut _changed);
 
                             ui.add_space(8.0);
 
@@ -392,6 +422,7 @@ impl eframe::App for UiState {
                                 &mut _changed,
                             );
                             cfg.flaps_enabled = flaps_enabled;
+                            UiState::device_target_row(ui, &mut cfg.device_targets.flaps, &mut _changed);
 
                             // Gear effect
                             let mut gear_enabled = cfg.gear_enabled;
@@ -405,6 +436,7 @@ impl eframe::App for UiState {
                                 &mut _changed,
                             );
                             cfg.gear_enabled = gear_enabled;
+                            UiState::device_target_row(ui, &mut cfg.device_targets.gear_bump, &mut _changed);
 
                             // Stall effect
                             let mut stall_enabled = cfg.stall_enabled;
@@ -418,6 +450,7 @@ impl eframe::App for UiState {
                                 &mut _changed,
                             );
                             cfg.stall_enabled = stall_enabled;
+                            UiState::device_target_row(ui, &mut cfg.device_targets.stall, &mut _changed);
 
                              // Spoilers effect
                              let mut spoilers_enabled = cfg.spoilers_enabled;
@@ -431,6 +464,58 @@ impl eframe::App for UiState {
                                  &mut _changed,
                              );
                              cfg.spoilers_enabled = spoilers_enabled;
+                             UiState::device_target_row(ui, &mut cfg.device_targets.spoilers, &mut _changed);
+
+                             ui.add_space(8.0);
+
+                             // Engine Start / Ignition effect
+                             let mut engine_start_enabled = cfg.enable_engine_start;
+                             let engine_start_hint = "Раскрутка стартером (пульсация растущей частоты) + удар воспламенения при запуске двигателя";
+                             ui.horizontal(|ui| {
+                                 let cb = ui.checkbox(&mut engine_start_enabled, "");
+                                 if cb.changed() {
+                                     _changed = true;
+                                 }
+
+                                 // Настраиваемый порог N2 Idle — сразу после переключателя
+                                 // включения эффекта, естественным потоком строки (без
+                                 // выравнивания по правому краю).
+                                 ui.add_space(8.0);
+                                 ui.label(RichText::new("N2 Idle%:").strong());
+                                 let n2_resp = ui.add(
+                                     egui::DragValue::new(&mut cfg.engine_idle_n2)
+                                         .speed(1.0)
+                                         .clamp_range(10.0..=100.0),
+                                 );
+                                 if n2_resp.changed() {
+                                     _changed = true;
+                                 }
+
+                                 ui.add_space(8.0);
+
+                                 let name_label = ui.label(RichText::new("Engine Start / Ignition").strong());
+                                 name_label.on_hover_text(engine_start_hint);
+
+                                 ui.add_enabled_ui(engine_start_enabled, |ui| {
+                                     let slider = egui::Slider::new(&mut cfg.engine_start_strength, 0.0..=255.0)
+                                         .trailing_fill(true)
+                                         .show_value(true);
+                                     let resp = ui.add(slider);
+                                     resp.clone().on_hover_text(engine_start_hint);
+                                     if resp.changed() {
+                                         _changed = true;
+                                     }
+                                 });
+
+                                 let active = self.effects.engine_start_active.load(Ordering::Relaxed);
+                                 let (color, filled) = if active && engine_start_enabled {
+                                     (Color32::WHITE, true)
+                                 } else {
+                                     (Color32::from_gray(90), false)
+                                 };
+                                 circle_indicator_colored(ui, color, filled);
+                             });
+                             cfg.enable_engine_start = engine_start_enabled;
 
                              ui.add_space(8.0);
 
@@ -464,6 +549,7 @@ impl eframe::App for UiState {
                                     Some(headroom_hint),
                                 );
                                 cfg.gear_comp_nose_enabled = nose_enabled;
+                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_nose, &mut _changed);
 
                                 // Left
                                 let mut left_enabled = cfg.gear_comp_left_enabled;
@@ -478,6 +564,7 @@ impl eframe::App for UiState {
                                     Some(headroom_hint),
                                 );
                                 cfg.gear_comp_left_enabled = left_enabled;
+                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_left, &mut _changed);
 
                                 // Right
                                 let mut right_enabled = cfg.gear_comp_right_enabled;
@@ -492,6 +579,7 @@ impl eframe::App for UiState {
                                     Some(headroom_hint),
                                 );
                                 cfg.gear_comp_right_enabled = right_enabled;
+                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_right, &mut _changed);
                             });
 
                             ui.add_space(8.0);
@@ -506,6 +594,7 @@ impl eframe::App for UiState {
                                 cfg.gear_transit_enabled = gear_transit_enabled;
                                 ui.label(RichText::new("Gear Transit & Doors").strong());
                             });
+                            UiState::device_target_row(ui, &mut cfg.device_targets.gear_transit, &mut _changed);
 
                             ui.add_space(8.0);
 
@@ -528,6 +617,7 @@ impl eframe::App for UiState {
                                 circle_indicator_colored(ui, color, filled);
                             });
                             cfg.bank_enabled = bank_enabled;
+                            UiState::device_target_row(ui, &mut cfg.device_targets.bank, &mut _changed);
 
                             // Bank threshold slider - диапазон 0..90°
                             ui.horizontal(|ui| {
@@ -620,6 +710,58 @@ egui::Grid::new("aircraft_data")
 
                 ui.label("Paused:");
                 ui.label(v.paused.to_string());
+                ui.end_row();
+            }
+            None => {
+                ui.label("No data");
+                ui.label("");
+                ui.end_row();
+            }
+        }
+    });
+
+ui.add_space(8.0);
+ui.separator();
+ui.heading("Engine Telemetry");
+ui.add_space(4.0);
+
+egui::Grid::new("engine_telemetry")
+    .num_columns(2)
+    .spacing(Vec2::new(20.0, 4.0))
+    .show(ui, |ui| {
+        let v = *self.last_vars.lock();
+        match v {
+            Some(v) => {
+                let combustion_label = |ui: &mut egui::Ui, active: bool| {
+                    if active {
+                        ui.colored_label(Color32::from_rgb(30, 180, 90), "ON");
+                    } else {
+                        ui.colored_label(Color32::from_gray(140), "OFF");
+                    }
+                };
+
+                ui.label(RichText::new("Engine 1 (Left / Throttle)").strong());
+                ui.label("");
+                ui.end_row();
+
+                ui.label("N2:");
+                ui.label(format!("{:.1}%", v.eng1_n2_percent));
+                ui.end_row();
+
+                ui.label("Combustion:");
+                combustion_label(ui, v.eng1_combustion > 0.5);
+                ui.end_row();
+
+                ui.label(RichText::new("Engine 2 (Right / Joystick)").strong());
+                ui.label("");
+                ui.end_row();
+
+                ui.label("N2:");
+                ui.label(format!("{:.1}%", v.eng2_n2_percent));
+                ui.end_row();
+
+                ui.label("Combustion:");
+                combustion_label(ui, v.eng2_combustion > 0.5);
                 ui.end_row();
             }
             None => {

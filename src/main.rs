@@ -26,6 +26,7 @@ fn main() -> Result<()> {
     let (tx_ui, rx_ui) = unbounded::<UiCmd>();
 
     let controller_connected = Arc::new(AtomicBool::new(false));
+    let throttle_connected = Arc::new(AtomicBool::new(false));
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
     let config = Arc::new(ConfigShared::new_loaded());
     let effects: EffectsShared = Arc::new(EffectsState::default());
@@ -46,9 +47,10 @@ fn main() -> Result<()> {
 
     {
         let controller_flag = controller_connected.clone();
+        let throttle_flag = throttle_connected.clone();
         let rx = rx_hid.clone();
         let logs = logs.clone();
-        thread::spawn(move || hid_worker(controller_flag, rx, logs));
+        thread::spawn(move || hid_worker(controller_flag, throttle_flag, rx, logs));
     }
 
     {
@@ -88,6 +90,7 @@ fn main() -> Result<()> {
 
     let app = UiState {
         controller_connected,
+        throttle_connected,
 
         status,
         aircraft_title,
@@ -138,7 +141,7 @@ fn main() -> Result<()> {
         }),
     );
 
-    let _ = tx_hid.send(HidCmd::SendIntensity(0));
+    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
     thread::sleep(Duration::from_millis(60));
 
     run.map_err(|e| anyhow::anyhow!("eframe failed: {e}"))

@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
-use crate::hid::protocol::{build_simapp_vibe_frame, ursa_model_name, WW_VID};
+use crate::hid::protocol::{
+    build_simapp_vibe_frame, build_throttle_vibe_frame, is_ursa_minor_throttle, ursa_model_name,
+    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID,
+};
 use crate::hid::win32::hid_query_caps_from_path;
 use crate::{HidCmd, LogBuffer};
 
@@ -23,7 +26,39 @@ struct HidEntry {
     report_id: u8,
 }
 
-fn hid_send_out(devs: &[HidEntry], intensity: u8, _logs: &LogBuffer) -> (usize, usize) {
+/// Отправляет вибрацию на РУД (WINCTRL URSA MINOR Throttle). У Throttle два
+/// физических вибромотора на одном HID-устройстве, адресуемых отдельными
+/// байтами в отчёте, поэтому шлём два фрейма — по одному на каждый мотор.
+fn send_throttle_rumble(
+    device: &HidDevice,
+    out_len: u16,
+    report_id: u8,
+    left_motor: u8,
+    right_motor: u8,
+) -> (usize, usize) {
+    let mut ok = 0usize;
+    let mut fail = 0usize;
+
+    for (motor_addr, intensity) in [
+        (THROTTLE_MOTOR_LEFT, left_motor),
+        (THROTTLE_MOTOR_RIGHT, right_motor),
+    ] {
+        let frame = build_throttle_vibe_frame(report_id, out_len, motor_addr, intensity);
+        match device.write(&frame) {
+            Ok(n) if n == frame.len() => ok += 1,
+            _ => fail += 1,
+        }
+    }
+
+    (ok, fail)
+}
+
+fn hid_send_out(
+    devs: &[HidEntry],
+    joystick_intensity: u8,
+    throttle_intensity: u8,
+    _logs: &LogBuffer,
+) -> (usize, usize) {
     let mut ok = 0usize;
     let mut fail = 0usize;
 
@@ -32,7 +67,22 @@ fn hid_send_out(devs: &[HidEntry], intensity: u8, _logs: &LogBuffer) -> (usize, 
             continue;
         }
 
-        let frame = build_simapp_vibe_frame(d.pid, d.report_id, d.out_len, intensity);
+        if is_ursa_minor_throttle(d.pid) {
+            // РУД: одна и та же интенсивность на оба мотора (левый/правый),
+            // т.к. RumbleEngine пока считает один общий throttle_intensity.
+            let (t_ok, t_fail) = send_throttle_rumble(
+                &d.dev,
+                d.out_len,
+                d.report_id,
+                throttle_intensity,
+                throttle_intensity,
+            );
+            ok += t_ok;
+            fail += t_fail;
+            continue;
+        }
+
+        let frame = build_simapp_vibe_frame(d.pid, d.report_id, d.out_len, joystick_intensity);
         match d.dev.write(&frame) {
             Ok(n) => {
                 if n == frame.len() {
@@ -50,7 +100,12 @@ fn hid_send_out(devs: &[HidEntry], intensity: u8, _logs: &LogBuffer) -> (usize, 
     (ok, fail)
 }
 
-pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, logs: LogBuffer) {
+pub fn hid_worker(
+    controller_connected: Arc<AtomicBool>,
+    throttle_connected: Arc<AtomicBool>,
+    rx: Receiver<HidCmd>,
+    logs: LogBuffer,
+) {
     logs.push("HID: worker starting…");
 
     let verbose_hid = std::env::var_os("URSA_VERBOSE_HID").is_some();
@@ -72,8 +127,10 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
 
     const SEND_INTERVAL: Duration = Duration::from_millis(50);
 
-    let mut desired_intensity: u8 = 0;
-    let mut last_sent_intensity: u8 = 255;
+    let mut desired_joystick: u8 = 0;
+    let mut desired_throttle: u8 = 0;
+    let mut last_sent_joystick: u8 = 255;
+    let mut last_sent_throttle: u8 = 255;
     let mut last_send: Instant = Instant::now() - SEND_INTERVAL;
     let mut hold: bool = false;
     let mut prev_scan_sig = String::new();
@@ -196,7 +253,10 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
             last_missing_log = Instant::now();
         }
 
-        controller_connected.store(!devices.is_empty(), Ordering::Relaxed);
+        let joystick_present = devices.iter().any(|d| !is_ursa_minor_throttle(d.pid));
+        let throttle_present = devices.iter().any(|d| is_ursa_minor_throttle(d.pid));
+        controller_connected.store(joystick_present, Ordering::Relaxed);
+        throttle_connected.store(throttle_present, Ordering::Relaxed);
         last_scan = Instant::now();
     };
 
@@ -205,13 +265,19 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(cmd) => match cmd {
-                HidCmd::SendIntensity(level) => {
-                    desired_intensity = level;
+                HidCmd::SendIntensity { joystick, throttle } => {
+                    desired_joystick = joystick;
+                    desired_throttle = throttle;
                     if verbose_hid
-                        && (i16::from(desired_intensity) - i16::from(last_sent_intensity)).abs()
+                        && ((i16::from(desired_joystick) - i16::from(last_sent_joystick)).abs()
                             >= 15
+                            || (i16::from(desired_throttle) - i16::from(last_sent_throttle)).abs()
+                                >= 15)
                     {
-                        logs.push(format!("HID: cmd SendIntensity({})", desired_intensity));
+                        logs.push(format!(
+                            "HID: cmd SendIntensity(joystick={}, throttle={})",
+                            desired_joystick, desired_throttle
+                        ));
                     }
                 }
                 HidCmd::SendRaw(bytes) => {
@@ -233,15 +299,17 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                 }
                 HidCmd::StopAll => {
                     logs.push("HID: cmd StopAll");
-                    desired_intensity = 0;
+                    desired_joystick = 0;
+                    desired_throttle = 0;
                     last_send = Instant::now() - SEND_INTERVAL;
                 }
                 HidCmd::SetHold(x) => {
                     hold = x;
                     logs.push(format!("HID: cmd SetHold({})", hold));
                     if hold {
-                        let (_ok, _fail) = hid_send_out(&devices, 0, &logs);
-                        last_sent_intensity = 0;
+                        let (_ok, _fail) = hid_send_out(&devices, 0, 0, &logs);
+                        last_sent_joystick = 0;
+                        last_sent_throttle = 0;
                     }
                 }
                 HidCmd::ReopenDevices => {
@@ -259,9 +327,10 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
         ensure_open(&mut api, &mut devices);
 
         if last_send.elapsed() >= SEND_INTERVAL {
-            let out = if hold { 0 } else { desired_intensity };
-            if out != last_sent_intensity {
-                let (ok, fail) = hid_send_out(&devices, out, &logs);
+            let out_j = if hold { 0 } else { desired_joystick };
+            let out_t = if hold { 0 } else { desired_throttle };
+            if out_j != last_sent_joystick || out_t != last_sent_throttle {
+                let (ok, fail) = hid_send_out(&devices, out_j, out_t, &logs);
 
                 let now = Instant::now();
                 if fail > 0
@@ -269,8 +338,9 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     || now.duration_since(last_status_log) > Duration::from_millis(900)
                 {
                     logs.push(format!(
-                        "HID: send intensity {} → ok={} fail={} (devs={}, hold={})",
-                        out,
+                        "HID: send intensity joystick={} throttle={} → ok={} fail={} (devs={}, hold={})",
+                        out_j,
+                        out_t,
                         ok,
                         fail,
                         devices.len(),
@@ -279,7 +349,8 @@ pub fn hid_worker(controller_connected: Arc<AtomicBool>, rx: Receiver<HidCmd>, l
                     last_status_log = now;
                 }
 
-                last_sent_intensity = out;
+                last_sent_joystick = out_j;
+                last_sent_throttle = out_t;
             }
             last_send = Instant::now();
         }

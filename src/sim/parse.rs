@@ -23,6 +23,11 @@ pub fn parse_main_elems(
         gear_comp_left: elem.get(12).copied().unwrap_or(0.0),
         gear_comp_right: elem.get(13).copied().unwrap_or(0.0),
         trailing_edge_flaps_left_percent: elem.get(3).copied().unwrap_or(0.0).clamp(0.0, 100.0),
+        // Телеметрия запуска двигателей (Engine Spool-up & Ignition)
+        eng1_n2_percent: elem.get(14).copied().unwrap_or(0.0),
+        eng1_combustion: elem.get(15).copied().unwrap_or(0.0),
+        eng2_n2_percent: elem.get(16).copied().unwrap_or(0.0),
+        eng2_combustion: elem.get(17).copied().unwrap_or(0.0),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);

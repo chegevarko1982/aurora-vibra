@@ -22,6 +22,49 @@ pub struct FlightVars {
     pub gear_comp_left: f64,
     pub gear_comp_right: f64,
     pub trailing_edge_flaps_left_percent: f64,
+    // Телеметрия запуска двигателей (Engine Spool-up & Ignition)
+    pub eng1_n2_percent: f64,
+    pub eng1_combustion: f64,
+    pub eng2_n2_percent: f64,
+    pub eng2_combustion: f64,
+}
+
+/// Привязка одного эффекта вибрации к устройствам вывода.
+/// Позволяет независимо включать/выключать отправку конкретного эффекта
+/// на Combat Joystick R и/или на WINCTRL URSA MINOR Throttle (РУД).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EffectDeviceTarget {
+    pub enable_joystick: bool, // Отправлять на Combat Joystick R
+    pub enable_throttle: bool, // Отправлять на URSA MINOR Throttle
+}
+
+impl Default for EffectDeviceTarget {
+    fn default() -> Self {
+        // Сохраняем прежнее поведение по умолчанию: все эффекты идут на
+        // джойстик, РУД молчит, пока пользователь явно не включит его в UI.
+        Self {
+            enable_joystick: true,
+            enable_throttle: false,
+        }
+    }
+}
+
+/// Привязка к устройствам для каждого эффекта вибрации по отдельности.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct EffectDeviceTargets {
+    pub overspeed: EffectDeviceTarget,
+    pub ground_roll: EffectDeviceTarget, // Удар о стыки плит ВПП (Taxi/Takeoff Thump)
+    pub flaps: EffectDeviceTarget,
+    pub gear_bump: EffectDeviceTarget, // Импульс от ручки шасси (Down/Up)
+    pub stall: EffectDeviceTarget,
+    pub spoilers: EffectDeviceTarget,
+    pub bank: EffectDeviceTarget,
+    pub gear_comp_nose: EffectDeviceTarget,  // Обжатие носовой стойки (Touchdown)
+    pub gear_comp_left: EffectDeviceTarget,  // Обжатие левой стойки (Touchdown)
+    pub gear_comp_right: EffectDeviceTarget, // Обжатие правой стойки (Touchdown)
+    pub gear_transit: EffectDeviceTarget,    // Движение стоек + удар дверей на замке
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +135,20 @@ pub struct RumbleConfig {
     pub spoilers_intensity: f32,
 
     pub is_combat_edition: bool,
+
+    // Engine Spool-up & Ignition settings
+    pub enable_engine_start: bool,
+    pub engine_start_strength: f32,
+    // Порог N2 (%), при котором двигатель считается вышедшим на Idle.
+    // Разные самолёты выходят на Idle при разных значениях N2, поэтому
+    // это значение настраивается пользователем в UI (по умолчанию 60.0).
+    pub engine_idle_n2: f32,
+
+    // Привязка каждого эффекта к устройствам (Джойстик / РУД / оба).
+    // #[serde(default)] на уровне структуры уже гарантирует, что старые
+    // settings.json без этого поля подхватят EffectDeviceTargets::default()
+    // (все эффекты → джойстик, РУД выключен — прежнее поведение).
+    pub device_targets: EffectDeviceTargets,
 }
 
 impl Default for RumbleConfig {
@@ -152,6 +209,12 @@ impl Default for RumbleConfig {
             gear_comp_right_peak: 30.0,
 
             is_combat_edition: false,
+
+            enable_engine_start: true,
+            engine_start_strength: 100.0,
+            engine_idle_n2: 60.0,
+
+            device_targets: EffectDeviceTargets::default(),
         }
     }
 }
@@ -173,11 +236,17 @@ impl Default for RumbleConfig {
      pub gear_comp_nose_active: bool,
      pub gear_comp_left_active: bool,
      pub gear_comp_right_active: bool,
+
+     // Engine Spool-up & Ignition status
+     pub engine_start_active: bool,
  }
 
 #[derive(Debug)]
 pub enum HidCmd {
-    SendIntensity(u8),
+    /// Раздельная интенсивность для Combat Joystick R и для WINCTRL URSA
+    /// MINOR Throttle (РУД) — какое значение реально уйдёт на каждое
+    /// устройство, решает EffectDeviceTarget конкретного эффекта в rumble.rs.
+    SendIntensity { joystick: u8, throttle: u8 },
     SendRaw(Vec<u8>),
     StopAll,
     ReopenDevices,
@@ -253,6 +322,8 @@ pub struct EffectsState {
     pub gear_comp_nose_active: AtomicBool,
     pub gear_comp_left_active: AtomicBool,
     pub gear_comp_right_active: AtomicBool,
+
+    pub engine_start_active: AtomicBool,
 }
 
 pub type EffectsShared = Arc<EffectsState>;
@@ -283,6 +354,9 @@ impl EffectsState {
             .store(snap.gear_comp_left_active, Ordering::Relaxed);
         self.gear_comp_right_active
             .store(snap.gear_comp_right_active, Ordering::Relaxed);
+
+        self.engine_start_active
+            .store(snap.engine_start_active, Ordering::Relaxed);
     }
 
     pub fn clear_all(&self) {

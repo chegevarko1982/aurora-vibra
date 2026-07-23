@@ -299,6 +299,12 @@ pub fn sim_worker(
                 ("GEAR ANIMATION POSITION:0", "Percent"),
                 ("GEAR ANIMATION POSITION:1", "Percent"),
                 ("GEAR ANIMATION POSITION:2", "Percent"),
+                // Телеметрия запуска двигателей (Engine Spool-up & Ignition) —
+                // индексы 14/15/16/17 в буфере elem[] ниже.
+                ("TURB ENG N2:1", "Percent"),
+                ("GENERAL ENG COMBUSTION:1", "Bool"),
+                ("TURB ENG N2:2", "Percent"),
+                ("GENERAL ENG COMBUSTION:2", "Bool"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -423,7 +429,7 @@ pub fn sim_worker(
                                 effects.clear_all();
                             } else if ev.u_event_id == EVT_SIM_STOP {
                                 in_flight = false;
-                                let _ = tx_hid.send(HidCmd::SendIntensity(0));
+                                let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
                                 *last_vars.lock() = None;
                                 effects.clear_all();
                             } else if ev.u_event_id == EVT_PAUSE_SYS {
@@ -457,7 +463,7 @@ pub fn sim_worker(
                                 if !in_flight {
                                     *status.lock() = SimStatus::Connected;
                                     *last_vars.lock() = None;
-                                    let _ = tx_hid.send(HidCmd::SendIntensity(0));
+                                    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
                                     effects.clear_all();
                                     continue;
                                 }
@@ -473,14 +479,16 @@ pub fn sim_worker(
                                     continue;
                                 }
 
-                                // 14 элементов: SPOILERS HANDLE POSITION (10) и
-                                // GEAR ANIMATION POSITION:0/1/2 (11/12/13) — буфер
-                                // на 12 обрезал левую/правую стойки шасси (всегда 0.0).
-                                let mut elem = [0f64; 14];
+                                // 18 элементов: SPOILERS HANDLE POSITION (10),
+                                // GEAR ANIMATION POSITION:0/1/2 (11/12/13) и
+                                // телеметрия запуска двигателей (14/15/16/17):
+                                // TURB ENG N2:1, GENERAL ENG COMBUSTION:1,
+                                // TURB ENG N2:2, GENERAL ENG COMBUSTION:2.
+                                let mut elem = [0f64; 18];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(14),
+                                        count.min(18),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -488,7 +496,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(14),
+                                        count.min(18),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
@@ -514,7 +522,10 @@ pub fn sim_worker(
                                     hold.load(Ordering::Relaxed),
                                 );
                                 effects.apply_snapshot(&out.effects);
-                                let _ = tx_hid.send(HidCmd::SendIntensity(out.intensity));
+                                let _ = tx_hid.send(HidCmd::SendIntensity {
+                                    joystick: out.joystick_intensity,
+                                    throttle: out.throttle_intensity,
+                                });
                             }
                         }
                         SIMCONNECT_RECV_ID_EXCEPTION => {}
@@ -549,7 +560,7 @@ pub fn sim_worker(
             *status.lock() = SimStatus::Disconnected;
             *aircraft_title.lock() = String::new();
             *last_vars.lock() = None;
-            let _ = tx_hid.send(HidCmd::SendIntensity(0));
+            let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
             thread::sleep(Duration::from_millis(600));
         }
     }
