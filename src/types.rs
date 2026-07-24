@@ -89,6 +89,11 @@ pub struct RumbleConfig {
     pub gear_comp_right_enabled: bool,
     pub gear_comp_right_peak: f32,
     pub gear_transit_enabled: bool,
+    // SPLIT-режим для удара обжатия основных стоек (crosswind landing awareness):
+    // левая стойка → эксклюзивно РУД, правая стойка → эксклюзивно джойстик.
+    // Носовая стойка не участвует в SPLIT и продолжает маршрутизироваться
+    // обычными чекбоксами device_targets.gear_comp_nose.
+    pub split_touchdown: bool,
 
     // Bank/Turb settings
     pub bank_enabled: bool,
@@ -207,6 +212,7 @@ impl Default for RumbleConfig {
             gear_comp_right_enabled: true,
             gear_transit_enabled: true,
             gear_comp_right_peak: 30.0,
+            split_touchdown: false,
 
             is_combat_edition: false,
 

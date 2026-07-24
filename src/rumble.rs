@@ -451,8 +451,14 @@ impl RumbleEngine {
             if left_active {
                 let p = ((fv.sim_time_s - s.gear_comp_left_t0) / GEAR_COMP_BUMP_DURATION).clamp(0.0, 1.0);
                 let term = s.gear_comp_left_dyn_peak * (1.0 - p).powi(3);
-                if dt_.gear_comp_left.enable_joystick { transients_j += term; }
-                if dt_.gear_comp_left.enable_throttle { transients_t += term; }
+                if cfg.split_touchdown {
+                    // SPLIT: левая основная стойка — эксклюзивно на РУД (левая рука),
+                    // независимо от чекбоксов dt_.gear_comp_left.
+                    transients_t += term;
+                } else {
+                    if dt_.gear_comp_left.enable_joystick { transients_j += term; }
+                    if dt_.gear_comp_left.enable_throttle { transients_t += term; }
+                }
             }
             effects.gear_comp_left_active = left_active;
 
@@ -460,8 +466,14 @@ impl RumbleEngine {
             if right_active {
                 let p = ((fv.sim_time_s - s.gear_comp_right_t0) / GEAR_COMP_BUMP_DURATION).clamp(0.0, 1.0);
                 let term = s.gear_comp_right_dyn_peak * (1.0 - p).powi(3);
-                if dt_.gear_comp_right.enable_joystick { transients_j += term; }
-                if dt_.gear_comp_right.enable_throttle { transients_t += term; }
+                if cfg.split_touchdown {
+                    // SPLIT: правая основная стойка — эксклюзивно на джойстик (правая рука),
+                    // независимо от чекбоксов dt_.gear_comp_right.
+                    transients_j += term;
+                } else {
+                    if dt_.gear_comp_right.enable_joystick { transients_j += term; }
+                    if dt_.gear_comp_right.enable_throttle { transients_t += term; }
+                }
             }
             effects.gear_comp_right_active = right_active;
         }

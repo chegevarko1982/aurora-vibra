@@ -531,6 +531,20 @@ impl eframe::App for UiState {
                                 if ui.checkbox(&mut gear_comp_enabled, "Enabled").changed() {
                                     _changed = true;
                                 }
+
+                                ui.add_space(12.0);
+
+                                if ui
+                                    .checkbox(&mut cfg.split_touchdown, "SPLIT (Left->Throttle, Right->Stick)")
+                                    .on_hover_text(
+                                        "Crosswind awareness: левая основная стойка идёт исключительно \
+                                         на РУД, правая — исключительно на джойстик, независимо от \
+                                         чекбоксов маршрутизации ниже. Носовая стойка не затрагивается.",
+                                    )
+                                    .changed()
+                                {
+                                    _changed = true;
+                                }
                             });
                             cfg.gear_comp_enabled = gear_comp_enabled;
 
