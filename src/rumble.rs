@@ -365,9 +365,10 @@ impl RumbleEngine {
             let period_progress = speed_progress.powf(period_curve_exp);
             let target_period_s = cfg.thump_max_period_s
                 - (cfg.thump_max_period_s - physical_period_s) * period_progress;
-
-            // 3. Нелинейное нарастание амплитуды (более резкий рост к верхней границе).
-            let amplitude_curve = speed_progress.powf(1.4);
+            // 3. Нелинейное нарастание амплитуды.
+            // Базовый уровень 0.3 (30%) гарантирует, что даже на минимальной скорости (1 узел)
+            // множитель не уйдет в ноль. Слайдер теперь корректно задает пиковую силу эффекта.
+            let amplitude_curve = 0.3 + 0.7 * speed_progress.powf(1.4);
 
             // 4. Логика перезапуска цикла импульса (стык плиты позади — ждём следующий).
             let time_since_last_thump = fv.sim_time_s - s.thump_last_time_s;

@@ -128,7 +128,7 @@ fn main() -> Result<()> {
     let tx_ui_for_tray = tx_ui.clone();
 
     let run = eframe::run_native(
-        "Ursa Minor FFB v2.3 Ernesto edition",
+        "Ursa Minor FFB v2.4 Ernesto edition",
         native_options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
