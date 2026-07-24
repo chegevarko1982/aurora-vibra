@@ -517,6 +517,25 @@ impl eframe::App for UiState {
                              });
                              cfg.enable_engine_start = engine_start_enabled;
 
+                             ui.horizontal(|ui| {
+                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+                                 if ui
+                                     .checkbox(
+                                         &mut cfg.four_engine_mode,
+                                         "4-Eng Mode (1&2->Left, 3&4->Right)",
+                                     )
+                                     .on_hover_text(
+                                         "4-моторные самолёты: Eng1/Eng2 (левое крыло) группируются \
+                                          на РУД (левая рука), Eng3/Eng4 (правое крыло) — на джойстик \
+                                          (правая рука). Используется максимум N2 в паре, удар \
+                                          воспламенения срабатывает от любого двигателя своей группы.",
+                                     )
+                                     .changed()
+                                 {
+                                     _changed = true;
+                                 }
+                             });
+
                              ui.add_space(8.0);
 
                              // Base effect removed per user request
@@ -784,6 +803,30 @@ egui::Grid::new("engine_telemetry")
 
                 ui.label("Combustion:");
                 combustion_label(ui, v.eng2_combustion > 0.5);
+                ui.end_row();
+
+                ui.label(RichText::new("Engine 3 (4-Eng: contributes to Left)").strong());
+                ui.label("");
+                ui.end_row();
+
+                ui.label("N2:");
+                ui.label(format!("{:.1}%", v.eng3_n2_percent));
+                ui.end_row();
+
+                ui.label("Combustion:");
+                combustion_label(ui, v.eng3_combustion > 0.5);
+                ui.end_row();
+
+                ui.label(RichText::new("Engine 4 (4-Eng: contributes to Right)").strong());
+                ui.label("");
+                ui.end_row();
+
+                ui.label("N2:");
+                ui.label(format!("{:.1}%", v.eng4_n2_percent));
+                ui.end_row();
+
+                ui.label("Combustion:");
+                combustion_label(ui, v.eng4_combustion > 0.5);
                 ui.end_row();
             }
             None => {

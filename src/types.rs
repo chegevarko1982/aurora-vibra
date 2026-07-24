@@ -27,6 +27,13 @@ pub struct FlightVars {
     pub eng1_combustion: f64,
     pub eng2_n2_percent: f64,
     pub eng2_combustion: f64,
+    // Двигатели 3/4 — для 4-моторных самолётов (см. RumbleConfig::four_engine_mode).
+    // На 2-моторных самолётах SimConnect обычно возвращает 0.0 для этих индексов,
+    // что корректно интерпретируется как "двигатель выключен" (deadzone).
+    pub eng3_n2_percent: f64,
+    pub eng3_combustion: f64,
+    pub eng4_n2_percent: f64,
+    pub eng4_combustion: f64,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
@@ -148,6 +155,10 @@ pub struct RumbleConfig {
     // Разные самолёты выходят на Idle при разных значениях N2, поэтому
     // это значение настраивается пользователем в UI (по умолчанию 60.0).
     pub engine_idle_n2: f32,
+    // 4-моторный режим: двигатели группируются по крылу — Eng1/Eng2 → Throttle
+    // (левая рука), Eng3/Eng4 → Joystick (правая рука). Используется максимум N2
+    // в паре и OR по combustion для срабатывания удара воспламенения.
+    pub four_engine_mode: bool,
 
     // Привязка каждого эффекта к устройствам (Джойстик / РУД / оба).
     // #[serde(default)] на уровне структуры уже гарантирует, что старые
@@ -219,6 +230,7 @@ impl Default for RumbleConfig {
             enable_engine_start: true,
             engine_start_strength: 100.0,
             engine_idle_n2: 60.0,
+            four_engine_mode: false,
 
             device_targets: EffectDeviceTargets::default(),
         }
@@ -360,8 +372,6 @@ impl EffectsState {
             .store(snap.stall_active, Ordering::Relaxed);
         self.spoilers_active
             .store(snap.spoilers_active, Ordering::Relaxed);
-        self.overspeed_active
-            .store(snap.overspeed_active, Ordering::Relaxed);
 
         self.gear_comp_nose_active
             .store(snap.gear_comp_nose_active, Ordering::Relaxed);

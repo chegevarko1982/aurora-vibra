@@ -28,6 +28,11 @@ pub fn parse_main_elems(
         eng1_combustion: elem.get(15).copied().unwrap_or(0.0),
         eng2_n2_percent: elem.get(16).copied().unwrap_or(0.0),
         eng2_combustion: elem.get(17).copied().unwrap_or(0.0),
+        // Двигатели 3/4 (4-моторные самолёты, см. RumbleConfig::four_engine_mode)
+        eng3_n2_percent: elem.get(18).copied().unwrap_or(0.0),
+        eng3_combustion: elem.get(19).copied().unwrap_or(0.0),
+        eng4_n2_percent: elem.get(20).copied().unwrap_or(0.0),
+        eng4_combustion: elem.get(21).copied().unwrap_or(0.0),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);
