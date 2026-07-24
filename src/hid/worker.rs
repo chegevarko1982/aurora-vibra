@@ -56,7 +56,8 @@ fn send_throttle_rumble(
 fn hid_send_out(
     devs: &[HidEntry],
     joystick_intensity: u8,
-    throttle_intensity: u8,
+    throttle_left_intensity: u8,
+    throttle_right_intensity: u8,
     _logs: &LogBuffer,
 ) -> (usize, usize) {
     let mut ok = 0usize;
@@ -68,14 +69,14 @@ fn hid_send_out(
         }
 
         if is_ursa_minor_throttle(d.pid) {
-            // РУД: одна и та же интенсивность на оба мотора (левый/правый),
-            // т.к. RumbleEngine пока считает один общий throttle_intensity.
+            // РУД: теперь левый и правый мотор получают независимую
+            // интенсивность — RumbleEngine считает их раздельно.
             let (t_ok, t_fail) = send_throttle_rumble(
                 &d.dev,
                 d.out_len,
                 d.report_id,
-                throttle_intensity,
-                throttle_intensity,
+                throttle_left_intensity,
+                throttle_right_intensity,
             );
             ok += t_ok;
             fail += t_fail;
@@ -128,9 +129,11 @@ pub fn hid_worker(
     const SEND_INTERVAL: Duration = Duration::from_millis(50);
 
     let mut desired_joystick: u8 = 0;
-    let mut desired_throttle: u8 = 0;
+    let mut desired_throttle_left: u8 = 0;
+    let mut desired_throttle_right: u8 = 0;
     let mut last_sent_joystick: u8 = 255;
-    let mut last_sent_throttle: u8 = 255;
+    let mut last_sent_throttle_left: u8 = 255;
+    let mut last_sent_throttle_right: u8 = 255;
     let mut last_send: Instant = Instant::now() - SEND_INTERVAL;
     let mut hold: bool = false;
     let mut prev_scan_sig = String::new();
@@ -265,18 +268,21 @@ pub fn hid_worker(
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(cmd) => match cmd {
-                HidCmd::SendIntensity { joystick, throttle } => {
+                HidCmd::SendIntensity { joystick, throttle_left, throttle_right } => {
                     desired_joystick = joystick;
-                    desired_throttle = throttle;
+                    desired_throttle_left = throttle_left;
+                    desired_throttle_right = throttle_right;
                     if verbose_hid
                         && ((i16::from(desired_joystick) - i16::from(last_sent_joystick)).abs()
                             >= 15
-                            || (i16::from(desired_throttle) - i16::from(last_sent_throttle)).abs()
+                            || (i16::from(desired_throttle_left) - i16::from(last_sent_throttle_left)).abs()
+                                >= 15
+                            || (i16::from(desired_throttle_right) - i16::from(last_sent_throttle_right)).abs()
                                 >= 15)
                     {
                         logs.push(format!(
-                            "HID: cmd SendIntensity(joystick={}, throttle={})",
-                            desired_joystick, desired_throttle
+                            "HID: cmd SendIntensity(joystick={}, throttle_left={}, throttle_right={})",
+                            desired_joystick, desired_throttle_left, desired_throttle_right
                         ));
                     }
                 }
@@ -300,16 +306,18 @@ pub fn hid_worker(
                 HidCmd::StopAll => {
                     logs.push("HID: cmd StopAll");
                     desired_joystick = 0;
-                    desired_throttle = 0;
+                    desired_throttle_left = 0;
+                    desired_throttle_right = 0;
                     last_send = Instant::now() - SEND_INTERVAL;
                 }
                 HidCmd::SetHold(x) => {
                     hold = x;
                     logs.push(format!("HID: cmd SetHold({})", hold));
                     if hold {
-                        let (_ok, _fail) = hid_send_out(&devices, 0, 0, &logs);
+                        let (_ok, _fail) = hid_send_out(&devices, 0, 0, 0, &logs);
                         last_sent_joystick = 0;
-                        last_sent_throttle = 0;
+                        last_sent_throttle_left = 0;
+                        last_sent_throttle_right = 0;
                     }
                 }
                 HidCmd::ReopenDevices => {
@@ -328,9 +336,13 @@ pub fn hid_worker(
 
         if last_send.elapsed() >= SEND_INTERVAL {
             let out_j = if hold { 0 } else { desired_joystick };
-            let out_t = if hold { 0 } else { desired_throttle };
-            if out_j != last_sent_joystick || out_t != last_sent_throttle {
-                let (ok, fail) = hid_send_out(&devices, out_j, out_t, &logs);
+            let out_t_left = if hold { 0 } else { desired_throttle_left };
+            let out_t_right = if hold { 0 } else { desired_throttle_right };
+            if out_j != last_sent_joystick
+                || out_t_left != last_sent_throttle_left
+                || out_t_right != last_sent_throttle_right
+            {
+                let (ok, fail) = hid_send_out(&devices, out_j, out_t_left, out_t_right, &logs);
 
                 let now = Instant::now();
                 if fail > 0
@@ -338,9 +350,10 @@ pub fn hid_worker(
                     || now.duration_since(last_status_log) > Duration::from_millis(900)
                 {
                     logs.push(format!(
-                        "HID: send intensity joystick={} throttle={} → ok={} fail={} (devs={}, hold={})",
+                        "HID: send intensity joystick={} throttle_left={} throttle_right={} → ok={} fail={} (devs={}, hold={})",
                         out_j,
-                        out_t,
+                        out_t_left,
+                        out_t_right,
                         ok,
                         fail,
                         devices.len(),
@@ -350,7 +363,8 @@ pub fn hid_worker(
                 }
 
                 last_sent_joystick = out_j;
-                last_sent_throttle = out_t;
+                last_sent_throttle_left = out_t_left;
+                last_sent_throttle_right = out_t_right;
             }
             last_send = Instant::now();
         }

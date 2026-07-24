@@ -429,7 +429,7 @@ pub fn sim_worker(
                                 effects.clear_all();
                             } else if ev.u_event_id == EVT_SIM_STOP {
                                 in_flight = false;
-                                let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
+                                let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
                                 *last_vars.lock() = None;
                                 effects.clear_all();
                             } else if ev.u_event_id == EVT_PAUSE_SYS {
@@ -463,7 +463,7 @@ pub fn sim_worker(
                                 if !in_flight {
                                     *status.lock() = SimStatus::Connected;
                                     *last_vars.lock() = None;
-                                    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
+                                    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
                                     effects.clear_all();
                                     continue;
                                 }
@@ -524,7 +524,8 @@ pub fn sim_worker(
                                 effects.apply_snapshot(&out.effects);
                                 let _ = tx_hid.send(HidCmd::SendIntensity {
                                     joystick: out.joystick_intensity,
-                                    throttle: out.throttle_intensity,
+                                    throttle_left: out.throttle_left_intensity,
+                                    throttle_right: out.throttle_right_intensity,
                                 });
                             }
                         }
@@ -560,7 +561,7 @@ pub fn sim_worker(
             *status.lock() = SimStatus::Disconnected;
             *aircraft_title.lock() = String::new();
             *last_vars.lock() = None;
-            let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
+            let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
             thread::sleep(Duration::from_millis(600));
         }
     }

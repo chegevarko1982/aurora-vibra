@@ -43,7 +43,6 @@ pub struct RumbleState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RumbleOutput {
-    pub joystick_intensity: u8,
     pub throttle_left_intensity: u8,
     pub throttle_right_intensity: u8,
     pub effects: EffectsSnapshot,
@@ -124,7 +123,6 @@ impl RumbleEngine {
 
         if fv.paused || hold {
             return RumbleOutput {
-                joystick_intensity: 0,
                 throttle_left_intensity: 0,
                 throttle_right_intensity: 0,
                 effects,
@@ -243,34 +241,24 @@ impl RumbleEngine {
         // мы сами формируем вибрацию (программный ШИМ) на частоте 25 Гц;
         // маршрутизация на джойстик/РУД применяется позже, при подмешивании
         // flaps_term в transients_j/transients_t.
-        // flaps_term_j — немодифицированный термин для джойстика (не делится на лево/право).
-        // flaps_term_t_left/right — термин для РУД, чередующийся между каналами каждые 500 мс.
-        let mut flaps_term_j: f64 = 0.0;
-        let mut flaps_term_t_left: f64 = 0.0;
-        let mut flaps_term_t_right: f64 = 0.0;
-        if cfg.flaps_enabled && s.current_flaps_amplitude > 0.01 {
-            let fixed_period = 0.04; // 0.04 с = 25 Гц
-            let cycle = (fv.sim_time_s / fixed_period).fract();
+        // -------- Flaps motor hum (alternating left/right every 500 ms) --------
+        let mut flaps_term_left = 0.0;
+        let mut flaps_term_right = 0.0;
 
-            // Создаем пульсацию (от 0.0 до 1.0) в виде полуволн синуса
+        if cfg.flaps_enabled && s.current_flaps_amplitude > 0.01 {
+            let fixed_period = 0.04; // 25 Hz
+            let cycle = (fv.sim_time_s / fixed_period).fract();
             let oscillation = (std::f64::consts::PI * cycle).sin();
 
-            // Преобразуем duty cycle в силу вибрации (0 .. 255)
-            let flaps_term = s.current_flaps_amplitude * 255.0 * oscillation;
-            flaps_term_j = flaps_term;
-
-            // Чередуем канал (лево/право) каждые 500 мс.
-            // Примечание: dt_.flaps.enable_throttle (маршрутизация на РУД) проверяется
-            // позже, в месте подмешивания flaps_term_t_left/right в transients_t_left/right,
-            // т.к. cfg.device_targets (dt_) ещё не определён на этом этапе step().
+            // Determine which side is active in the current 500 ms window
             let is_left_phase = (fv.sim_time_s / 0.5).floor() as i64 % 2 == 0;
 
+            let base = s.current_flaps_amplitude * 255.0 * oscillation;
             if is_left_phase {
-                flaps_term_t_left = flaps_term;
+                flaps_term_left = base;
             } else {
-                flaps_term_t_right = flaps_term;
+                flaps_term_right = base;
             }
-
             effects.flaps_bump_active = true;
         } else {
             effects.flaps_bump_active = false;
@@ -514,13 +502,6 @@ impl RumbleEngine {
             if (all_up_now && not_all_up_prev) || (all_down_now && not_all_down_prev) {
                 s.gear_doors_closed_t0 = fv.sim_time_s;
             }
-
-            // Индикатор активности в UI: горит пока стойки физически движутся
-            // ИЛИ пока идёт 1-секундный удар фиксации на замке (см. оверрайд
-            // final_throttle/final_joystick ниже, использующий то же окно).
-            let slam_active =
-                s.gear_doors_closed_t0 > 0.0 && fv.sim_time_s <= s.gear_doors_closed_t0 + 1.0;
-            effects.gear_transit_active = moving_count > 0 || slam_active;
         }
 
         // Обновляем состояния для следующего кадра (независимо от чекбокса,
@@ -690,36 +671,29 @@ impl RumbleEngine {
             s.bg_smoothed_throttle += alpha * (air_term_t - s.bg_smoothed_throttle);
         }
 
-        // Подмешиваем вибрацию закрылков в transients (чтобы она не сглаживалась).
-        // РУД (throttle) разветвляется на левый/правый канал: обе копии стартуют
-        // от общего transients_t, накопленного выше, а затем в каждую подмешивается
-        // только "свой" flaps_term_t_left/right (чередование каждые 500 мс).
-        if dt_.flaps.enable_joystick { transients_j += flaps_term_j; }
-
+        // Подмешиваем вибрацию закрылков в transients (чтобы она не сглаживалась)
+        // Сначала создаем две отдельные копии transients для левого и правого каналов
         let mut transients_t_left = transients_t;
         let mut transients_t_right = transients_t;
-        if dt_.flaps.enable_throttle {
-            transients_t_left += flaps_term_t_left;
-            transients_t_right += flaps_term_t_right;
-        }
+        // Затем добавляем flaps terms индивидуально
+        transients_t_left += flaps_term_left;
+        transients_t_right += flaps_term_right;
+        // Теперь используем разделенные transients для левого и правого каналов
+        if dt_.flaps.enable_joystick { transients_j += transients_t_left; }
+        if dt_.flaps.enable_throttle { transients_t += transients_t_right; }
 
         let mut total_j = s.bg_smoothed + ground_term_j + transients_j + bank_term_j + spoilers_term_j;
-        let mut total_t_left = s.bg_smoothed_throttle + ground_term_t + transients_t_left + bank_term_t + spoilers_term_t;
-        let mut total_t_right = s.bg_smoothed_throttle + ground_term_t + transients_t_right + bank_term_t + spoilers_term_t;
+        let mut total_t = s.bg_smoothed_throttle + ground_term_t + transients_t + bank_term_t + spoilers_term_t;
 
         if cfg.stall_enabled && fv.stalled {
             let ceiling = cfg.stall_ceiling as f64;
             if dt_.stall.enable_joystick { total_j = total_j.max(ceiling); }
-            if dt_.stall.enable_throttle {
-                total_t_left = total_t_left.max(ceiling);
-                total_t_right = total_t_right.max(ceiling);
-            }
+            if dt_.stall.enable_throttle { total_t = total_t.max(ceiling); }
         }
 
         // 1. Применяем лимиты из ползунков программы для обычных эффектов
         let mut final_joystick = total_j.clamp(0.0, cfg.max_output as f64);
-        let mut final_throttle_left = total_t_left.clamp(0.0, cfg.max_output as f64);
-        let mut final_throttle_right = total_t_right.clamp(0.0, cfg.max_output as f64);
+        let mut final_throttle = total_t.clamp(0.0, cfg.max_output as f64);
 
         // 2. АБСОЛЮТНЫЙ ОВЕРРАЙД: Удар створок шасси (длительность 1 секунда, макс 255)
         // Выполняется ПОСЛЕ clamp, поэтому пробивает любые ограничения конфигурации.
@@ -729,10 +703,7 @@ impl RumbleEngine {
             // Удар силой 255 с квадратичным затуханием
             let slam = 255.0 * (1.0 - p).powi(2);
             if dt_.gear_transit.enable_joystick { final_joystick = final_joystick.max(slam); }
-            if dt_.gear_transit.enable_throttle {
-                final_throttle_left = final_throttle_left.max(slam);
-                final_throttle_right = final_throttle_right.max(slam);
-            }
+            if dt_.gear_transit.enable_throttle { final_throttle = final_throttle.max(slam); }
         }
 
         // 3. АБСОЛЮТНЫЙ ОВЕРРАЙД: "Удар воспламенения" двигателя (500 мс, макс. сила).
@@ -742,14 +713,12 @@ impl RumbleEngine {
         if cfg.enable_engine_start && combustion_kick_active {
             let strength = (cfg.engine_start_strength as f64).clamp(0.0, 255.0);
             final_joystick = strength;
-            final_throttle_left = strength;
-            final_throttle_right = strength;
+            final_throttle = strength;
         }
 
         RumbleOutput {
             joystick_intensity: final_joystick.clamp(0.0, 255.0).round() as u8,
-            throttle_left_intensity: final_throttle_left.clamp(0.0, 255.0).round() as u8,
-            throttle_right_intensity: final_throttle_right.clamp(0.0, 255.0).round() as u8,
+            throttle_intensity: final_throttle.clamp(0.0, 255.0).round() as u8,
             effects,
         }
     } // Конец метода step

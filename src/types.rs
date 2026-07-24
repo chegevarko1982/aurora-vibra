@@ -237,6 +237,9 @@ impl Default for RumbleConfig {
      pub gear_comp_left_active: bool,
      pub gear_comp_right_active: bool,
 
+     // Gear Transit & Doors (движение стоек + удар фиксации на замке)
+     pub gear_transit_active: bool,
+
      // Engine Spool-up & Ignition status
      pub engine_start_active: bool,
  }
@@ -246,7 +249,9 @@ pub enum HidCmd {
     /// Раздельная интенсивность для Combat Joystick R и для WINCTRL URSA
     /// MINOR Throttle (РУД) — какое значение реально уйдёт на каждое
     /// устройство, решает EffectDeviceTarget конкретного эффекта в rumble.rs.
-    SendIntensity { joystick: u8, throttle: u8 },
+    /// РУД имеет два независимых вибромотора (левый/правый), поэтому
+    /// throttle тоже разбит на два канала.
+    SendIntensity { joystick: u8, throttle_left: u8, throttle_right: u8 },
     SendRaw(Vec<u8>),
     StopAll,
     ReopenDevices,
@@ -323,6 +328,8 @@ pub struct EffectsState {
     pub gear_comp_left_active: AtomicBool,
     pub gear_comp_right_active: AtomicBool,
 
+    pub gear_transit_active: AtomicBool,
+
     pub engine_start_active: AtomicBool,
 }
 
@@ -354,6 +361,9 @@ impl EffectsState {
             .store(snap.gear_comp_left_active, Ordering::Relaxed);
         self.gear_comp_right_active
             .store(snap.gear_comp_right_active, Ordering::Relaxed);
+
+        self.gear_transit_active
+            .store(snap.gear_transit_active, Ordering::Relaxed);
 
         self.engine_start_active
             .store(snap.engine_start_active, Ordering::Relaxed);

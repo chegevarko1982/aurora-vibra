@@ -141,7 +141,7 @@ fn main() -> Result<()> {
         }),
     );
 
-    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle: 0 });
+    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
     thread::sleep(Duration::from_millis(60));
 
     run.map_err(|e| anyhow::anyhow!("eframe failed: {e}"))

@@ -593,6 +593,14 @@ impl eframe::App for UiState {
                                 }
                                 cfg.gear_transit_enabled = gear_transit_enabled;
                                 ui.label(RichText::new("Gear Transit & Doors").strong());
+
+                                let active = self.effects.gear_transit_active.load(Ordering::Relaxed);
+                                let (color, filled) = if active && gear_transit_enabled {
+                                    (Color32::WHITE, true)
+                                } else {
+                                    (Color32::from_gray(90), false)
+                                };
+                                circle_indicator_colored(ui, color, filled);
                             });
                             UiState::device_target_row(ui, &mut cfg.device_targets.gear_transit, &mut _changed);
 
