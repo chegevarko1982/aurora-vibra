@@ -380,7 +380,7 @@ impl RumbleEngine {
                 - (cfg.thump_max_period_s - physical_period_s) * period_progress;
 
             // 3. Нелинейное нарастание амплитуды (более резкий рост к верхней границе).
-            let amplitude_curve = speed_progress.powf(1.4);
+            let amplitude_curve = 0.3 + 0.7 * speed_progress.powf(1.4);
 
             // 4. Логика перезапуска цикла импульса (стык плиты позади — ждём следующий).
             let time_since_last_thump = fv.sim_time_s - s.thump_last_time_s;
