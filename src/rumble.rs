@@ -32,6 +32,11 @@ pub struct RumbleState {
     current_flaps_amplitude: f64,
     // Ground Roll (физическая модель удара о стыки плит) tracking
     thump_last_time_s: f64,
+    // Touchdown fade-in tracking: момент касания земли (переход airborne -> on_ground),
+    // используется, чтобы Ground Roll плавно нарастал и не маскировал резкий
+    // удар обжатия стоек в момент касания.
+    prev_on_ground: bool,
+    touchdown_time_s: f64,
     // Engine Spool-up & Ignition tracking
     prev_eng1_combustion: bool,
     prev_eng2_combustion: bool,
@@ -76,6 +81,7 @@ impl RumbleEngine {
                 last_flaps_percent: 0.0,
                 current_flaps_amplitude: 0.0,
                 thump_last_time_s: -1000.0,
+                touchdown_time_s: -1000.0,
                 ..Default::default()
             },
         }
@@ -136,6 +142,14 @@ impl RumbleEngine {
         if s.prev_sim_time_s < 0.0 {
             dt = 0.0;
         }
+
+        // Touchdown fade-in tracking: фиксируем момент перехода airborne -> on_ground,
+        // чтобы Ground Roll (гул рулёжки/пробега) мог плавно нарастать после этого
+        // момента и не маскировал резкий импульс обжатия стоек при касании.
+        if fv.on_ground && !s.prev_on_ground {
+            s.touchdown_time_s = fv.sim_time_s;
+        }
+        s.prev_on_ground = fv.on_ground;
 
         // Gear Strut Compression / Touchdown Detection
         const GEAR_COMP_TOUCHDOWN_THRESHOLD: f64 = 50.1;
@@ -365,7 +379,14 @@ impl RumbleEngine {
             // 5. Окно удара. Если период короче длительности импульса — удары сливаются
             // в сплошной гул (актуально на высоких скоростях рулёжки/разбега).
             if time_since_last_thump < thump_duration_s || target_period_s <= thump_duration_s {
-                let raw_term = (thump_amplitude * amplitude_curve)
+                // Fade-in после касания: 0.0 сразу в момент touchdown -> 1.0 через 750мс.
+                // Это "разводит" по времени резкий импульс обжатия стоек (сразу, полная
+                // сила) и фоновый гул стыков плит (нарастает плавно), чтобы они не
+                // маскировали друг друга тактильно в момент посадки.
+                let time_since_touchdown = fv.sim_time_s - s.touchdown_time_s;
+                let touchdown_fade_in = (time_since_touchdown / 0.75).clamp(0.0, 1.0);
+
+                let raw_term = (thump_amplitude * amplitude_curve * touchdown_fade_in)
                     .clamp(GROUND_THUMP_PEAK_MIN, GROUND_THUMP_PEAK_MAX);
                 if dt_.ground_roll.enable_joystick { ground_term_j = raw_term; }
                 if dt_.ground_roll.enable_throttle { ground_term_t = raw_term; }
