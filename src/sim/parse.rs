@@ -33,6 +33,11 @@ pub fn parse_main_elems(
         eng3_combustion: elem.get(19).copied().unwrap_or(0.0),
         eng4_n2_percent: elem.get(20).copied().unwrap_or(0.0),
         eng4_combustion: elem.get(21).copied().unwrap_or(0.0),
+        // GENERAL ENG PCT MAX RPM:1/2/3/4 — универсальная поддержка поршневых
+        eng1_pct_max_rpm: elem.get(22).copied().unwrap_or(0.0),
+        eng2_pct_max_rpm: elem.get(23).copied().unwrap_or(0.0),
+        eng3_pct_max_rpm: elem.get(24).copied().unwrap_or(0.0),
+        eng4_pct_max_rpm: elem.get(25).copied().unwrap_or(0.0),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);

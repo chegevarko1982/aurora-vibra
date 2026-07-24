@@ -379,10 +379,8 @@ impl RumbleEngine {
             let target_period_s = cfg.thump_max_period_s
                 - (cfg.thump_max_period_s - physical_period_s) * period_progress;
 
-            / 3. Нелинейное нарастание амплитуды.
-            // Базовый уровень 0.3 (30%) гарантирует, что даже на минимальной скорости (1 узел)
-            // множитель не уйдет в ноль. Слайдер теперь корректно задает пиковую силу эффекта.
-            let amplitude_curve = 0.3 + 0.7 * speed_progress.powf(1.4);
+            // 3. Нелинейное нарастание амплитуды (более резкий рост к верхней границе).
+            let amplitude_curve = speed_progress.powf(1.4);
 
             // 4. Логика перезапуска цикла импульса (стык плиты позади — ждём следующий).
             let time_since_last_thump = fv.sim_time_s - s.thump_last_time_s;
@@ -683,10 +681,23 @@ impl RumbleEngine {
         // уже 0.0 по дэдзоне), max() выбирает именно его "мёртвое" значение и
         // полностью маскирует реальную раскрутку второго, ещё запускающегося
         // двигателя. Максимум нужно брать по уже посчитанным АМПЛИТУДАМ.
-        let eng1_term = engine_spool_term(fv.eng1_n2_percent);
-        let eng2_term = engine_spool_term(fv.eng2_n2_percent);
-        let eng3_term = engine_spool_term(fv.eng3_n2_percent);
-        let eng4_term = engine_spool_term(fv.eng4_n2_percent);
+        //
+        // Универсальная поддержка поршневых двигателей: TURB ENG N2 на поршневых
+        // самолётах обычно равно 0 (нет турбины), а GENERAL ENG PCT MAX RPM на
+        // турбинах часто отсутствует/неточно. Берём максимум из двух источников —
+        // на турбинах сработает N2, на поршневых сработает Pct Max RPM, и то и
+        // другое одновременно ложно сработать не может (у самолёта либо одно,
+        // либо другое реально ненулевое), поэтому max() здесь безопасен и не
+        // подвержен той же проблеме маскировки, что и max() по паре двигателей.
+        let eng1_effective = fv.eng1_n2_percent.max(fv.eng1_pct_max_rpm);
+        let eng2_effective = fv.eng2_n2_percent.max(fv.eng2_pct_max_rpm);
+        let eng3_effective = fv.eng3_n2_percent.max(fv.eng3_pct_max_rpm);
+        let eng4_effective = fv.eng4_n2_percent.max(fv.eng4_pct_max_rpm);
+
+        let eng1_term = engine_spool_term(eng1_effective);
+        let eng2_term = engine_spool_term(eng2_effective);
+        let eng3_term = engine_spool_term(eng3_effective);
+        let eng4_term = engine_spool_term(eng4_effective);
 
         // ШАГ 2: Проверяем активность 500-мс удара воспламенения для КАЖДОГО
         // двигателя по реальному Instant::now().duration_since(t0) — таймер не

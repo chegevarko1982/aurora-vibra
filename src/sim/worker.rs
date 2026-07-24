@@ -311,6 +311,14 @@ pub fn sim_worker(
                 ("GENERAL ENG COMBUSTION:3", "Bool"),
                 ("TURB ENG N2:4", "Percent"),
                 ("GENERAL ENG COMBUSTION:4", "Bool"),
+                // Универсальная поддержка поршневых двигателей: GENERAL ENG PCT MAX RPM
+                // работает и на турбинах (примерно повторяет N2), и на поршневых
+                // (даёт % от макс. оборотов, в отличие от TURB ENG N2, которое на
+                // поршневых обычно равно 0). Индексы 22/23/24/25 в буфере elem[] ниже.
+                ("GENERAL ENG PCT MAX RPM:1", "Percent"),
+                ("GENERAL ENG PCT MAX RPM:2", "Percent"),
+                ("GENERAL ENG PCT MAX RPM:3", "Percent"),
+                ("GENERAL ENG PCT MAX RPM:4", "Percent"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -485,19 +493,21 @@ pub fn sim_worker(
                                     continue;
                                 }
 
-                                // 22 элемента: SPOILERS HANDLE POSITION (10),
+                                // 26 элементов: SPOILERS HANDLE POSITION (10),
                                 // GEAR ANIMATION POSITION:0/1/2 (11/12/13) и
                                 // телеметрия запуска двигателей (14/15/16/17):
                                 // TURB ENG N2:1, GENERAL ENG COMBUSTION:1,
                                 // TURB ENG N2:2, GENERAL ENG COMBUSTION:2,
                                 // а также двигатели 3/4 для 4-моторных самолётов
                                 // (18/19/20/21): TURB ENG N2:3, GENERAL ENG COMBUSTION:3,
-                                // TURB ENG N2:4, GENERAL ENG COMBUSTION:4.
-                                let mut elem = [0f64; 22];
+                                // TURB ENG N2:4, GENERAL ENG COMBUSTION:4, и наконец
+                                // GENERAL ENG PCT MAX RPM:1/2/3/4 (22/23/24/25) для
+                                // универсальной поддержки поршневых двигателей.
+                                let mut elem = [0f64; 26];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(22),
+                                        count.min(26),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -505,7 +515,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(22),
+                                        count.min(26),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

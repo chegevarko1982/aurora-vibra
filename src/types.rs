@@ -34,6 +34,14 @@ pub struct FlightVars {
     pub eng3_combustion: f64,
     pub eng4_n2_percent: f64,
     pub eng4_combustion: f64,
+    // GENERAL ENG PCT MAX RPM — универсальная поддержка поршневых двигателей.
+    // На турбинах примерно повторяет N2; на поршневых даёт реальный % оборотов
+    // (в отличие от TURB ENG N2, которое на поршневых обычно равно 0). См.
+    // rumble.rs: effective spool value = max(n2_percent, pct_max_rpm).
+    pub eng1_pct_max_rpm: f64,
+    pub eng2_pct_max_rpm: f64,
+    pub eng3_pct_max_rpm: f64,
+    pub eng4_pct_max_rpm: f64,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
