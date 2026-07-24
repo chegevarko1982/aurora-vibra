@@ -360,6 +360,8 @@ impl EffectsState {
             .store(snap.stall_active, Ordering::Relaxed);
         self.spoilers_active
             .store(snap.spoilers_active, Ordering::Relaxed);
+        self.overspeed_active
+            .store(snap.overspeed_active, Ordering::Relaxed);
 
         self.gear_comp_nose_active
             .store(snap.gear_comp_nose_active, Ordering::Relaxed);
