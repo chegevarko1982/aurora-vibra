@@ -34,6 +34,14 @@ pub struct FlightVars {
     pub eng3_combustion: f64,
     pub eng4_n2_percent: f64,
     pub eng4_combustion: f64,
+    // GENERAL ENG STARTER:1..4 — универсальная модель запуска (Starter + Combustion),
+    // работает одинаково на поршневых и турбинных двигателях (в отличие от N2,
+    // которое на поршневых обычно недоступно/равно 0). true = стартер крутит
+    // двигатель (турбина ещё не воспламенилась / поршневой ещё не завёлся).
+    pub eng1_starter: bool,
+    pub eng2_starter: bool,
+    pub eng3_starter: bool,
+    pub eng4_starter: bool,
     // GENERAL ENG PCT MAX RPM — универсальная поддержка поршневых двигателей.
     // На турбинах примерно повторяет N2; на поршневых даёт реальный % оборотов
     // (в отличие от TURB ENG N2, которое на поршневых обычно равно 0). См.
@@ -42,6 +50,20 @@ pub struct FlightVars {
     pub eng2_pct_max_rpm: f64,
     pub eng3_pct_max_rpm: f64,
     pub eng4_pct_max_rpm: f64,
+    // Поршневые двигатели (Piston Engine Telemetry) — сырые обороты для
+    // телеметрической панели в UI. GENERAL ENG RPM — обороты коленвала,
+    // PROP RPM — обороты воздушного винта (могут отличаться от RPM
+    // двигателя из-за редуктора). Порядок полей ниже соответствует порядку
+    // add_data_definition() в src/sim/worker.rs (см. рядом идущий комментарий
+    // там же с индексами elem[]).
+    pub eng1_rpm: f64,
+    pub eng2_rpm: f64,
+    pub eng3_rpm: f64,
+    pub eng4_rpm: f64,
+    pub prop1_rpm: f64,
+    pub prop2_rpm: f64,
+    pub prop3_rpm: f64,
+    pub prop4_rpm: f64,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.

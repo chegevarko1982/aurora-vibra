@@ -793,6 +793,18 @@ egui::Grid::new("engine_telemetry")
                 combustion_label(ui, v.eng1_combustion > 0.5);
                 ui.end_row();
 
+                ui.label("% Max RPM:");
+                ui.label(format!("{:.1}%", v.eng1_pct_max_rpm));
+                ui.end_row();
+
+                ui.label("Engine RPM:");
+                ui.label(format!("{:.0}", v.eng1_rpm));
+                ui.end_row();
+
+                ui.label("Prop RPM:");
+                ui.label(format!("{:.0}", v.prop1_rpm));
+                ui.end_row();
+
                 ui.label(RichText::new("Engine 2 (Right / Joystick)").strong());
                 ui.label("");
                 ui.end_row();
@@ -803,6 +815,18 @@ egui::Grid::new("engine_telemetry")
 
                 ui.label("Combustion:");
                 combustion_label(ui, v.eng2_combustion > 0.5);
+                ui.end_row();
+
+                ui.label("% Max RPM:");
+                ui.label(format!("{:.1}%", v.eng2_pct_max_rpm));
+                ui.end_row();
+
+                ui.label("Engine RPM:");
+                ui.label(format!("{:.0}", v.eng2_rpm));
+                ui.end_row();
+
+                ui.label("Prop RPM:");
+                ui.label(format!("{:.0}", v.prop2_rpm));
                 ui.end_row();
 
                 ui.label(RichText::new("Engine 3 (4-Eng: contributes to Left)").strong());
@@ -817,6 +841,18 @@ egui::Grid::new("engine_telemetry")
                 combustion_label(ui, v.eng3_combustion > 0.5);
                 ui.end_row();
 
+                ui.label("% Max RPM:");
+                ui.label(format!("{:.1}%", v.eng3_pct_max_rpm));
+                ui.end_row();
+
+                ui.label("Engine RPM:");
+                ui.label(format!("{:.0}", v.eng3_rpm));
+                ui.end_row();
+
+                ui.label("Prop RPM:");
+                ui.label(format!("{:.0}", v.prop3_rpm));
+                ui.end_row();
+
                 ui.label(RichText::new("Engine 4 (4-Eng: contributes to Right)").strong());
                 ui.label("");
                 ui.end_row();
@@ -827,6 +863,18 @@ egui::Grid::new("engine_telemetry")
 
                 ui.label("Combustion:");
                 combustion_label(ui, v.eng4_combustion > 0.5);
+                ui.end_row();
+
+                ui.label("% Max RPM:");
+                ui.label(format!("{:.1}%", v.eng4_pct_max_rpm));
+                ui.end_row();
+
+                ui.label("Engine RPM:");
+                ui.label(format!("{:.0}", v.eng4_rpm));
+                ui.end_row();
+
+                ui.label("Prop RPM:");
+                ui.label(format!("{:.0}", v.prop4_rpm));
                 ui.end_row();
             }
             None => {

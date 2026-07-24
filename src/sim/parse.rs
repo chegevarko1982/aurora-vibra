@@ -38,6 +38,21 @@ pub fn parse_main_elems(
         eng2_pct_max_rpm: elem.get(23).copied().unwrap_or(0.0),
         eng3_pct_max_rpm: elem.get(24).copied().unwrap_or(0.0),
         eng4_pct_max_rpm: elem.get(25).copied().unwrap_or(0.0),
+        // GENERAL ENG STARTER:1/2/3/4 — универсальная модель запуска
+        eng1_starter: elem.get(26).copied().unwrap_or(0.0) != 0.0,
+        eng2_starter: elem.get(27).copied().unwrap_or(0.0) != 0.0,
+        eng3_starter: elem.get(28).copied().unwrap_or(0.0) != 0.0,
+        eng4_starter: elem.get(29).copied().unwrap_or(0.0) != 0.0,
+        // Поршневые двигатели (Piston Engine Telemetry): GENERAL ENG RPM —
+        // обороты коленвала, PROP RPM — обороты воздушного винта.
+        eng1_rpm: elem.get(30).copied().unwrap_or(0.0),
+        eng2_rpm: elem.get(31).copied().unwrap_or(0.0),
+        eng3_rpm: elem.get(32).copied().unwrap_or(0.0),
+        eng4_rpm: elem.get(33).copied().unwrap_or(0.0),
+        prop1_rpm: elem.get(34).copied().unwrap_or(0.0),
+        prop2_rpm: elem.get(35).copied().unwrap_or(0.0),
+        prop3_rpm: elem.get(36).copied().unwrap_or(0.0),
+        prop4_rpm: elem.get(37).copied().unwrap_or(0.0),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);

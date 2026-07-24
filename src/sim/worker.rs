@@ -319,6 +319,25 @@ pub fn sim_worker(
                 ("GENERAL ENG PCT MAX RPM:2", "Percent"),
                 ("GENERAL ENG PCT MAX RPM:3", "Percent"),
                 ("GENERAL ENG PCT MAX RPM:4", "Percent"),
+                // Универсальная модель запуска (Starter + Combustion): работает
+                // одинаково на поршневых и турбинных двигателях. Индексы
+                // 26/27/28/29 в буфере elem[] ниже.
+                ("GENERAL ENG STARTER:1", "Bool"),
+                ("GENERAL ENG STARTER:2", "Bool"),
+                ("GENERAL ENG STARTER:3", "Bool"),
+                ("GENERAL ENG STARTER:4", "Bool"),
+                // Поршневые двигатели (Piston Engine Telemetry) — сырые обороты
+                // коленвала и воздушного винта, для UI-инспектора телеметрии.
+                // Индексы 30/31/32/33 в буфере elem[] ниже.
+                ("GENERAL ENG RPM:1", "Rpm"),
+                ("GENERAL ENG RPM:2", "Rpm"),
+                ("GENERAL ENG RPM:3", "Rpm"),
+                ("GENERAL ENG RPM:4", "Rpm"),
+                // Обороты воздушного винта. Индексы 34/35/36/37 в буфере elem[] ниже.
+                ("PROP RPM:1", "Rpm"),
+                ("PROP RPM:2", "Rpm"),
+                ("PROP RPM:3", "Rpm"),
+                ("PROP RPM:4", "Rpm"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -502,12 +521,17 @@ pub fn sim_worker(
                                 // (18/19/20/21): TURB ENG N2:3, GENERAL ENG COMBUSTION:3,
                                 // TURB ENG N2:4, GENERAL ENG COMBUSTION:4, и наконец
                                 // GENERAL ENG PCT MAX RPM:1/2/3/4 (22/23/24/25) для
-                                // универсальной поддержки поршневых двигателей.
-                                let mut elem = [0f64; 26];
+                                // универсальной поддержки поршневых двигателей,
+                                // GENERAL ENG STARTER:1/2/3/4 (26/27/28/29) для
+                                // универсальной модели запуска (Starter + Combustion), и
+                                // наконец сырая телеметрия поршневых двигателей:
+                                // GENERAL ENG RPM:1/2/3/4 (30/31/32/33) и
+                                // PROP RPM:1/2/3/4 (34/35/36/37).
+                                let mut elem = [0f64; 38];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(26),
+                                        count.min(38),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -515,7 +539,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(26),
+                                        count.min(38),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
