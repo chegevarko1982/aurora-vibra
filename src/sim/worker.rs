@@ -60,11 +60,32 @@ struct SimRecvException {
     dw_index: DWord,
 }
 
+// SIMCONNECT_RECV_SYSTEM_STATE — returned by RequestSystemState.
+// The layout mirrors the SDK struct: base header + request id +
+// the actual state value (a STRING256 in our case for "AircraftLoaded").
+#[repr(C)]
+struct SimRecvSystemState {
+    base: SimRecv,
+    dw_request_id: DWord,
+    dw_data: DWord,
+}
+
+#[repr(C)]
+struct SimAircraftTitle {
+    pub title: [u8; 256],
+}
+
+fn parse_aircraft_title(buf: &[u8; 256]) -> String {
+    let nul_pos = buf.iter().position(|&b| b == 0).unwrap_or(256);
+    String::from_utf8_lossy(&buf[..nul_pos]).trim().to_string()
+}
+
 const SIMCONNECT_RECV_ID_OPEN: DWord = 2;
 const SIMCONNECT_RECV_ID_QUIT: DWord = 3;
 const SIMCONNECT_RECV_ID_EVENT: DWord = 4;
 const SIMCONNECT_RECV_ID_EXCEPTION: DWord = 5;
 const SIMCONNECT_RECV_ID_SIMOBJECT_DATA: DWord = 8;
+const SIMCONNECT_RECV_ID_SYSTEM_STATE: DWord = 11;
 
 const SIMCONNECT_PERIOD_ONCE: DWord = 1;
 const SIMCONNECT_PERIOD_SIM_FRAME: DWord = 3;
@@ -87,6 +108,7 @@ const USER_OBJECT_ID: DWord = 0;
 const EVT_SIM_START: DWord = 1001;
 const EVT_SIM_STOP: DWord = 1002;
 const EVT_FRAME: DWord = 1003;
+const EVT_AIRCRAFT_LOADED: DWord = 1004;
 
 const EVT_PAUSE_SYS: DWord = 4101;
 const EVT_PAUSE_EX1_SYS: DWord = 4102;
@@ -97,6 +119,7 @@ const DEF_PING: DWord = 2101;
 const REQ_PING: DWord = 3101;
 const DEF_TITLE: DWord = 2201;
 const REQ_TITLE: DWord = 3201;
+const REQ_SYS_STATE: DWord = 3301;
 
 type PfnSimConnectOpen =
     unsafe extern "system" fn(*mut Handle, *const c_char, HWnd, DWord, Handle, DWord) -> HRESULT;
@@ -125,6 +148,14 @@ type PfnSimConnectGetNextDispatch =
     unsafe extern "system" fn(Handle, *mut *mut SimRecv, *mut DWord) -> HRESULT;
 type PfnSimConnectSubscribeToSystemEvent =
     unsafe extern "system" fn(Handle, DWord, *const c_char) -> HRESULT;
+type PfnSimConnectRequestSystemState = unsafe extern "system" fn(
+    Handle,
+    DWord,
+    *const c_char,
+    DWord,
+    DWord,
+    DWord,
+) -> HRESULT;
 
 #[inline]
 fn hr_hex(hr: HRESULT) -> String {
@@ -140,6 +171,7 @@ struct SimConnectFns {
     req_data: PfnSimConnectRequestDataOnSimObject,
     next_dispatch: PfnSimConnectGetNextDispatch,
     subscribe_event: Option<PfnSimConnectSubscribeToSystemEvent>,
+    request_system_state: Option<PfnSimConnectRequestSystemState>,
 }
 
 const EMBED_SIMCONNECT_BYTES: &[u8] =
@@ -181,6 +213,10 @@ fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
             .get::<PfnSimConnectSubscribeToSystemEvent>(b"SimConnect_SubscribeToSystemEvent\0")
             .ok()
             .map(|s| *s);
+        let request_system_state: Option<PfnSimConnectRequestSystemState> = lib
+            .get::<PfnSimConnectRequestSystemState>(b"SimConnect_RequestSystemState\0")
+            .ok()
+            .map(|s| *s);
 
         Ok(SimConnectFns {
             _lib: std::sync::Arc::new(lib),
@@ -190,6 +226,7 @@ fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
             req_data,
             next_dispatch,
             subscribe_event,
+            request_system_state,
         })
     }
 }
@@ -262,6 +299,7 @@ pub fn sim_worker(
                     (EVT_SIM_START, "SimStart"),
                     (EVT_SIM_STOP, "SimStop"),
                     (EVT_FRAME, "Frame"),
+                    (EVT_AIRCRAFT_LOADED, "AircraftLoaded"),
                 ] {
                     let ev_c = std::ffi::CString::new(*ev).unwrap();
                     let hr = sub(h_sc, *id, ev_c.as_ptr());
@@ -415,6 +453,36 @@ pub fn sim_worker(
                 }
             }
 
+            // --- MobiFlight late-connect strategy: RequestSystemState fallback ---
+            // Right after connection (and after the TITLE data definition is
+            // registered), we call RequestSystemState with the "AircraftLoaded"
+            // state name. This forces MSFS to IMMEDIATELY return the current
+            // aircraft's file path via SIMCONNECT_RECV_SYSTEM_STATE, even when
+            // the application was launched AFTER the flight had already loaded.
+            // This is the key difference from the naive approach: instead of
+            // relying solely on SimStart events (which are never sent "retroactively"
+            // to late-connecting clients), we ask the simulator for the current
+            // state directly.
+            if let Some(req_sys) = fns.request_system_state {
+                let state_name = std::ffi::CString::new("AircraftLoaded").unwrap();
+                let hr_sys = req_sys(
+                    h_sc,
+                    REQ_SYS_STATE,
+                    state_name.as_ptr(),
+                    0, // dw_data: 0 = request current value
+                    0, // dw_flags: reserved, must be 0
+                    0, // dw_event_id: 0 = no event
+                );
+                if hr_sys < 0 {
+                    logs.push(format!(
+                        "SimConnect: RequestSystemState AircraftLoaded FAILED {}",
+                        hr_hex(hr_sys)
+                    ));
+                } else {
+                    logs.push("SimConnect: RequestSystemState AircraftLoaded sent (late-connect fallback)");
+                }
+            }
+
             // PERIOD_SECOND + FLAG_CHANGED вместо PERIOD_ONCE: одноразовый запрос
             // не покрывает случай, когда самолёт УЖЕ стоял загруженным на
             // перроне ДО запуска приложения (SimStart в этом случае вообще не
@@ -429,8 +497,8 @@ pub fn sim_worker(
                 REQ_TITLE,
                 DEF_TITLE,
                 USER_OBJECT_ID,
-                SIMCONNECT_PERIOD_SECOND,
-                SIMCONNECT_DATA_REQUEST_FLAG_CHANGED,
+                SIMCONNECT_PERIOD_ONCE,
+                0,
                 0,
                 0,
                 0,
@@ -441,7 +509,7 @@ pub fn sim_worker(
                     hr_hex(hr_title_req)
                 ));
             } else {
-                logs.push("SimConnect: TITLE requested (initial)");
+                logs.push("SimConnect: TITLE requested (initial ONCE)");
             }
             let _ = (fns.req_data)(
                 h_sc,
@@ -484,6 +552,9 @@ pub fn sim_worker(
             let mut paused_event_flag: bool = false;
             let mut paused_ex1_bits: u32 = 0;
 
+            let mut title_resolved = false;
+            let mut last_title_request_time = Instant::now() - Duration::from_secs(10); // force immediate request first tick
+
             loop {
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
                 let mut cb: DWord = 0;
@@ -509,31 +580,16 @@ pub fn sim_worker(
                                 rumble_engine.reset();
                                 effects.clear_all();
 
-                                // Основная непрерывная подписка на TITLE теперь
-                                // живёт на SIMCONNECT_PERIOD_SECOND (см. запрос
-                                // сразу после Open() ниже по файлу) и сама
-                                // переживает смену самолёта/перезагрузку полёта.
-                                // Этот повторный запрос на SimStart — просто
-                                // подстраховка на случай смены dwObjectID у
-                                // пользовательского самолёта при перезагрузке.
-                                // ВАЖНО: намеренно используем ТЕ ЖЕ
-                                // PERIOD_SECOND + FLAG_CHANGED, а не PERIOD_ONCE —
-                                // повторный RequestDataOnSimObject с тем же
-                                // RequestID ЗАМЕНЯЕТ предыдущую подписку, и
-                                // PERIOD_ONCE здесь превратил бы постоянный поток
-                                // обратно в одноразовый запрос.
-                                let _ = (fns.req_data)(
-                                    h_sc,
-                                    REQ_TITLE,
-                                    DEF_TITLE,
-                                    USER_OBJECT_ID,
-                                    SIMCONNECT_PERIOD_SECOND,
-                                    SIMCONNECT_DATA_REQUEST_FLAG_CHANGED,
-                                    0,
-                                    0,
-                                    0,
-                                );
-                                logs.push("SimConnect: re-requested TITLE on SimStart");
+                                // When simulation starts, we trigger title retrieval.
+                                // Instead of making a continuous subscription right here, we reset the resolution flag
+                                // and let our smart polling mechanism fetch it via ONCE requests.
+                                title_resolved = false;
+                                last_title_request_time = Instant::now() - Duration::from_secs(10);
+                                logs.push("SimConnect: triggered TITLE retrieval on SimStart".to_string());
+                            } else if ev.u_event_id == EVT_AIRCRAFT_LOADED {
+                                logs.push("SimConnect: AircraftLoaded system event received!".to_string());
+                                title_resolved = false;
+                                last_title_request_time = Instant::now() - Duration::from_secs(10); // force immediate request next tick
                             } else if ev.u_event_id == EVT_SIM_STOP {
                                 in_flight = false;
                                 let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
@@ -554,24 +610,28 @@ pub fn sim_worker(
                             let payload_len = (cb as usize).saturating_sub(header_bytes);
 
                             if sod.dw_request_id == REQ_TITLE {
-                                if payload_len >= 256 {
-                                    // Безопаснее, чем CStr::from_ptr: если по какой-то
-                                    // причине (повреждённые данные, экзотический
-                                    // сторонний самолёт) в буфере из 256 байт НЕТ
-                                    // нулевого терминатора, CStr::from_ptr продолжит
-                                    // читать память ЗА пределами буфера — undefined
-                                    // behavior. Здесь мы ищем NUL строго в границах
-                                    // среза длиной 256 и, если его нет, просто берём
-                                    // все 256 байт как есть.
-                                    let buf = std::slice::from_raw_parts(data_ptr, 256);
-                                    let nul_pos = buf.iter().position(|&b| b == 0).unwrap_or(256);
-                                    let title =
-                                        String::from_utf8_lossy(&buf[..nul_pos]).trim().to_string();
+                                // Explicit debug logging of raw bytes
+                                let raw_bytes = std::slice::from_raw_parts(data_ptr, payload_len.min(256));
+                                logs.push(format!(
+                                    "SimConnect: TITLE packet received in dispatch. payload_len={}, raw bytes (first 32): {:?}",
+                                    payload_len,
+                                    &raw_bytes[..raw_bytes.len().min(32)]
+                                ));
+
+                                if payload_len >= std::mem::size_of::<SimAircraftTitle>() {
+                                    let title_struct = &*(data_ptr as *const SimAircraftTitle);
+                                    let title = parse_aircraft_title(&title_struct.title);
                                     logs.push(format!(
-                                        "SimConnect: TITLE received ({} bytes, req_id={}) -> {:?}",
-                                        nul_pos, sod.dw_request_id, title
+                                        "SimConnect: TITLE parsed (req_id={}) -> {:?}",
+                                        sod.dw_request_id, title
                                     ));
-                                    *aircraft_title.lock() = title;
+                                    if !title.is_empty() {
+                                        *aircraft_title.lock() = title;
+                                        title_resolved = true;
+                                    } else {
+                                        logs.push("SimConnect: received empty/null TITLE, will retry polling...".to_string());
+                                        title_resolved = false;
+                                    }
                                 } else {
                                     logs.push(format!(
                                         "SimConnect: TITLE payload too short ({} bytes, expected >=256), ignoring",
@@ -664,6 +724,37 @@ pub fn sim_worker(
                                 });
                             }
                         }
+                        SIMCONNECT_RECV_ID_SYSTEM_STATE => {
+                            // MobiFlight late-connect: the system state response
+                            // delivers the aircraft's file path (or title) even
+                            // when we connected AFTER the flight was already
+                            // loaded. We log which channel delivers the data
+                            // first for debugging purposes.
+                            let ss = &*(p_recv as *const SimRecvSystemState);
+                            let base_ptr = p_recv as *const u8;
+                            let data_ptr = (&ss.dw_data as *const DWord) as *const u8;
+                            let header_bytes =
+                                (data_ptr as usize).saturating_sub(base_ptr as usize);
+                            let payload_len = (cb as usize).saturating_sub(header_bytes);
+
+                            logs.push(format!(
+                                "SimConnect: SYSTEM_STATE received (req_id={}), payload_len={}",
+                                ss.dw_request_id, payload_len
+                            ));
+
+                            if ss.dw_request_id == REQ_SYS_STATE && payload_len >= 256 {
+                                let title_struct = &*(data_ptr as *const SimAircraftTitle);
+                                let title = parse_aircraft_title(&title_struct.title);
+                                logs.push(format!(
+                                    "SimConnect: SYSTEM_STATE AircraftLoaded -> title={:?} (delivered BEFORE SIMOBJECT_DATA)",
+                                    title
+                                ));
+                                if !title.is_empty() {
+                                    *aircraft_title.lock() = title;
+                                    title_resolved = true;
+                                }
+                            }
+                        }
                         SIMCONNECT_RECV_ID_EXCEPTION => {
                             let ex = &*(p_recv as *const SimRecvException);
                             logs.push(format!(
@@ -695,6 +786,45 @@ pub fn sim_worker(
                         0,
                     );
                     last_main_rx = Instant::now();
+                }
+
+                if !title_resolved && last_title_request_time.elapsed() >= Duration::from_secs(1) {
+                    // MobiFlight late-connect: on retry, do NOT just spam
+                    // request_data_on_simobject with the same ID. Instead,
+                    // re-register the data definition first — this forces
+                    // SimConnect to re-evaluate the TITLE field and actually
+                    // deliver a SIMCONNECT_RECV_SIMOBJECT_DATA packet.
+                    let title_name = std::ffi::CString::new("TITLE").unwrap();
+                    let hr_redef = (fns.add_to_def)(
+                        h_sc,
+                        DEF_TITLE,
+                        title_name.as_ptr(),
+                        std::ptr::null(),
+                        SIMCONNECT_DATATYPE_STRING256,
+                        0.0,
+                        0xFFFF_FFFF,
+                    );
+                    if hr_redef < 0 {
+                        logs.push(format!(
+                            "SimConnect: AddToDef TITLE (retry re-register) FAILED {}",
+                            hr_hex(hr_redef)
+                        ));
+                    } else {
+                        logs.push("SimConnect: AddToDef TITLE re-registered on retry".to_string());
+                    }
+                    let _ = (fns.req_data)(
+                        h_sc,
+                        REQ_TITLE,
+                        DEF_TITLE,
+                        USER_OBJECT_ID,
+                        SIMCONNECT_PERIOD_ONCE,
+                        0,
+                        0,
+                        0,
+                        0,
+                    );
+                    last_title_request_time = Instant::now();
+                    logs.push("SimConnect: TITLE retry request sent (ONCE, after re-add)".to_string());
                 }
             }
 
