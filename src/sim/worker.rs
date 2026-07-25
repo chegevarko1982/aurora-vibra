@@ -409,6 +409,29 @@ pub fn sim_worker(
                 // Индексы 39/40 в буфере elem[] ниже.
                 ("LEADING EDGE FLAPS LEFT PERCENT", "Percent"),
                 ("LEADING EDGE FLAPS RIGHT PERCENT", "Percent"),
+                // Раздельная позиция спойлеров по крыльям — нужна, чтобы отличать
+                // честный симметричный выпуск спидбрейков от асимметричного подъёма
+                // панелей при крене (roll spoilers/спойлероны, напр. TFDI MD-11,
+                // где SPOILERS HANDLE POSITION некорректно следует за креном).
+                // Индексы 41/42 в буфере elem[] ниже.
+                ("SPOILERS LEFT POSITION", "Percent"),
+                ("SPOILERS RIGHT POSITION", "Percent"),
+                // TFDI MD-11: собственные L-vars по каждой из 5 секций спойлеров
+                // на крыло (SPOILERS LEFT/RIGHT POSITION выше на этом борте тоже
+                // не всегда надёжны). Используются ТОЛЬКО как дополнительная
+                // проверка симметрии (см. rumble.rs) — на других самолётах эти
+                // L-vars не определены, SimConnect отдаёт по ним 0.0, и проверка
+                // самонейтрализуется (0 против 0 — симметрично). Индексы 43-52.
+                ("L:MD11_EXT_L_SPOILER_1", "Number"),
+                ("L:MD11_EXT_L_SPOILER_2", "Number"),
+                ("L:MD11_EXT_L_SPOILER_3", "Number"),
+                ("L:MD11_EXT_L_SPOILER_4", "Number"),
+                ("L:MD11_EXT_L_SPOILER_5", "Number"),
+                ("L:MD11_EXT_R_SPOILER_1", "Number"),
+                ("L:MD11_EXT_R_SPOILER_2", "Number"),
+                ("L:MD11_EXT_R_SPOILER_3", "Number"),
+                ("L:MD11_EXT_R_SPOILER_4", "Number"),
+                ("L:MD11_EXT_R_SPOILER_5", "Number"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -697,12 +720,16 @@ pub fn sim_worker(
                                 // DESIGN SPEED VC (38) — динамический порог
                                 // срабатывания эффекта Overspeed. LEADING EDGE
                                 // FLAPS LEFT/RIGHT PERCENT (39/40) — предкрылки
-                                // (Slats), пока только для UI.
-                                let mut elem = [0f64; 41];
+                                // (Slats), пока только для UI. SPOILERS LEFT/RIGHT
+                                // POSITION (41/42) — раздельная позиция спойлеров
+                                // по крыльям для фильтра симметрии (см. parse.rs).
+                                // L:MD11_EXT_L/R_SPOILER_1..5 (43-52) — TFDI MD-11,
+                                // дополнительная проверка симметрии по секциям.
+                                let mut elem = [0f64; 53];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(41),
+                                        count.min(53),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -710,7 +737,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(41),
+                                        count.min(53),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

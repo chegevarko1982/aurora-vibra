@@ -147,8 +147,33 @@ impl RumbleEngine {
         let overspeed_threshold_known = overspeed_threshold_kn > 0.0;
         let bank_threshold_deg = cfg.bank_threshold_deg as f64;
 
+        // Помимо порога на min(L, R), требуем ещё и симметрию панелей. На практике
+        // одного min() недостаточно: при крене (roll spoilers/спойлероны) поднятая
+        // плоскость может уйти в 100%, а "спокойная" при этом не обязательно
+        // возвращается к 0% (напр. TFDI MD-11 показывает L=100/R=40) — min() в
+        // таком случае всё равно превышает порог и ложно активирует эффект.
+        // Честный симметричный выпуск спидбрейков держит обе плоскости близко
+        // друг к другу, поэтому дополнительно проверяем разницу между ними.
+        const SPOILERS_SYMMETRY_TOLERANCE_PCT: f64 = 10.0;
+        let spoilers_symmetry_delta = (fv.spoilers_left_pct - fv.spoilers_right_pct).abs();
+
+        // TFDI MD-11: на этом борте даже SPOILERS LEFT/RIGHT POSITION не всегда
+        // надёжны, поэтому дополнительно сверяемся с его собственными L-vars по
+        // секциям (см. sim/parse.rs). Единицы измерения этих L-vars неизвестны,
+        // поэтому сравниваем L и R ОТНОСИТЕЛЬНО друг друга, а не в процентах.
+        // На самолётах без этих L-vars оба значения — 0.0, проверка проходит
+        // тривиально (0 против 0 симметрично) и не влияет на общий результат.
+        const MD11_PANEL_SYMMETRY_TOLERANCE_RATIO: f64 = 0.15;
+        let md11_l = fv.spoilers_md11_left_avg;
+        let md11_r = fv.spoilers_md11_right_avg;
+        let md11_denom = md11_l.max(md11_r);
+        let md11_panels_symmetric =
+            md11_denom < 1e-6 || (md11_l - md11_r).abs() / md11_denom <= MD11_PANEL_SYMMETRY_TOLERANCE_RATIO;
+
         let spoilers_active = cfg.spoilers_enabled
             && fv.spoilers_pct > cfg.spoilers_threshold_pct
+            && spoilers_symmetry_delta <= SPOILERS_SYMMETRY_TOLERANCE_PCT
+            && md11_panels_symmetric
             && fv.airspeed_indicated > 20.0;
 
         let mut effects = EffectsSnapshot {

@@ -203,6 +203,70 @@ fn pipeline_stall_ceiling() {
 }
 
 #[test]
+fn pipeline_spoilers_symmetric_deployment_activates_effect() {
+    let cfg = RumbleConfig::default();
+    let mut engine = RumbleEngine::new();
+
+    let fv = FlightVars {
+        airspeed_indicated: 250.0,
+        spoilers_pct: 100.0,
+        spoilers_left_pct: 100.0,
+        spoilers_right_pct: 100.0,
+        ..Default::default()
+    };
+    let out = engine.step(&fv, &cfg, 1, false);
+
+    assert!(out.effects.spoilers_active);
+    assert!(out.joystick_intensity > 0);
+}
+
+#[test]
+fn pipeline_spoilers_asymmetric_deployment_does_not_activate_effect() {
+    // Репорт из реального полёта на TFDI MD-11: L=100%, R=40% (roll spoilers
+    // при крене, рычаг спидбрейков не выпущен). min(L, R) = 40% всё ещё выше
+    // порога срабатывания, поэтому одного min() недостаточно — нужна проверка
+    // симметрии панелей, см. rumble.rs (SPOILERS_SYMMETRY_TOLERANCE_PCT).
+    let cfg = RumbleConfig::default();
+    let mut engine = RumbleEngine::new();
+
+    let fv = FlightVars {
+        airspeed_indicated: 250.0,
+        spoilers_pct: 40.0,
+        spoilers_left_pct: 100.0,
+        spoilers_right_pct: 40.0,
+        ..Default::default()
+    };
+    let out = engine.step(&fv, &cfg, 1, false);
+
+    assert!(!out.effects.spoilers_active);
+    assert_eq!(out.joystick_intensity, 0);
+}
+
+#[test]
+fn pipeline_md11_panel_asymmetry_blocks_effect_even_when_standard_lr_looks_symmetric() {
+    // На TFDI MD-11 SPOILERS LEFT/RIGHT POSITION сам по себе может выглядеть
+    // симметрично (или просто некорректно отражать реальное состояние), но
+    // собственные L-vars борта по секциям (см. скриншот из дебага) показывают
+    // явный крен: одно крыло 29.511, другое 0.0. Эффект не должен срабатывать.
+    let cfg = RumbleConfig::default();
+    let mut engine = RumbleEngine::new();
+
+    let fv = FlightVars {
+        airspeed_indicated: 250.0,
+        spoilers_pct: 100.0,
+        spoilers_left_pct: 100.0,
+        spoilers_right_pct: 100.0,
+        spoilers_md11_left_avg: 29.511,
+        spoilers_md11_right_avg: 0.0,
+        ..Default::default()
+    };
+    let out = engine.step(&fv, &cfg, 1, false);
+
+    assert!(!out.effects.spoilers_active);
+    assert_eq!(out.joystick_intensity, 0);
+}
+
+#[test]
 fn pipeline_pause_zeros_output() {
     let cfg = RumbleConfig::default();
     let mut engine = RumbleEngine::new();

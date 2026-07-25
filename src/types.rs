@@ -17,7 +17,14 @@ pub struct FlightVars {
     pub stalled: bool,
     pub ground_speed_kt: f64,
     pub paused: bool,
-    pub spoilers_pct: f64, // Положение спойлеров в % (0.0 - 100.0)
+    pub spoilers_pct: f64, // min(L, R) — эффективное положение спойлеров для эффекта, см. sim/parse.rs
+    pub spoilers_left_pct: f64,  // сырое положение левой плоскости, для телеметрии/отладки
+    pub spoilers_right_pct: f64, // сырое положение правой плоскости, для телеметрии/отладки
+    // TFDI MD-11: среднее по 5 секциям L:MD11_EXT_L/R_SPOILER_1..5 — доп.
+    // проверка симметрии для этого борта (см. rumble.rs). На других самолётах
+    // эти L-vars не определены и остаются 0.0 (самонейтрализуется).
+    pub spoilers_md11_left_avg: f64,
+    pub spoilers_md11_right_avg: f64,
     pub gear_comp_nose: f64,
     pub gear_comp_left: f64,
     pub gear_comp_right: f64,

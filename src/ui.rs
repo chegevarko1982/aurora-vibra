@@ -776,200 +776,212 @@ impl eframe::App for UiState {
 
                         ui.separator();
 
-ui.heading("Live Aircraft Data");
+ui.columns(2, |columns| {
+    // --- Левая колонка: общая телеметрия борта ---
+    let ui = &mut columns[0];
+    ui.heading("Live Aircraft Data");
 
-egui::Grid::new("aircraft_data")
-    .num_columns(2)
-    .spacing(Vec2::new(20.0, 4.0))
-    .show(ui, |ui| {
-        let v = *self.last_vars.lock();
-        match v {
-            Some(v) => {
-                ui.label("Airspeed (kt):");
-                ui.label(format!("{:.1}", v.airspeed_indicated));
-                ui.end_row();
+    egui::Grid::new("aircraft_data")
+        .num_columns(2)
+        .spacing(Vec2::new(20.0, 4.0))
+        .show(ui, |ui| {
+            let v = *self.last_vars.lock();
+            match v {
+                Some(v) => {
+                    ui.label("Airspeed (kt):");
+                    ui.label(format!("{:.1}", v.airspeed_indicated));
+                    ui.end_row();
 
-                ui.label("GS (kt):");
-                ui.label(format!("{:.1}", v.ground_speed_kt));
-                ui.end_row();
+                    ui.label("GS (kt):");
+                    ui.label(format!("{:.1}", v.ground_speed_kt));
+                    ui.end_row();
 
-                ui.label("On Ground:");
-                ui.label(v.on_ground.to_string());
-                ui.end_row();
+                    ui.label("On Ground:");
+                    ui.label(v.on_ground.to_string());
+                    ui.end_row();
 
-                ui.label("Bank (°):");
-                ui.label(format!("{:.1}", v.bank_deg));
-                ui.end_row();
+                    ui.label("Bank (°):");
+                    ui.label(format!("{:.1}", v.bank_deg));
+                    ui.end_row();
 
-                ui.label("Flaps (%):");
-                ui.label(format!("{:.0}", v.flaps_pct));
-                ui.end_row();
+                    ui.label("Flaps (%):");
+                    ui.label(format!("{:.0}", v.flaps_pct));
+                    ui.end_row();
 
-                ui.label("Slats (%):");
-                ui.label(format!("{:.0}", v.slats_pct));
-                ui.end_row();
+                    ui.label("Slats (%):");
+                    ui.label(format!("{:.0}", v.slats_pct));
+                    ui.end_row();
 
-                ui.label("Gear:");
-                ui.label(if v.gear_handle > 0.5 { "Down" } else { "Up" });
-                ui.end_row();
+                    ui.label("Gear:");
+                    ui.label(if v.gear_handle > 0.5 { "Down" } else { "Up" });
+                    ui.end_row();
 
-                ui.label("Spoilers (%):");
-                ui.label(format!("{:.0}", v.spoilers_pct));
-                ui.end_row();
+                    ui.label("Spoilers (%):");
+                    ui.label(format!("{:.0}", v.spoilers_pct));
+                    ui.end_row();
 
-                // --- ДОБАВЛЕНА ТЕЛЕМЕТРИЯ ОБЖАТИЯ СТОЕК ШАССИ ---
-                ui.label("Nose Gear (%):");
-                ui.label(format!("{:.1}", v.gear_comp_nose));
-                ui.end_row();
+                    ui.label("Spoiler L (%):");
+                    ui.label(format!("{:.0}", v.spoilers_left_pct));
+                    ui.end_row();
 
-                ui.label("Left Main (%):");
-                ui.label(format!("{:.1}", v.gear_comp_left));
-                ui.end_row();
+                    ui.label("Spoiler R (%):");
+                    ui.label(format!("{:.0}", v.spoilers_right_pct));
+                    ui.end_row();
 
-                ui.label("Right Main (%):");
-                ui.label(format!("{:.1}", v.gear_comp_right));
-                ui.end_row();
-                // ------------------------------------------------
+                    // --- ДОБАВЛЕНА ТЕЛЕМЕТРИЯ ОБЖАТИЯ СТОЕК ШАССИ ---
+                    ui.label("Nose Gear (%):");
+                    ui.label(format!("{:.1}", v.gear_comp_nose));
+                    ui.end_row();
 
-                ui.label("Stall:");
-                ui.label(v.stalled.to_string());
-                ui.end_row();
+                    ui.label("Left Main (%):");
+                    ui.label(format!("{:.1}", v.gear_comp_left));
+                    ui.end_row();
 
-                ui.label("Paused:");
-                ui.label(v.paused.to_string());
-                ui.end_row();
+                    ui.label("Right Main (%):");
+                    ui.label(format!("{:.1}", v.gear_comp_right));
+                    ui.end_row();
+                    // ------------------------------------------------
+
+                    ui.label("Stall:");
+                    ui.label(v.stalled.to_string());
+                    ui.end_row();
+
+                    ui.label("Paused:");
+                    ui.label(v.paused.to_string());
+                    ui.end_row();
+                }
+                None => {
+                    ui.label("No data");
+                    ui.label("");
+                    ui.end_row();
+                }
             }
-            None => {
-                ui.label("No data");
-                ui.label("");
-                ui.end_row();
+        });
+
+    // --- Правая колонка: телеметрия двигателей ---
+    let ui = &mut columns[1];
+    ui.heading("Engine Telemetry");
+    ui.add_space(4.0);
+
+    egui::Grid::new("engine_telemetry")
+        .num_columns(2)
+        .spacing(Vec2::new(20.0, 4.0))
+        .show(ui, |ui| {
+            let v = *self.last_vars.lock();
+            match v {
+                Some(v) => {
+                    let combustion_label = |ui: &mut egui::Ui, active: bool| {
+                        if active {
+                            ui.colored_label(Color32::from_rgb(30, 180, 90), "ON");
+                        } else {
+                            ui.colored_label(Color32::from_gray(140), "OFF");
+                        }
+                    };
+
+                    ui.label(RichText::new("Engine 1 (Left / Throttle)").strong());
+                    ui.label("");
+                    ui.end_row();
+
+                    ui.label("N2:");
+                    ui.label(format!("{:.1}%", v.eng1_n2_percent));
+                    ui.end_row();
+
+                    ui.label("Combustion:");
+                    combustion_label(ui, v.eng1_combustion > 0.5);
+                    ui.end_row();
+
+                    ui.label("% Max RPM:");
+                    ui.label(format!("{:.1}%", v.eng1_pct_max_rpm));
+                    ui.end_row();
+
+                    ui.label("Engine RPM:");
+                    ui.label(format!("{:.0}", v.eng1_rpm));
+                    ui.end_row();
+
+                    ui.label("Prop RPM:");
+                    ui.label(format!("{:.0}", v.prop1_rpm));
+                    ui.end_row();
+
+                    ui.label(RichText::new("Engine 2 (Right / Joystick)").strong());
+                    ui.label("");
+                    ui.end_row();
+
+                    ui.label("N2:");
+                    ui.label(format!("{:.1}%", v.eng2_n2_percent));
+                    ui.end_row();
+
+                    ui.label("Combustion:");
+                    combustion_label(ui, v.eng2_combustion > 0.5);
+                    ui.end_row();
+
+                    ui.label("% Max RPM:");
+                    ui.label(format!("{:.1}%", v.eng2_pct_max_rpm));
+                    ui.end_row();
+
+                    ui.label("Engine RPM:");
+                    ui.label(format!("{:.0}", v.eng2_rpm));
+                    ui.end_row();
+
+                    ui.label("Prop RPM:");
+                    ui.label(format!("{:.0}", v.prop2_rpm));
+                    ui.end_row();
+
+                    ui.label(RichText::new("Engine 3 (4-Eng: contributes to Left)").strong());
+                    ui.label("");
+                    ui.end_row();
+
+                    ui.label("N2:");
+                    ui.label(format!("{:.1}%", v.eng3_n2_percent));
+                    ui.end_row();
+
+                    ui.label("Combustion:");
+                    combustion_label(ui, v.eng3_combustion > 0.5);
+                    ui.end_row();
+
+                    ui.label("% Max RPM:");
+                    ui.label(format!("{:.1}%", v.eng3_pct_max_rpm));
+                    ui.end_row();
+
+                    ui.label("Engine RPM:");
+                    ui.label(format!("{:.0}", v.eng3_rpm));
+                    ui.end_row();
+
+                    ui.label("Prop RPM:");
+                    ui.label(format!("{:.0}", v.prop3_rpm));
+                    ui.end_row();
+
+                    ui.label(RichText::new("Engine 4 (4-Eng: contributes to Right)").strong());
+                    ui.label("");
+                    ui.end_row();
+
+                    ui.label("N2:");
+                    ui.label(format!("{:.1}%", v.eng4_n2_percent));
+                    ui.end_row();
+
+                    ui.label("Combustion:");
+                    combustion_label(ui, v.eng4_combustion > 0.5);
+                    ui.end_row();
+
+                    ui.label("% Max RPM:");
+                    ui.label(format!("{:.1}%", v.eng4_pct_max_rpm));
+                    ui.end_row();
+
+                    ui.label("Engine RPM:");
+                    ui.label(format!("{:.0}", v.eng4_rpm));
+                    ui.end_row();
+
+                    ui.label("Prop RPM:");
+                    ui.label(format!("{:.0}", v.prop4_rpm));
+                    ui.end_row();
+                }
+                None => {
+                    ui.label("No data");
+                    ui.label("");
+                    ui.end_row();
+                }
             }
-        }
-    });
-
-ui.add_space(8.0);
-ui.separator();
-ui.heading("Engine Telemetry");
-ui.add_space(4.0);
-
-egui::Grid::new("engine_telemetry")
-    .num_columns(2)
-    .spacing(Vec2::new(20.0, 4.0))
-    .show(ui, |ui| {
-        let v = *self.last_vars.lock();
-        match v {
-            Some(v) => {
-                let combustion_label = |ui: &mut egui::Ui, active: bool| {
-                    if active {
-                        ui.colored_label(Color32::from_rgb(30, 180, 90), "ON");
-                    } else {
-                        ui.colored_label(Color32::from_gray(140), "OFF");
-                    }
-                };
-
-                ui.label(RichText::new("Engine 1 (Left / Throttle)").strong());
-                ui.label("");
-                ui.end_row();
-
-                ui.label("N2:");
-                ui.label(format!("{:.1}%", v.eng1_n2_percent));
-                ui.end_row();
-
-                ui.label("Combustion:");
-                combustion_label(ui, v.eng1_combustion > 0.5);
-                ui.end_row();
-
-                ui.label("% Max RPM:");
-                ui.label(format!("{:.1}%", v.eng1_pct_max_rpm));
-                ui.end_row();
-
-                ui.label("Engine RPM:");
-                ui.label(format!("{:.0}", v.eng1_rpm));
-                ui.end_row();
-
-                ui.label("Prop RPM:");
-                ui.label(format!("{:.0}", v.prop1_rpm));
-                ui.end_row();
-
-                ui.label(RichText::new("Engine 2 (Right / Joystick)").strong());
-                ui.label("");
-                ui.end_row();
-
-                ui.label("N2:");
-                ui.label(format!("{:.1}%", v.eng2_n2_percent));
-                ui.end_row();
-
-                ui.label("Combustion:");
-                combustion_label(ui, v.eng2_combustion > 0.5);
-                ui.end_row();
-
-                ui.label("% Max RPM:");
-                ui.label(format!("{:.1}%", v.eng2_pct_max_rpm));
-                ui.end_row();
-
-                ui.label("Engine RPM:");
-                ui.label(format!("{:.0}", v.eng2_rpm));
-                ui.end_row();
-
-                ui.label("Prop RPM:");
-                ui.label(format!("{:.0}", v.prop2_rpm));
-                ui.end_row();
-
-                ui.label(RichText::new("Engine 3 (4-Eng: contributes to Left)").strong());
-                ui.label("");
-                ui.end_row();
-
-                ui.label("N2:");
-                ui.label(format!("{:.1}%", v.eng3_n2_percent));
-                ui.end_row();
-
-                ui.label("Combustion:");
-                combustion_label(ui, v.eng3_combustion > 0.5);
-                ui.end_row();
-
-                ui.label("% Max RPM:");
-                ui.label(format!("{:.1}%", v.eng3_pct_max_rpm));
-                ui.end_row();
-
-                ui.label("Engine RPM:");
-                ui.label(format!("{:.0}", v.eng3_rpm));
-                ui.end_row();
-
-                ui.label("Prop RPM:");
-                ui.label(format!("{:.0}", v.prop3_rpm));
-                ui.end_row();
-
-                ui.label(RichText::new("Engine 4 (4-Eng: contributes to Right)").strong());
-                ui.label("");
-                ui.end_row();
-
-                ui.label("N2:");
-                ui.label(format!("{:.1}%", v.eng4_n2_percent));
-                ui.end_row();
-
-                ui.label("Combustion:");
-                combustion_label(ui, v.eng4_combustion > 0.5);
-                ui.end_row();
-
-                ui.label("% Max RPM:");
-                ui.label(format!("{:.1}%", v.eng4_pct_max_rpm));
-                ui.end_row();
-
-                ui.label("Engine RPM:");
-                ui.label(format!("{:.0}", v.eng4_rpm));
-                ui.end_row();
-
-                ui.label("Prop RPM:");
-                ui.label(format!("{:.0}", v.prop4_rpm));
-                ui.end_row();
-            }
-            None => {
-                ui.label("No data");
-                ui.label("");
-                ui.end_row();
-            }
-        }
-    });
+        });
+});
                     });
             });
         }
