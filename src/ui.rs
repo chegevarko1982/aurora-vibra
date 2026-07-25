@@ -10,10 +10,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use windows::Win32::Foundation::HWND;
 
 use crate::{
-    tray, updater, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer,
+    tray, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer,
     RumbleConfig, SimStatus, UiCmd,
 };
 
@@ -315,11 +314,10 @@ impl eframe::App for UiState {
                     ui.selectable_value(&mut self.active_tab, Tab::Debug, "Debug");
                 }
 
+                // TODO: кнопка "Check for updates" временно скрыта из тулбара
+                // (функциональность сохранена в updater::spawn_check и в
+                // трей-меню — см. tray.rs), включим обратно позже.
                 ui.separator();
-
-                if ui.button("🔄 Check for updates").clicked() {
-                    updater::spawn_check(HWND(0), env!("CARGO_PKG_VERSION"));
-                }
 
                 let holding = self.hold.load(Ordering::Relaxed);
                 if !holding {
