@@ -70,20 +70,12 @@ fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool) {
 /// Formats the aircraft title for display, with a fallback while
 /// SimConnect hasn't delivered TITLE yet (or delivered an empty string,
 /// e.g. right after connecting or during a sim restart).
-///
-/// If the title already starts with "Stop ", it is removed to avoid duplication.
-fn format_stop_label(title: &str) -> String {
+fn format_aircraft_label(title: &str) -> String {
     let trimmed = title.trim();
-    // Удаляем возможный дублирующий префикс "Stop "
-    let clean = if trimmed.starts_with("Stop ") {
-        &trimmed[5..]  // обрезаем первые 5 символов ("Stop ")
+    if trimmed.is_empty() {
+        "Unknown Aircraft".to_string()
     } else {
-        trimmed
-    };
-    if clean.is_empty() {
-        "Stop Unknown Aircraft".to_string()
-    } else {
-        format!("Stop {clean}")
+        trimmed.to_string()
     }
 }
 
@@ -314,7 +306,7 @@ impl eframe::App for UiState {
 
                 let ac = self.aircraft_title.lock().clone();
                 ui.separator();
-                ui.label(RichText::new(format_stop_label(&ac)).italics());
+                ui.label(RichText::new(format_aircraft_label(&ac)).italics());
 
                 #[cfg(debug_assertions)]
                 {
