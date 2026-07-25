@@ -196,6 +196,16 @@ pub struct RumbleConfig {
     // в паре и OR по combustion для срабатывания удара воспламенения.
     pub four_engine_mode: bool,
 
+    // Зеркалирование посадки рук: по умолчанию все side-bound эффекты
+    // (engine-start pre-combustion, split touchdown) считают, что РУД — под
+    // левой рукой, джойстик — под правой (Eng1/left strut → РУД, Eng2/right
+    // strut → джойстик). Если физически джойстик стоит слева, а РУД справа —
+    // этот флаг меняет местами, какая сторона считается "рукой РУД", а какая
+    // "рукой джойстика", не трогая при этом маршрутизацию по мотору РУД
+    // (throttle_left/throttle_right остаются жёстко привязаны к Eng1/Eng2 —
+    // это железо квадранта, а не поза за столом).
+    pub swap_hand_layout: bool,
+
     // Привязка каждого эффекта к устройствам (Джойстик / РУД / оба).
     // #[serde(default)] на уровне структуры уже гарантирует, что старые
     // settings.json без этого поля подхватят EffectDeviceTargets::default()
@@ -266,6 +276,7 @@ impl Default for RumbleConfig {
             engine_start_strength: 100.0,
             engine_idle_n2: 60.0,
             four_engine_mode: false,
+            swap_hand_layout: false,
 
             device_targets: EffectDeviceTargets::default(),
         }

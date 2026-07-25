@@ -498,9 +498,10 @@ impl RumbleEngine {
                 let p = ((fv.sim_time_s - s.gear_comp_left_t0) / GEAR_COMP_BUMP_DURATION).clamp(0.0, 1.0);
                 let term = s.gear_comp_left_dyn_peak * (1.0 - p).powi(3);
                 if cfg.split_touchdown {
-                    // SPLIT: левая основная стойка — эксклюзивно на РУД (левая рука),
+                    // SPLIT: левая основная стойка — эксклюзивно на "руку РУД"
+                    // (по умолчанию РУД, при cfg.swap_hand_layout — джойстик),
                     // независимо от чекбоксов dt_.gear_comp_left.
-                    transients_t += term;
+                    if cfg.swap_hand_layout { transients_j += term; } else { transients_t += term; }
                 } else {
                     if dt_.gear_comp_left.enable_joystick { transients_j += term; }
                     if dt_.gear_comp_left.enable_throttle { transients_t += term; }
@@ -513,9 +514,10 @@ impl RumbleEngine {
                 let p = ((fv.sim_time_s - s.gear_comp_right_t0) / GEAR_COMP_BUMP_DURATION).clamp(0.0, 1.0);
                 let term = s.gear_comp_right_dyn_peak * (1.0 - p).powi(3);
                 if cfg.split_touchdown {
-                    // SPLIT: правая основная стойка — эксклюзивно на джойстик (правая рука),
+                    // SPLIT: правая основная стойка — эксклюзивно на "руку джойстика"
+                    // (по умолчанию джойстик, при cfg.swap_hand_layout — РУД),
                     // независимо от чекбоксов dt_.gear_comp_right.
-                    transients_j += term;
+                    if cfg.swap_hand_layout { transients_t += term; } else { transients_j += term; }
                 } else {
                     if dt_.gear_comp_right.enable_joystick { transients_j += term; }
                     if dt_.gear_comp_right.enable_throttle { transients_t += term; }
@@ -788,24 +790,35 @@ impl RumbleEngine {
             let mut throttle_eng_vib: f64 = 0.0;
             let mut joystick_eng_vib: f64 = 0.0;
 
+            // cfg.swap_hand_layout меняет местами, какая сторона (Eng1/left или
+            // Eng2/right) считается "рукой РУД", а какая "рукой джойстика" —
+            // см. комментарий у поля в RumbleConfig. По умолчанию (false)
+            // сохраняется исходное поведение: Eng1 → РУД, Eng2 → джойстик.
+            let (throttle_side_combusting, throttle_side_n2, joystick_side_combusting, joystick_side_n2) =
+                if cfg.swap_hand_layout {
+                    (is_combusting_right, right_n2_term, is_combusting_left, left_n2_term)
+                } else {
+                    (is_combusting_left, left_n2_term, is_combusting_right, right_n2_term)
+                };
+
             if cfg.enable_engine_start {
-                // Левая сторона (Eng1, либо Eng1+Eng2 в 4-моторном режиме)
-                if is_combusting_left {
+                // Сторона "руки РУД"
+                if throttle_side_combusting {
                     // Работающая сторона трясёт всю кабину — оба канала.
-                    throttle_eng_vib += left_n2_term;
-                    joystick_eng_vib += left_n2_term;
+                    throttle_eng_vib += throttle_side_n2;
+                    joystick_eng_vib += throttle_side_n2;
                 } else {
                     // Ещё не воспламенилась — только свой борт (РУД).
-                    throttle_eng_vib += left_n2_term;
+                    throttle_eng_vib += throttle_side_n2;
                 }
 
-                // Правая сторона (Eng2, либо Eng3+Eng4 в 4-моторном режиме)
-                if is_combusting_right {
-                    throttle_eng_vib += right_n2_term;
-                    joystick_eng_vib += right_n2_term;
+                // Сторона "руки джойстика"
+                if joystick_side_combusting {
+                    throttle_eng_vib += joystick_side_n2;
+                    joystick_eng_vib += joystick_side_n2;
                 } else {
                     // Ещё не воспламенилась — только свой борт (джойстик).
-                    joystick_eng_vib += right_n2_term;
+                    joystick_eng_vib += joystick_side_n2;
                 }
             }
 
@@ -961,11 +974,13 @@ impl RumbleEngine {
             transients_t_right += flaps_term_t_right;
         }
 
-        // Universal Engine Start (Starter phase): левый борт → ТОЛЬКО throttle_left,
-        // правый борт → throttle_right И joystick одновременно (см. блок выше).
+        // Universal Engine Start (Starter phase): моторы throttle_left/right
+        // жёстко привязаны к Eng1/Eng2 (железо квадранта, поза за столом тут
+        // ни при чём). А вот "чья сторона" дублируется на джойстик — зависит
+        // от cfg.swap_hand_layout (см. комментарий у поля и jet-ветку выше).
         transients_t_left += throttle_eng_vib_left;
         transients_t_right += throttle_eng_vib_right;
-        transients_j += throttle_eng_vib_right;
+        transients_j += if cfg.swap_hand_layout { throttle_eng_vib_left } else { throttle_eng_vib_right };
 
         let mut total_j = s.bg_smoothed + ground_term_j + transients_j + bank_term_j + spoilers_term_j;
         let mut total_t_left = s.bg_smoothed_throttle + ground_term_t + transients_t_left + bank_term_t + spoilers_term_t;

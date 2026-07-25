@@ -597,6 +597,27 @@ impl eframe::App for UiState {
                                  }
                              });
 
+                             ui.horizontal(|ui| {
+                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+                                 if ui
+                                     .checkbox(
+                                         &mut cfg.swap_hand_layout,
+                                         "Swap hands (Joystick=Left, Throttle=Right)",
+                                     )
+                                     .on_hover_text(
+                                         "По умолчанию side-bound эффекты (engine-start до воспламенения, \
+                                          split touchdown) считают, что РУД — под левой рукой, джойстик — \
+                                          под правой. Если у вас физически джойстик стоит слева, а РУД \
+                                          справа — включите, чтобы зеркалить сторону. На то, какой мотор \
+                                          РУД (левый/правый) отвечает за Eng1/Eng2, это не влияет — это \
+                                          жёстко задано железом квадранта.",
+                                     )
+                                     .changed()
+                                 {
+                                     _changed = true;
+                                 }
+                             });
+
                              ui.add_space(8.0);
 
                              // Base effect removed per user request
