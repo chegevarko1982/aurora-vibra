@@ -55,6 +55,10 @@ pub fn parse_main_elems(
         prop4_rpm: elem.get(37).copied().unwrap_or(0.0),
         // DESIGN SPEED VC — динамический порог Overspeed для текущего самолёта.
         design_speed_vc_kn: elem.get(38).copied().unwrap_or(0.0),
+        // Предкрылки (Slats) — среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
+        slats_pct: ((elem.get(39).copied().unwrap_or(0.0) + elem.get(40).copied().unwrap_or(0.0))
+            * 0.5)
+            .clamp(0.0, 100.0),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);

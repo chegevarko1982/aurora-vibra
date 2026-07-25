@@ -404,6 +404,11 @@ pub fn sim_worker(
                 // Overspeed (Vmo/Vc самолёта), заменяет ручной слайдер в UI.
                 // Индекс 38 в буфере elem[] ниже.
                 ("DESIGN SPEED VC", "Knots"),
+                // Предкрылки (Slats) — пока только для отображения в UI
+                // ("Live Aircraft Data"), в логику эффектов не задействованы.
+                // Индексы 39/40 в буфере elem[] ниже.
+                ("LEADING EDGE FLAPS LEFT PERCENT", "Percent"),
+                ("LEADING EDGE FLAPS RIGHT PERCENT", "Percent"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -560,6 +565,7 @@ pub fn sim_worker(
 
             let mut title_resolved = false;
             let mut last_title_request_time = Instant::now() - Duration::from_secs(10); // force immediate request first tick
+            let mut profile_state = crate::profiles::ProfileState::new();
 
             loop {
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
@@ -632,8 +638,11 @@ pub fn sim_worker(
                                         sod.dw_request_id, title
                                     ));
                                     if !title.is_empty() {
-                                        *aircraft_title.lock() = title;
+                                        let prev = std::mem::replace(&mut *aircraft_title.lock(), title.clone());
                                         title_resolved = true;
+                                        if prev != title {
+                                            profile_state.on_aircraft_changed(&config, &title, &logs);
+                                        }
                                     } else {
                                         logs.push("SimConnect: received empty/null TITLE, will retry polling...".to_string());
                                         title_resolved = false;
@@ -686,12 +695,14 @@ pub fn sim_worker(
                                 // GENERAL ENG RPM:1/2/3/4 (30/31/32/33),
                                 // PROP RPM:1/2/3/4 (34/35/36/37) и, наконец,
                                 // DESIGN SPEED VC (38) — динамический порог
-                                // срабатывания эффекта Overspeed.
-                                let mut elem = [0f64; 39];
+                                // срабатывания эффекта Overspeed. LEADING EDGE
+                                // FLAPS LEFT/RIGHT PERCENT (39/40) — предкрылки
+                                // (Slats), пока только для UI.
+                                let mut elem = [0f64; 41];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(39),
+                                        count.min(41),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -699,7 +710,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(39),
+                                        count.min(41),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
@@ -758,8 +769,11 @@ pub fn sim_worker(
                                     title
                                 ));
                                 if !title.is_empty() {
-                                    *aircraft_title.lock() = title;
+                                    let prev = std::mem::replace(&mut *aircraft_title.lock(), title.clone());
                                     title_resolved = true;
+                                    if prev != title {
+                                        profile_state.on_aircraft_changed(&config, &title, &logs);
+                                    }
                                 }
                             }
                         }

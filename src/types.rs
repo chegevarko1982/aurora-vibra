@@ -68,6 +68,10 @@ pub struct FlightVars {
     // для текущего загруженного самолёта (вместо ручного слайдера в UI).
     // 0.0 означает "ещё не получено от SimConnect" (см. UI: "Limit: N/A").
     pub design_speed_vc_kn: f64,
+    // Предкрылки (Slats): среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
+    // Пока только для отображения в UI ("Live Aircraft Data"), в логику
+    // эффектов не задействовано.
+    pub slats_pct: f64,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
@@ -167,6 +171,13 @@ pub struct RumbleConfig {
     // Коэффициент кривизны нарастания частоты ударов (см. ремарку в rumble.rs):
     // 1.0 = чистая физика (t=S/V), >1.0 = плавнее на старте, <1.0 = резче на старте
     pub thump_period_curve: f32,
+    // Минимальное время, на которое motor-hum закрылков остаётся включённым
+    // после КАЖДОГО зафиксированного изменения flaps_pct/slats_pct (см.
+    // rumble.rs) — нужно только чтобы мгновенный скачок за один тик
+    // (например MADDOG: 0 -> 27) успел дать ощутимый щелчок, а не потерялся
+    // за один PWM-кадр. Не выведено в UI намеренно: включение/выключение
+    // эффекта должно ощущаться практически мгновенным, а не "мотором,
+    // который разгоняется/тормозит" — поэтому значение маленькое.
     pub flaps_bump_duration_s: f64,
     pub flaps_bump_eps_pct: f64,
     pub flaps_duty: f64,
@@ -176,6 +187,12 @@ pub struct RumbleConfig {
     pub flaps_enabled: bool,
     pub gear_enabled: bool,
     pub stall_enabled: bool,
+    // На некоторых бортах (см. src/profiles.rs, MADDOG) предкрылки убираются
+    // отдельным, более поздним движением ручки, чем закрылки — flaps_pct уже
+    // 0, когда slats_pct только падает в 0. Этот флаг включается автоматически
+    // встроенным профилем самолёта (не предназначен для ручного переключения
+    // в UI) и заставляет motor-hum дополнительно ловить движение по slats_pct.
+    pub flaps_track_slats: bool,
 
     // Spoilers settings
     pub spoilers_enabled: bool,
@@ -246,7 +263,7 @@ impl Default for RumbleConfig {
             runway_slab_length_m: 6.0,
             thump_duration_ms: 300.0,
             thump_period_curve: 2.5, // плавнее на старте, чем чистая физика
-            flaps_bump_duration_s: 1.0,
+            flaps_bump_duration_s: 0.15,
             flaps_bump_eps_pct: 2.0,
             flaps_duty: 0.6,
             gear_bump_duration_s: 0.8,
@@ -255,6 +272,7 @@ impl Default for RumbleConfig {
             flaps_enabled: true,
             gear_enabled: true,
             stall_enabled: true,
+            flaps_track_slats: false,
 
             spoilers_enabled: true,
             spoilers_threshold_pct: 10.0,

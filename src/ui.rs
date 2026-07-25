@@ -805,6 +805,10 @@ egui::Grid::new("aircraft_data")
                 ui.label(format!("{:.0}", v.flaps_pct));
                 ui.end_row();
 
+                ui.label("Slats (%):");
+                ui.label(format!("{:.0}", v.slats_pct));
+                ui.end_row();
+
                 ui.label("Gear:");
                 ui.label(if v.gear_handle > 0.5 { "Down" } else { "Up" });
                 ui.end_row();

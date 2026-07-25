@@ -28,8 +28,16 @@ pub struct RumbleState {
     prev_gear_right: f64,
     gear_doors_closed_t0: f64,
     // Flaps Motor Hum tracking
-    last_flaps_percent: f64,
     current_flaps_amplitude: f64,
+    // Последнее значение flaps_pct, ОКРУГЛЁННОЕ до целого процента — источник
+    // истины для детекции движения (см. комментарий у flaps_pct_rounded в
+    // step()). i32::MIN — сентинел "ещё не видели ни одного кадра", чтобы
+    // самый первый кадр не считался "изменением" от 0.
+    last_flaps_pct_rounded: i32,
+    // Аналогично last_flaps_pct_rounded, но для slats_pct — используется
+    // только когда cfg.flaps_track_slats включён профилем самолёта.
+    last_slats_pct_rounded: i32,
+    flaps_active_until: f64,
     // Ground Roll (физическая модель удара о стыки плит) tracking
     thump_last_time_s: f64,
     // Touchdown fade-in tracking: момент касания земли (переход airborne -> on_ground),
@@ -98,8 +106,10 @@ impl RumbleEngine {
                 prev_gear_left: 0.0,
                 prev_gear_right: 0.0,
                 gear_doors_closed_t0: -1.0,
-                last_flaps_percent: 0.0,
+                last_flaps_pct_rounded: i32::MIN,
+                last_slats_pct_rounded: i32::MIN,
                 current_flaps_amplitude: 0.0,
+                flaps_active_until: -1.0,
                 thump_last_time_s: -1000.0,
                 touchdown_time_s: -1000.0,
                 ..Default::default()
@@ -167,6 +177,9 @@ impl RumbleEngine {
         if s.prev_sim_time_s < 0.0 {
             dt = 0.0;
         }
+        // Ограничиваем dt, чтобы при лагах/паузах симулятора не было резкого
+        // скачка накопительных таймеров (например piston combustion timer ниже).
+        let dt_clamped = dt.min(0.1);
 
         // Touchdown fade-in tracking: фиксируем момент перехода airborne -> on_ground,
         // чтобы Ground Roll (гул рулёжки/пробега) мог плавно нарастать после этого
@@ -248,34 +261,48 @@ impl RumbleEngine {
         // БЛОК ЗАКРЫЛКОВ (FLAPS MOTOR HUM)
         // =========================================================================
 
-        // 1. Проверяем, движутся ли физически закрылки
-        let flaps_delta = (fv.flaps_pct - s.last_flaps_percent).abs();
-        let flaps_is_moving = flaps_delta > 0.01; // Переименовали, чтобы не затенять closure ниже
+        // 1. Проверяем, движутся ли физически закрылки.
+        // FLAPS HANDLE INDEX оказался ненадёжным источником (на MADDOG он
+        // дребезжит между соседними значениями даже стоя на месте, из-за чего
+        // эффект не смолкал никогда — см. историю правок). Вместо него
+        // сравниваем flaps_pct, ОКРУГЛЁННЫЙ до целого процента, с предыдущим
+        // кадром. Округление само по себе гасит суб-процентный телеметрический
+        // шум, а сравнение по проценту (не по индексу защёлки) одинаково ловит
+        // и плавную анимацию, и борта, где FLAPS PERCENT прыгает целиком за
+        // один тик (например MADDOG: 0 -> 27 без промежуточных значений).
+        let flaps_pct_rounded = fv.flaps_pct.round() as i32;
+        let pct_changed =
+            s.last_flaps_pct_rounded != i32::MIN && s.last_flaps_pct_rounded != flaps_pct_rounded;
+
+        // На некоторых бортах (см. cfg.flaps_track_slats, MADDOG — включается
+        // автоматически встроенным профилем по aircraft title) предкрылки
+        // убираются отдельным, последним движением ручки закрылков, когда
+        // flaps_pct УЖЕ 0 — само это движение (реальная работа мотора) видно
+        // только по смене slats_pct, поэтому дополнительно следим и за ним.
+        let slats_pct_rounded = fv.slats_pct.round() as i32;
+        let slats_changed = cfg.flaps_track_slats
+            && s.last_slats_pct_rounded != i32::MIN
+            && s.last_slats_pct_rounded != slats_pct_rounded;
+
+        // Держим "мотор" включённым СТРОГО на время реального изменения
+        // телеметрии + минимальный запас (cfg.flaps_bump_duration_s, по
+        // умолчанию доли секунды), чтобы даже мгновенный скачок за один тик
+        // (MADDOG: 0 -> 27 в один кадр) успел дать ощутимый щелчок. Раньше
+        // здесь были ещё и 5-секундные плавные разгон/затухание мотора —
+        // из-за них эффект звучал заметно дольше, чем реально менялось
+        // значение. Убрали: включаем/выключаем практически мгновенно.
+        if pct_changed || slats_changed {
+            s.flaps_active_until = fv.sim_time_s + cfg.flaps_bump_duration_s.max(0.05);
+        }
+        s.last_flaps_pct_rounded = flaps_pct_rounded;
+        s.last_slats_pct_rounded = slats_pct_rounded;
+
+        let flaps_is_moving = fv.sim_time_s < s.flaps_active_until;
 
         // Целевая рабочая мощность (0.8 — это примерно 200 из 255)
         let max_amplitude = cfg.flaps_duty.clamp(0.01, 0.8);
 
-        // Ограничиваем dt, чтобы при лагах/паузах симулятора не было резкого скачка амплитуды
-        let dt_clamped = dt.min(0.1);
-
-        if flaps_is_moving {
-            // ----------------------------------------------------------------------
-            // НАСТРОЙКА ВРЕМЕНИ РАСКРУТКИ МОТОРА ЗАКРЫЛКОВ
-            // Теперь не зависит от FPS, используем реальное время dt_clamped.
-            // ----------------------------------------------------------------------
-            let ramp_up_time_s = 5.0; // Время раскрутки ~5 секунд
-            let step_up = max_amplitude * (dt_clamped / ramp_up_time_s);
-
-            // Плавно прибавляем силу
-            s.current_flaps_amplitude = (s.current_flaps_amplitude + step_up).min(max_amplitude);
-        } else {
-            // Плавно глушим мотор при остановке
-            let ramp_down_time_s = 5.0; // Время затухания ~5 секунд
-            let step_down = max_amplitude * (dt_clamped / ramp_down_time_s);
-
-            // Плавно убавляем силу до нуля
-            s.current_flaps_amplitude = (s.current_flaps_amplitude - step_down).max(0.0);
-        }
+        s.current_flaps_amplitude = if flaps_is_moving { max_amplitude } else { 0.0 };
 
         // 2. Применяем эффект, если амплитуда больше минимального порога.
         // s.current_flaps_amplitude — это duty cycle (0.0 .. 0.8), поэтому
@@ -314,9 +341,6 @@ impl RumbleEngine {
         } else {
             effects.flaps_bump_active = false;
         }
-
-        // 3. Запоминаем позицию закрылков для следующего кадра
-        s.last_flaps_percent = fv.flaps_pct;
 
         // =========================================================================
         // БЛОК ВЫПУСКА/УБОРКИ ШАССИ (Gear Handle Bump)

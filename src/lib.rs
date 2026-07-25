@@ -1,5 +1,6 @@
 pub mod hid;
 pub mod log;
+pub mod profiles;
 pub mod rumble;
 pub mod settings;
 pub mod sim;
