@@ -76,13 +76,20 @@ fn main() -> Result<()> {
         });
     }
 
+    // Без явной иконки eframe подставляет свою иконку-заглушку ("e" на чёрном
+    // фоне, см. eframe::native::epi_integration::load_default_egui_icon) поверх
+    // иконки, зашитой в ресурсы .exe — поэтому грузим свою явно.
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+        .expect("failed to load embedded assets/icon.png");
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([550.0, 700.0]) // Увеличили размер окна
             .with_min_inner_size([480.0, 600.0]) // Увеличили минимальный размер
             .with_resizable(true) // Разрешили изменение размера
             .with_maximize_button(true)
-            .with_minimize_button(true),
+            .with_minimize_button(true)
+            .with_icon(icon),
         ..Default::default()
     };
 
