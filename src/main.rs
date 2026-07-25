@@ -130,6 +130,7 @@ fn main() -> Result<()> {
 
         saved_config_rev: initial_config_rev,
         pending_save_at: None,
+        last_observed_config_rev: initial_config_rev,
     };
 
     let tx_ui_for_tray = tx_ui.clone();

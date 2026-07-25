@@ -235,6 +235,13 @@ pub struct RumbleConfig {
     // settings.json без этого поля подхватят EffectDeviceTargets::default()
     // (все эффекты → джойстик, РУД выключен — прежнее поведение).
     pub device_targets: EffectDeviceTargets,
+
+    // Состояние UI (не параметр эффекта): развёрнута ли секция телеметрии
+    // (Live Aircraft Data / Engine Telemetry) под кнопкой "Telemetry".
+    // Хранится здесь только потому, что это уже готовый персистентный
+    // канал (settings.json) — по умолчанию (и для старых settings.json без
+    // этого поля, см. #[serde(default)] на структуре) секция развёрнута.
+    pub telemetry_expanded: bool,
 }
 
 impl Default for RumbleConfig {
@@ -304,6 +311,8 @@ impl Default for RumbleConfig {
             swap_hand_layout: false,
 
             device_targets: EffectDeviceTargets::default(),
+
+            telemetry_expanded: true,
         }
     }
 }

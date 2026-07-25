@@ -115,6 +115,15 @@ pub struct UiState {
     // Сохранение настроек ползунков на диск
     pub saved_config_rev: u64,
     pub pending_save_at: Option<Instant>,
+    // Ревизия конфига, замеченная на ПРЕДЫДУЩЕМ кадре — нужна, чтобы отличить
+    // "конфиг только что изменился" (перезапустить таймер debounce) от "конфиг
+    // уже был изменён и таймер тикает" (не трогать таймер). Без этого поля
+    // таймер сохранения переставлялся бы на +500мс КАЖДЫЙ кадр, пока rev не
+    // совпадёт с saved_config_rev, — а поскольку update() перерисовывается
+    // постоянно (см. TARGET_FPS), дедлайн никогда бы не наступал, и сохранение
+    // на диск откладывалось бы до бесконечности (реально срабатывало бы только
+    // синхронное сохранение при закрытии окна).
+    pub last_observed_config_rev: u64,
 }
 
 impl UiState {
@@ -763,6 +772,7 @@ impl eframe::App for UiState {
                         });
 
                         ui.add_space(8.0);
+                        let mut telemetry_expanded = self.config.get().telemetry_expanded;
                         ui.horizontal(|ui| {
                             if ui.button("Reset to defaults").clicked() {
                                 self.config.set(RumbleConfig::default());
@@ -770,12 +780,21 @@ impl eframe::App for UiState {
                                     self.logs.push(format!("Settings reset and saved → {}", p.display()));
                                 }
                                 self.saved_config_rev = self.config.current_rev();
+                                self.last_observed_config_rev = self.saved_config_rev;
                                 self.pending_save_at = None;
+                                telemetry_expanded = true;
+                            }
+
+                            let toggle_label = if telemetry_expanded { "Hide Telemetry" } else { "Show Telemetry" };
+                            if ui.button(toggle_label).clicked() {
+                                telemetry_expanded = !telemetry_expanded;
+                                self.config.with_mut(|cfg| cfg.telemetry_expanded = telemetry_expanded);
                             }
                         });
 
                         ui.separator();
 
+if telemetry_expanded {
 ui.columns(2, |columns| {
     // --- Левая колонка: общая телеметрия борта ---
     let ui = &mut columns[0];
@@ -982,6 +1001,7 @@ ui.columns(2, |columns| {
             }
         });
 });
+}
                     });
             });
         }
@@ -1032,8 +1052,13 @@ ui.columns(2, |columns| {
         // на каждый кадр во время перетаскивания слайдера.
         {
             let current_rev = self.config.current_rev();
-            if current_rev != self.saved_config_rev {
-                // Конфиг изменился — (пере)запускаем таймер ожидания.
+            if current_rev != self.last_observed_config_rev {
+                // Конфиг изменился С ПРОШЛОГО кадра — (пере)запускаем таймер
+                // ожидания. Сравнение именно с last_observed (а не с
+                // saved_config_rev) критично: saved_config_rev не меняется,
+                // пока таймер не сработает, поэтому сравнение с ним оставалось
+                // бы истинным КАЖДЫЙ кадр и бесконечно откладывало таймер.
+                self.last_observed_config_rev = current_rev;
                 self.pending_save_at = Some(Instant::now() + Duration::from_millis(500));
             }
             if let Some(at) = self.pending_save_at {
