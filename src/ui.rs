@@ -1,4 +1,5 @@
 use egui::{Color32, RichText, Vec2};
+#[cfg(debug_assertions)]
 use egui_extras::{Column, TableBuilder};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
