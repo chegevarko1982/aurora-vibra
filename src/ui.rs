@@ -67,6 +67,18 @@ fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool) {
     });
 }
 
+/// Formats the aircraft title for display, with a fallback while
+/// SimConnect hasn't delivered TITLE yet (or delivered an empty string,
+/// e.g. right after connecting or during a sim restart).
+fn format_stop_label(title: &str) -> String {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        "Stop Unknown Aircraft".to_string()
+    } else {
+        format!("Stop {trimmed}")
+    }
+}
+
 pub struct UiState {
     pub controller_connected: Arc<AtomicBool>,
     pub throttle_connected: Arc<AtomicBool>,
@@ -249,10 +261,8 @@ impl eframe::App for UiState {
                 controller_badge_dot(ui, "Throttle", throttle_ok);
 
                 let ac = self.aircraft_title.lock().clone();
-                if !ac.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new(ac).italics());
-                }
+                ui.separator();
+                ui.label(RichText::new(format_stop_label(&ac)).italics());
 
                 #[cfg(debug_assertions)]
                 {

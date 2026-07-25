@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_void};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -48,6 +48,18 @@ struct SimRecvEvent {
     dw_data: DWord,
 }
 
+// Отражает SIMCONNECT_RECV_EXCEPTION из SimConnect SDK. dw_send_id — это ID
+// того самого вызова (Add_to_data_definition/RequestDataOnSimObject/...),
+// который вызвал исключение, что позволяет сопоставить его с конкретным
+// запросом (например, с REQ_TITLE) по логам.
+#[repr(C)]
+struct SimRecvException {
+    base: SimRecv,
+    dw_exception: DWord,
+    dw_send_id: DWord,
+    dw_index: DWord,
+}
+
 const SIMCONNECT_RECV_ID_OPEN: DWord = 2;
 const SIMCONNECT_RECV_ID_QUIT: DWord = 3;
 const SIMCONNECT_RECV_ID_EVENT: DWord = 4;
@@ -56,6 +68,16 @@ const SIMCONNECT_RECV_ID_SIMOBJECT_DATA: DWord = 8;
 
 const SIMCONNECT_PERIOD_ONCE: DWord = 1;
 const SIMCONNECT_PERIOD_SIM_FRAME: DWord = 3;
+const SIMCONNECT_PERIOD_SECOND: DWord = 4;
+
+// SIMCONNECT_DATA_REQUEST_FLAG_CHANGED: сервер шлёт SIMOBJECT_DATA только
+// когда значение реально ИЗМЕНИЛОСЬ с прошлого тика периода — то есть при
+// SIMCONNECT_PERIOD_SECOND с этим флагом мы не заваливаем канал одинаковыми
+// пакетами каждую секунду, а получаем новый TITLE ровно в тот момент, когда
+// он появился/сменился (включая случай, когда самолёт уже стоял на перроне
+// ДО подключения приложения — первая же секунда после Open() пришлёт
+// актуальное значение, а не только при событии SimStart).
+const SIMCONNECT_DATA_REQUEST_FLAG_CHANGED: DWord = 1;
 
 const SIMCONNECT_DATATYPE_FLOAT64: DWord = 4;
 const SIMCONNECT_DATATYPE_STRING256: DWord = 12;
@@ -353,17 +375,26 @@ pub fn sim_worker(
 
             {
                 let n = std::ffi::CString::new("TITLE").unwrap();
+                // ВАЖНО: для строковых типов (SIMCONNECT_DATATYPE_STRINGxx) SDK
+                // требует передавать NULL в качестве UnitsName — у строк нет
+                // единиц измерения. Ранее здесь передавалась строка "string",
+                // что не соответствует контракту AddToDataDefinition и на
+                // некоторых сборках SimConnect может привести к отказу
+                // регистрации определения (см. SIMCONNECT_RECV_ID_EXCEPTION
+                // в логах ниже, если это всё же произойдёт).
                 let hr = (fns.add_to_def)(
                     h_sc,
                     DEF_TITLE,
                     n.as_ptr(),
-                    std::ffi::CString::new("string").unwrap().as_ptr(),
+                    std::ptr::null(),
                     SIMCONNECT_DATATYPE_STRING256,
                     0.0,
                     0xFFFF_FFFF,
                 );
                 if hr < 0 {
                     logs.push(format!("SimConnect: AddToDef TITLE FAILED {}", hr_hex(hr)));
+                } else {
+                    logs.push("SimConnect: AddToDef TITLE ok");
                 }
             }
 
@@ -384,17 +415,34 @@ pub fn sim_worker(
                 }
             }
 
-            let _ = (fns.req_data)(
+            // PERIOD_SECOND + FLAG_CHANGED вместо PERIOD_ONCE: одноразовый запрос
+            // не покрывает случай, когда самолёт УЖЕ стоял загруженным на
+            // перроне ДО запуска приложения (SimStart в этом случае вообще не
+            // придёт — SimConnect не шлёт его "задним числом" подключившимся
+            // позже клиентам) — а также любой другой транзиентный сбой первого
+            // ответа. При PERIOD_SECOND сервер лично перепроверяет TITLE каждую
+            // секунду и присылает пакет ТОЛЬКО когда значение действительно
+            // изменилось (FLAG_CHANGED) — то есть уже в первую секунду после
+            // подписки мы получим текущее (уже ненулевое) значение.
+            let hr_title_req = (fns.req_data)(
                 h_sc,
                 REQ_TITLE,
                 DEF_TITLE,
                 USER_OBJECT_ID,
-                SIMCONNECT_PERIOD_ONCE,
-                0,
+                SIMCONNECT_PERIOD_SECOND,
+                SIMCONNECT_DATA_REQUEST_FLAG_CHANGED,
                 0,
                 0,
                 0,
             );
+            if hr_title_req < 0 {
+                logs.push(format!(
+                    "SimConnect: RequestDataOnSimObject TITLE FAILED {}",
+                    hr_hex(hr_title_req)
+                ));
+            } else {
+                logs.push("SimConnect: TITLE requested (initial)");
+            }
             let _ = (fns.req_data)(
                 h_sc,
                 REQ_MAIN,
@@ -460,6 +508,32 @@ pub fn sim_worker(
                                 *last_vars.lock() = None;
                                 rumble_engine.reset();
                                 effects.clear_all();
+
+                                // Основная непрерывная подписка на TITLE теперь
+                                // живёт на SIMCONNECT_PERIOD_SECOND (см. запрос
+                                // сразу после Open() ниже по файлу) и сама
+                                // переживает смену самолёта/перезагрузку полёта.
+                                // Этот повторный запрос на SimStart — просто
+                                // подстраховка на случай смены dwObjectID у
+                                // пользовательского самолёта при перезагрузке.
+                                // ВАЖНО: намеренно используем ТЕ ЖЕ
+                                // PERIOD_SECOND + FLAG_CHANGED, а не PERIOD_ONCE —
+                                // повторный RequestDataOnSimObject с тем же
+                                // RequestID ЗАМЕНЯЕТ предыдущую подписку, и
+                                // PERIOD_ONCE здесь превратил бы постоянный поток
+                                // обратно в одноразовый запрос.
+                                let _ = (fns.req_data)(
+                                    h_sc,
+                                    REQ_TITLE,
+                                    DEF_TITLE,
+                                    USER_OBJECT_ID,
+                                    SIMCONNECT_PERIOD_SECOND,
+                                    SIMCONNECT_DATA_REQUEST_FLAG_CHANGED,
+                                    0,
+                                    0,
+                                    0,
+                                );
+                                logs.push("SimConnect: re-requested TITLE on SimStart");
                             } else if ev.u_event_id == EVT_SIM_STOP {
                                 in_flight = false;
                                 let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
@@ -481,10 +555,28 @@ pub fn sim_worker(
 
                             if sod.dw_request_id == REQ_TITLE {
                                 if payload_len >= 256 {
-                                    let s_ptr = data_ptr as *const c_char;
+                                    // Безопаснее, чем CStr::from_ptr: если по какой-то
+                                    // причине (повреждённые данные, экзотический
+                                    // сторонний самолёт) в буфере из 256 байт НЕТ
+                                    // нулевого терминатора, CStr::from_ptr продолжит
+                                    // читать память ЗА пределами буфера — undefined
+                                    // behavior. Здесь мы ищем NUL строго в границах
+                                    // среза длиной 256 и, если его нет, просто берём
+                                    // все 256 байт как есть.
+                                    let buf = std::slice::from_raw_parts(data_ptr, 256);
+                                    let nul_pos = buf.iter().position(|&b| b == 0).unwrap_or(256);
                                     let title =
-                                        CStr::from_ptr(s_ptr).to_string_lossy().into_owned();
+                                        String::from_utf8_lossy(&buf[..nul_pos]).trim().to_string();
+                                    logs.push(format!(
+                                        "SimConnect: TITLE received ({} bytes, req_id={}) -> {:?}",
+                                        nul_pos, sod.dw_request_id, title
+                                    ));
                                     *aircraft_title.lock() = title;
+                                } else {
+                                    logs.push(format!(
+                                        "SimConnect: TITLE payload too short ({} bytes, expected >=256), ignoring",
+                                        payload_len
+                                    ));
                                 }
                                 continue;
                             }
@@ -572,7 +664,13 @@ pub fn sim_worker(
                                 });
                             }
                         }
-                        SIMCONNECT_RECV_ID_EXCEPTION => {}
+                        SIMCONNECT_RECV_ID_EXCEPTION => {
+                            let ex = &*(p_recv as *const SimRecvException);
+                            logs.push(format!(
+                                "SimConnect: EXCEPTION code={} send_id={} index={}",
+                                ex.dw_exception, ex.dw_send_id, ex.dw_index
+                            ));
+                        }
                         _ => {}
                     }
                 } else {
