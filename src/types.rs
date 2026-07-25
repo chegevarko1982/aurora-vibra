@@ -64,6 +64,10 @@ pub struct FlightVars {
     pub prop2_rpm: f64,
     pub prop3_rpm: f64,
     pub prop4_rpm: f64,
+    // DESIGN SPEED VC — динамический порог Overspeed, приходящий из SimConnect
+    // для текущего загруженного самолёта (вместо ручного слайдера в UI).
+    // 0.0 означает "ещё не получено от SimConnect" (см. UI: "Limit: N/A").
+    pub design_speed_vc_kn: f64,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
@@ -108,8 +112,10 @@ pub struct EffectDeviceTargets {
 #[serde(default)]
 pub struct RumbleConfig {
     // Overspeed settings
+    // Порог скорости (overspeed_threshold_kn) больше не хранится в конфиге —
+    // он приходит динамически из SimConnect (DESIGN SPEED VC) для текущего
+    // самолёта, см. FlightVars::design_speed_vc_kn.
     pub overspeed_enabled: bool,
-    pub overspeed_threshold_kn: f32,
     pub overspeed_intensity: f32,
      pub overspeed_max_kn: f32,
 
@@ -201,7 +207,6 @@ impl Default for RumbleConfig {
     fn default() -> Self {
         Self {
             overspeed_enabled: true,
-            overspeed_threshold_kn: 250.0,
             overspeed_intensity: 100.0,
             overspeed_max_kn: 350.0,
 

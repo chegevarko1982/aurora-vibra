@@ -181,6 +181,50 @@ impl UiState {
         });
     }
 
+    /// Строка эффекта Overspeed: порог больше не задаётся вручную ползунком,
+    /// а приходит динамически из SimConnect (DESIGN SPEED VC) для текущего
+    /// загруженного самолёта. `threshold_kn` — None, если SimConnect ещё не
+    /// отдал значение (например, самолёт не загружен) — в этом случае
+    /// показываем "Limit: N/A" и эффект не может сработать.
+    fn overspeed_row(
+        ui: &mut egui::Ui,
+        enabled: &mut bool,
+        threshold_kn: Option<f64>,
+        active: bool,
+        on_change: &mut bool,
+    ) {
+        ui.horizontal(|ui| {
+            let cb = ui.checkbox(enabled, "");
+            if cb.changed() {
+                *on_change = true;
+            }
+
+            ui.label(RichText::new("Overspeed Effect").strong());
+
+            let limit_text = match threshold_kn {
+                Some(kn) => format!("Limit: {:.0} kts", kn),
+                None => "Limit: N/A".to_string(),
+            };
+            ui.add_enabled_ui(*enabled, |ui| {
+                ui.label(RichText::new(limit_text).weak());
+            });
+
+            let is_triggering = active && *enabled && threshold_kn.is_some();
+            let (color, filled) = if is_triggering {
+                (Color32::from_rgb(220, 60, 60), true)
+            } else if *enabled && threshold_kn.is_some() {
+                (Color32::from_rgb(30, 180, 90), false)
+            } else {
+                (Color32::from_gray(90), false)
+            };
+            circle_indicator_colored(ui, color, filled);
+            let status_text = if is_triggering { "ACTIVE" } else { "" };
+            if !status_text.is_empty() {
+                ui.colored_label(color, status_text);
+            }
+        });
+    }
+
     /// Компактная строка с двумя чекбоксами маршрутизации эффекта на
     /// устройства: "J" (Combat Joystick R) и "T" (URSA MINOR Throttle).
     /// Рисуется сразу под соответствующим effect_row/effect_row_hinted.
@@ -322,16 +366,24 @@ impl eframe::App for UiState {
                         let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
                         let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
+                        // Динамический порог Overspeed (DESIGN SPEED VC), полученный
+                        // от SimConnect для текущего самолёта. None, если ещё не
+                        // подключены/самолёт не загружен.
+                        let overspeed_threshold_kn = self
+                            .last_vars
+                            .lock()
+                            .as_ref()
+                            .map(|fv| fv.design_speed_vc_kn)
+                            .filter(|kn| *kn > 0.0);
+
                         self.config.with_mut(|cfg| {
                              // Overspeed
                              let mut overspeed_enabled = cfg.overspeed_enabled;
-                             
-                             UiState::effect_row(
+
+                             UiState::overspeed_row(
                                  ui,
-                                 "Overspeed",
-                                 &mut cfg.overspeed_threshold_kn,
                                  &mut overspeed_enabled,
-                                 0.0..=2000.0,
+                                 overspeed_threshold_kn,
                                  self.effects.overspeed_active.load(Ordering::Relaxed),
                                  &mut _changed,
                              );

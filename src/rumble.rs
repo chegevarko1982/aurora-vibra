@@ -129,7 +129,12 @@ impl RumbleEngine {
         let at_or_above_end = cfg.ground_enabled && cfg.taxi_end_enabled && fv.on_ground && gs >= end;
         let at_or_above_start = cfg.taxi_start_enabled && fv.on_ground && gs >= start;
 
-        let overspeed_threshold_kn = cfg.overspeed_threshold_kn as f64;
+        // Порог Overspeed теперь приходит динамически из SimConnect
+        // (DESIGN SPEED VC) для текущего самолёта, а не из ручного слайдера.
+        // 0.0 означает "SimConnect ещё не отдал значение" — в этом случае
+        // эффект не должен срабатывать (иначе сработает от IAS >= 0).
+        let overspeed_threshold_kn = fv.design_speed_vc_kn;
+        let overspeed_threshold_known = overspeed_threshold_kn > 0.0;
         let bank_threshold_deg = cfg.bank_threshold_deg as f64;
 
         let spoilers_active = cfg.spoilers_enabled
@@ -425,8 +430,8 @@ impl RumbleEngine {
         //     air_term += ratio * BASE_RUMBLE_MAGNITUDE;
         // }
 
-        if cfg.overspeed_enabled {
-            if !fv.on_ground && fv.airspeed_indicated > overspeed_threshold_kn {
+        if cfg.overspeed_enabled && overspeed_threshold_known {
+            if !fv.on_ground && fv.airspeed_indicated >= overspeed_threshold_kn {
                 let overspeed = fv.airspeed_indicated - overspeed_threshold_kn;
                 let ratio = (overspeed / 120.0).clamp(0.0, 1.0);
                 let intensity = ratio * (cfg.overspeed_intensity as f64);

@@ -53,6 +53,8 @@ pub fn parse_main_elems(
         prop2_rpm: elem.get(35).copied().unwrap_or(0.0),
         prop3_rpm: elem.get(36).copied().unwrap_or(0.0),
         prop4_rpm: elem.get(37).copied().unwrap_or(0.0),
+        // DESIGN SPEED VC — динамический порог Overspeed для текущего самолёта.
+        design_speed_vc_kn: elem.get(38).copied().unwrap_or(0.0),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);
@@ -71,6 +73,11 @@ pub fn sanitize_flight_vars(fv: &mut FlightVars, ias_deadband_kn: f64) {
     }
     if !fv.bank_deg.is_finite() {
         fv.bank_deg = 0.0;
+    }
+    // DESIGN SPEED VC приходит как 0.0 для самолётов/сценариев, где SimConnect
+    // не отдаёт это значение (или ещё не подключились) — трактуем как "N/A".
+    if !fv.design_speed_vc_kn.is_finite() || fv.design_speed_vc_kn < 0.0 {
+        fv.design_speed_vc_kn = 0.0;
     }
 }
 

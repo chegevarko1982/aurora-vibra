@@ -398,6 +398,10 @@ pub fn sim_worker(
                 ("PROP RPM:2", "Rpm"),
                 ("PROP RPM:3", "Rpm"),
                 ("PROP RPM:4", "Rpm"),
+                // DESIGN SPEED VC — динамический порог срабатывания эффекта
+                // Overspeed (Vmo/Vc самолёта), заменяет ручной слайдер в UI.
+                // Индекс 38 в буфере elem[] ниже.
+                ("DESIGN SPEED VC", "Knots"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -677,13 +681,15 @@ pub fn sim_worker(
                                 // GENERAL ENG STARTER:1/2/3/4 (26/27/28/29) для
                                 // универсальной модели запуска (Starter + Combustion), и
                                 // наконец сырая телеметрия поршневых двигателей:
-                                // GENERAL ENG RPM:1/2/3/4 (30/31/32/33) и
-                                // PROP RPM:1/2/3/4 (34/35/36/37).
-                                let mut elem = [0f64; 38];
+                                // GENERAL ENG RPM:1/2/3/4 (30/31/32/33),
+                                // PROP RPM:1/2/3/4 (34/35/36/37) и, наконец,
+                                // DESIGN SPEED VC (38) — динамический порог
+                                // срабатывания эффекта Overspeed.
+                                let mut elem = [0f64; 39];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(38),
+                                        count.min(39),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -691,7 +697,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(38),
+                                        count.min(39),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
