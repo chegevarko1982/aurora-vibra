@@ -89,6 +89,7 @@ const SIMCONNECT_RECV_ID_SYSTEM_STATE: DWord = 11;
 
 const SIMCONNECT_PERIOD_ONCE: DWord = 1;
 const SIMCONNECT_PERIOD_SIM_FRAME: DWord = 3;
+#[allow(dead_code)]
 const SIMCONNECT_PERIOD_SECOND: DWord = 4;
 
 // SIMCONNECT_DATA_REQUEST_FLAG_CHANGED: сервер шлёт SIMOBJECT_DATA только
@@ -98,6 +99,7 @@ const SIMCONNECT_PERIOD_SECOND: DWord = 4;
 // он появился/сменился (включая случай, когда самолёт уже стоял на перроне
 // ДО подключения приложения — первая же секунда после Open() пришлёт
 // актуальное значение, а не только при событии SimStart).
+#[allow(dead_code)]
 const SIMCONNECT_DATA_REQUEST_FLAG_CHANGED: DWord = 1;
 
 const SIMCONNECT_DATATYPE_FLOAT64: DWord = 4;
