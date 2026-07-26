@@ -1,41 +1,71 @@
-# Aurora Vibra
+<div align="center">
+<img src="assets/aurora-vibra-logo.png" alt="Aurora Vibra logo" width="220">
 
-A Rust-based flight simulator add-on.
+# ✈️ Aurora Vibra
+### Advanced Flight Simulator Tactile & FFB Hub
 
-## Overview
-This project is a flight simulator add-on that interfaces with external hardware and provides various utility functions. The code is written in Rust and targets Windows platforms.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)]()
+[![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)]()
 
-## Key Components
-- Main entry point in `src/main.rs`
-- Various modules including:
-  - `src/types.rs` - Data structures
-  - `src/ui.rs` - User interface components
-  - `src/settings.rs` - Configuration management
-  - `src/tray.rs` - System tray integration
-  - `src/updater.rs` - Update management
-  - `src/sim/` - Simulation logic
-- Build scripts and supporting infrastructure
+*Next-generation tactile feedback (force feedback / rumble) and telemetry utility for Microsoft Flight Simulator (MSFS).*
 
-## Build System
-- Uses Cargo as the build system
-- Includes DLL dependencies and platform-specific resources
-- Supports Windows-specific features
+</div>
 
-## Files
-- Source code: `src/`
-- Tests: `tests/`
-- Assets: `assets/`
-- Platform resources: `windows/`
-- Configuration: `Cargo.toml`
+---
 
-## Technical Details
-The project appears to be a complex Windows-based flight simulator add-on with native code, system tray integration, and hardware interface capabilities. It uses Rust's FFI capabilities to interface with external systems.
+## 🌟 Overview
 
-What would you like me to help you with? I can:
-- Analyze existing code structure and identify improvements
-- Help debug or fix existing issues
-- Add new functionality to modules
-- Review and improve code quality
-- Test or build the project
+An advanced control hub for tactile feedback and physical response designed for flight sticks, yokes, and throttles (including the WinWing ecosystem). This utility overcomes default software limitations and delivers an immersive, realistic feel for both heavy jetliners and general aviation aircraft.
 
-Please let me know what specific task you'd like me to focus on!
+---
+
+## 🚀 Key Features & Advantages
+
+### 1. 🧩 Native Support for Complex High-Fidelity Add-ons (PMDG, MADDOG X, TFDi)
+- **Overcoming vendor limitations:** dedicated telemetry handling for complex study-level add-ons (**PMDG 737 / 777**, **Leonardo MADDOG X**, **TFDi MD-11**) where standard vendor tools either lack support or suffer from telemetry desync.
+- **Lag-free sync:** direct reading of custom internal variables (L:Vars and SDK data areas) keeps physical vibration, cockpit instruments, and sound modules in sync.
+
+### 2. 🛬 Progressive Runway & Taxi Physics (Taxi & Takeoff Thump)
+- **Seamless speed blending:** an advanced mathematical model smoothly transitions individual runway-joint thumps during taxi into a continuous, dense rumble as the aircraft accelerates down the runway.
+- **Independent gear struts:** individual load and compression processing for nose and main landing gear — a distinct tactile sense of main-gear touchdown followed by the nose gear lowering onto the centerline.
+
+### 3. 🎛️ Multi-Device Routing & Asymmetric Throttle "Ping-Pong"
+- **Flexible channel addressing:** route any tactile effect (gear thumps, engine rumble, flap actuation) independently to the flight stick, the throttle unit, or both.
+- **Hydraulic mechanics simulation:** alternating vibration logic between throttle motors, mimicking the tactile feel of hydraulic pumps and electric actuators.
+
+### 4. 🔥 Detailed Engine Start & Turbine Telemetry
+- **Spool-up tracking (N2):** monitors real high-pressure spool (N2) acceleration from 0% through starter cutout, dynamically shaping vibration at fuel ignition.
+- **Multi-engine support:** tailored profiles for jet and piston powerplants, up to 4 engines.
+
+### 5. 🌊 True Control-Surface Animation Tracking
+- **Physical surface movement:** flap and slat vibration is tied to actual aerodynamic surface displacement, not the cockpit switch position.
+- **Flight-envelope dynamics:** progressive pulsation during steep turns, stall buffet, and overspeed.
+
+### 6. 🤖 Automation & Profile Management
+- **Automatic aircraft detection:** reads SimConnect variables in real time to identify the aircraft and apply the right tactile preset.
+- **Modern GUI (egui):** lightweight, responsive interface with fine-grained sliders, per-aircraft profiles, and an English/Russian language switch.
+
+---
+
+## 🛠️ System Requirements & Building
+
+- **OS:** Windows 10 / 11
+- **Simulator:** Microsoft Flight Simulator (MSFS 2020 / 2024) via SimConnect
+- **Supported hardware:** FFB & vibration-capable flight controls (WinWing joystick & throttle, etc.)
+
+To build from source (requires the **Rust** toolchain):
+
+```bash
+cargo build --release --bin aurora-vibra --features app
+```
+
+---
+
+## 📌 Acknowledgments
+
+Special thanks to [Rodrigo Troncoso](https://github.com/rtroncoso) for creating the original base repository ([ursa-minor-ffb](https://github.com/rtroncoso/ursa-minor-ffb)), its foundational architecture, and the open-source codebase that made this extended and enhanced utility possible.
+
+## 📜 License
+
+Distributed under the [MIT License](LICENSE).

@@ -14,3 +14,6 @@ target/
 *.pdb
 
 # End of https://www.toptal.com/developers/gitignore/api/rust
+
+# Local release packaging output (zip/checksums built manually, not part of source)
+/dist/
