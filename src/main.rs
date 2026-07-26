@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use ursa_minor_ffb::{
+    aircraft_profiles::AircraftProfiles,
     hid::hid_worker,
     log::LogBuffer,
+    profiles::ProfileState,
     sim::sim_worker,
     ui::{Tab, UiState},
     ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
@@ -28,7 +30,6 @@ fn main() -> Result<()> {
     let controller_connected = Arc::new(AtomicBool::new(false));
     let throttle_connected = Arc::new(AtomicBool::new(false));
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
-    let config = Arc::new(ConfigShared::new_loaded());
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(ursa_minor_ffb::SimStatus::Disconnected));
@@ -40,10 +41,25 @@ fn main() -> Result<()> {
         Err(e) => logs.push(format!("File logging disabled: {}", e)),
     }
 
-    match ursa_minor_ffb::settings::load() {
-        Some(_) => logs.push("Settings loaded from disk".to_string()),
-        None => logs.push("No saved settings found, using defaults".to_string()),
-    }
+    let settings_file = match ursa_minor_ffb::settings::load() {
+        Some(sf) => {
+            logs.push("Settings loaded from disk".to_string());
+            sf
+        }
+        None => {
+            logs.push("No saved settings found, using defaults".to_string());
+            ursa_minor_ffb::settings::SettingsFile::default()
+        }
+    };
+
+    let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
+    let aircraft_profiles = Arc::new(Mutex::new(AircraftProfiles {
+        default: settings_file.default,
+        profiles: settings_file.profiles,
+        active_match: None,
+        loaded_rev: config.current_rev(),
+    }));
+    let profile_state = Arc::new(Mutex::new(ProfileState::new()));
 
     {
         let controller_flag = controller_connected.clone();
@@ -62,6 +78,8 @@ fn main() -> Result<()> {
         let hold_c = hold.clone();
         let status_c = status.clone();
         let ac_title = aircraft_title.clone();
+        let aircraft_profiles_c = aircraft_profiles.clone();
+        let profile_state_c = profile_state.clone();
         thread::spawn(move || {
             sim_worker(
                 last_vars_c,
@@ -72,6 +90,8 @@ fn main() -> Result<()> {
                 hold_c,
                 status_c,
                 ac_title,
+                aircraft_profiles_c,
+                profile_state_c,
             )
         });
     }
@@ -93,14 +113,15 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let initial_config_rev = config.current_rev();
-
     let app = UiState {
         controller_connected,
         throttle_connected,
 
         status,
         aircraft_title,
+        aircraft_profiles,
+        profile_state,
+        save_as_default_too: false,
 
         config,
         effects,
@@ -127,10 +148,6 @@ fn main() -> Result<()> {
 
         rx_ui,
         tx_ui: tx_ui.clone(),
-
-        saved_config_rev: initial_config_rev,
-        pending_save_at: None,
-        last_observed_config_rev: initial_config_rev,
     };
 
     let tx_ui_for_tray = tx_ui.clone();

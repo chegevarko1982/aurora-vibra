@@ -1,7 +1,19 @@
-use crate::RumbleConfig;
+use crate::{aircraft_profiles::AircraftProfile, RumbleConfig};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 const FILE_NAME: &str = "UrsaMinorFFB.settings.json";
+
+/// Формат файла на диске: единый default-конфиг (для любого борта без
+/// именного профиля) плюс список именных профилей по самолётам (см.
+/// src/aircraft_profiles.rs). Старые файлы (плоский RumbleConfig, без
+/// профилей) распознаются и мигрируются на лету в load() — см. ниже.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SettingsFile {
+    pub default: RumbleConfig,
+    pub profiles: Vec<AircraftProfile>,
+}
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
 /// 1) рядом с exe-файлом (удобно для портативной установки)
@@ -44,25 +56,40 @@ fn local_appdata_path() -> Option<PathBuf> {
     Some(p.join(FILE_NAME))
 }
 
-/// Пытается загрузить сохранённую конфигурацию ползунков с диска.
+/// Пытается загрузить сохранённый набор профилей с диска.
 /// Возвращает None, если файл не найден ни в одном из известных мест,
 /// либо если его не удалось разобрать (например, повреждён).
-pub fn load() -> Option<RumbleConfig> {
+///
+/// Формат определяется по наличию top-level ключа "profiles" в JSON: старые
+/// файлы (плоский RumbleConfig, без этого ключа) читаются как единый
+/// default-конфиг без именных профилей — лишившись автосохранения, они и не
+/// могли получить это поле никаким другим путём, так что распознавание
+/// однозначно.
+pub fn load() -> Option<SettingsFile> {
     for path in candidate_paths() {
         if let Ok(data) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<RumbleConfig>(&data) {
-                Ok(cfg) => return Some(cfg),
-                Err(_) => continue,
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
+                continue;
+            };
+            if value.get("profiles").is_some() {
+                if let Ok(file) = serde_json::from_value::<SettingsFile>(value) {
+                    return Some(file);
+                }
+            } else if let Ok(cfg) = serde_json::from_value::<RumbleConfig>(value) {
+                return Some(SettingsFile {
+                    default: cfg,
+                    profiles: Vec::new(),
+                });
             }
         }
     }
     None
 }
 
-/// Сохраняет текущую конфигурацию ползунков на диск.
+/// Сохраняет набор профилей на диск.
 /// Сначала пробует папку рядом с exe, затем %LOCALAPPDATA%\UrsaMinorFFB.
-pub fn save(cfg: &RumbleConfig) -> std::io::Result<PathBuf> {
-    let json = serde_json::to_string_pretty(cfg)
+pub fn save(file: &SettingsFile) -> std::io::Result<PathBuf> {
+    let json = serde_json::to_string_pretty(file)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
     let primary = primary_save_path();

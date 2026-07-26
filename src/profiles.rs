@@ -102,6 +102,39 @@ impl ProfileState {
         Self::default()
     }
 
+    /// Сбрасывает запомненный "базовый" снимок, чтобы следующий вызов
+    /// on_aircraft_changed заново снял базу с ТЕКУЩЕГО состояния ConfigShared
+    /// (например, после того как aircraft_profiles.rs только что подставил
+    /// туда другой профиль/default) вместо повторного использования базы от
+    /// предыдущего борта.
+    pub fn force_recheck(&mut self) {
+        self.base = None;
+    }
+
+    /// Возвращает копию cfg, где поля, которые мог переписать встроенный
+    /// оверлей (spoilers_threshold_pct, engine_idle_n2, flaps_track_slats,
+    /// overspeed_lear_horn_enabled), возвращены к "базовым" значениям, если
+    /// такой оверлей сейчас активен. Вызывается перед сохранением на диск
+    /// (см. aircraft_profiles::save_active), чтобы значения, зашитые под
+    /// конкретный борт, не утекли в сохранённый профиль/default (см. ремарку
+    /// у ProfileState выше).
+    pub fn sanitize_for_save(&self, cfg: &RumbleConfig) -> RumbleConfig {
+        let mut out = cfg.clone();
+        if let Some((
+            spoilers_threshold_pct,
+            engine_idle_n2,
+            flaps_track_slats,
+            overspeed_lear_horn_enabled,
+        )) = self.base
+        {
+            out.spoilers_threshold_pct = spoilers_threshold_pct;
+            out.engine_idle_n2 = engine_idle_n2;
+            out.flaps_track_slats = flaps_track_slats;
+            out.overspeed_lear_horn_enabled = overspeed_lear_horn_enabled;
+        }
+        out
+    }
+
     /// Вызывать при каждой смене aircraft_title (не на каждый тик!).
     pub fn on_aircraft_changed(&mut self, config: &ConfigShared, title: &str, logs: &LogBuffer) {
         match find_built_in(title) {

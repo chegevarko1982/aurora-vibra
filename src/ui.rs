@@ -9,10 +9,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use crate::{
+    aircraft_profiles::{self, AircraftProfile, AircraftProfiles},
+    profiles::ProfileState,
     tray, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer,
     RumbleConfig, SimStatus, UiCmd,
 };
@@ -85,6 +87,13 @@ pub struct UiState {
 
     pub status: Arc<Mutex<SimStatus>>,
     pub aircraft_title: Arc<Mutex<String>>,
+    pub aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
+    pub profile_state: Arc<Mutex<ProfileState>>,
+    // Чекбокс рядом с кнопкой Save: "также как Default" — при следующем Save
+    // текущий конфиг дополнительно применится как default (для всех
+    // самолётов без своего именного профиля), даже если сейчас активен
+    // именной профиль текущего борта.
+    pub save_as_default_too: bool,
 
     pub config: Arc<ConfigShared>,
     pub effects: EffectsShared,
@@ -111,19 +120,6 @@ pub struct UiState {
 
     pub rx_ui: Receiver<UiCmd>,
     pub tx_ui: Sender<UiCmd>,
-
-    // Сохранение настроек ползунков на диск
-    pub saved_config_rev: u64,
-    pub pending_save_at: Option<Instant>,
-    // Ревизия конфига, замеченная на ПРЕДЫДУЩЕМ кадре — нужна, чтобы отличить
-    // "конфиг только что изменился" (перезапустить таймер debounce) от "конфиг
-    // уже был изменён и таймер тикает" (не трогать таймер). Без этого поля
-    // таймер сохранения переставлялся бы на +500мс КАЖДЫЙ кадр, пока rev не
-    // совпадёт с saved_config_rev, — а поскольку update() перерисовывается
-    // постоянно (см. TARGET_FPS), дедлайн никогда бы не наступал, и сохранение
-    // на диск откладывалось бы до бесконечности (реально срабатывало бы только
-    // синхронное сохранение при закрытии окна).
-    pub last_observed_config_rev: u64,
 }
 
 impl UiState {
@@ -358,6 +354,91 @@ impl eframe::App for UiState {
                 };
                 ui.label(RichText::new(format_aircraft_label(&ac)).italics().color(ac_color));
 
+                let active_match = self.aircraft_profiles.lock().active_match.clone();
+                match &active_match {
+                    Some(m) => {
+                        ui.label(
+                            RichText::new(format!("· profile: {m}"))
+                                .color(Color32::from_rgb(120, 220, 140)),
+                        );
+                    }
+                    None => {
+                        let known_aircraft = !ac.trim().is_empty();
+                        if known_aircraft
+                            && ui
+                                .button("+ Save profile for this aircraft")
+                                .on_hover_text(
+                                    "Создаёт именной профиль для текущего борта из живого конфига (в памяти — Save всё ещё нужен, чтобы записать на диск)",
+                                )
+                                .clicked()
+                        {
+                            let mut ap = self.aircraft_profiles.lock();
+                            ap.profiles.push(AircraftProfile {
+                                match_substring: ac.clone(),
+                                config: self.config.get(),
+                            });
+                            ap.active_match = Some(ac.clone());
+                            self.logs.push(format!("Created in-memory profile for '{}' (press Save to persist)", ac));
+                        }
+                    }
+                }
+
+                ui.separator();
+
+                if ui.button("⬆ Load").on_hover_text("Load").clicked() {
+                    match crate::settings::load() {
+                        Some(sf) => {
+                            let title = self.aircraft_title.lock().clone();
+                            let mut ap = self.aircraft_profiles.lock();
+                            ap.default = sf.default;
+                            ap.profiles = sf.profiles;
+                            aircraft_profiles::apply_for_aircraft(
+                                &mut ap,
+                                &self.config,
+                                &mut self.profile_state.lock(),
+                                &title,
+                                &self.logs,
+                            );
+                            self.logs.push("Settings reloaded from disk".to_string());
+                        }
+                        None => self
+                            .logs
+                            .push("No settings file found on disk to reload".to_string()),
+                    }
+                }
+
+                let dirty = self.config.current_rev() != self.aircraft_profiles.lock().loaded_rev;
+                let save_label = if dirty {
+                    RichText::new("⬇ Save").color(Color32::from_rgb(230, 170, 40))
+                } else {
+                    RichText::new("⬇ Save")
+                };
+                if ui.button(save_label).on_hover_text("Save").clicked() {
+                    let live = self.config.get();
+                    let sanitized = self.profile_state.lock().sanitize_for_save(&live);
+                    match aircraft_profiles::save_active(
+                        &self.aircraft_profiles,
+                        sanitized,
+                        self.save_as_default_too,
+                    ) {
+                        Ok(p) => {
+                            self.aircraft_profiles.lock().loaded_rev = self.config.current_rev();
+                            self.logs.push(format!("Settings saved → {}", p.display()));
+                        }
+                        Err(e) => self.logs.push(format!("Failed to save settings: {}", e)),
+                    }
+                }
+
+                let has_named_profile_active =
+                    self.aircraft_profiles.lock().active_match.is_some();
+                ui.add_enabled(
+                    has_named_profile_active,
+                    egui::Checkbox::new(&mut self.save_as_default_too, "также Default"),
+                )
+                .on_hover_text(
+                    "При нажатии Save текущий конфиг дополнительно запишется как default — применится ко всем самолётам без именного профиля",
+                );
+
                 #[cfg(debug_assertions)]
                 {
                     ui.separator();
@@ -397,6 +478,60 @@ impl eframe::App for UiState {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        egui::CollapsingHeader::new("Aircraft Profiles")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let mut profiles_snapshot =
+                                    self.aircraft_profiles.lock().profiles.clone();
+                                if profiles_snapshot.is_empty() {
+                                    ui.label(
+                                        "Именных профилей ещё нет — используйте кнопку рядом с названием самолёта наверху, чтобы создать первый.",
+                                    );
+                                }
+                                let mut rename: Option<(usize, String, String)> = None;
+                                let mut delete: Option<usize> = None;
+                                for (i, p) in profiles_snapshot.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        let before = p.match_substring.clone();
+                                        let resp = ui.text_edit_singleline(&mut p.match_substring);
+                                        if resp.changed() {
+                                            rename = Some((i, before, p.match_substring.clone()));
+                                        }
+                                        if ui.button("🗑").on_hover_text("Delete profile").clicked() {
+                                            delete = Some(i);
+                                        }
+                                    });
+                                }
+                                if let Some((i, old_name, new_name)) = rename {
+                                    let mut ap = self.aircraft_profiles.lock();
+                                    if let Some(p) = ap.profiles.get_mut(i) {
+                                        p.match_substring = new_name.clone();
+                                    }
+                                    if ap.active_match.as_deref() == Some(old_name.as_str()) {
+                                        ap.active_match = Some(new_name);
+                                    }
+                                }
+                                if let Some(i) = delete {
+                                    let title = self.aircraft_title.lock().clone();
+                                    let mut ap = self.aircraft_profiles.lock();
+                                    if i < ap.profiles.len() {
+                                        let removed_was_active = ap.active_match.as_deref()
+                                            == Some(ap.profiles[i].match_substring.as_str());
+                                        ap.profiles.remove(i);
+                                        if removed_was_active {
+                                            aircraft_profiles::apply_for_aircraft(
+                                                &mut ap,
+                                                &self.config,
+                                                &mut self.profile_state.lock(),
+                                                &title,
+                                                &self.logs,
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                        ui.add_space(4.0);
+
                         ui.heading("Rumble Effects");
                         ui.add_space(4.0);
 
@@ -910,13 +1045,10 @@ impl eframe::App for UiState {
                         let mut telemetry_expanded = self.config.get().telemetry_expanded;
                         ui.horizontal(|ui| {
                             if ui.button("Reset to defaults").clicked() {
+                                // Только сбрасывает ЖИВОЙ конфиг — на диск ничего не пишет,
+                                // как и любое другое изменение. Нажмите Save (дискета в
+                                // верхней панели), чтобы зафиксировать сброс.
                                 self.config.set(RumbleConfig::default());
-                                if let Ok(p) = crate::settings::save(&self.config.get()) {
-                                    self.logs.push(format!("Settings reset and saved → {}", p.display()));
-                                }
-                                self.saved_config_rev = self.config.current_rev();
-                                self.last_observed_config_rev = self.saved_config_rev;
-                                self.pending_save_at = None;
                                 telemetry_expanded = true;
                             }
 
@@ -1199,45 +1331,11 @@ ui.columns(2, |columns| {
             });
         }
 
-        // Откладываем сохранение настроек на диск, чтобы не писать файл
-        // на каждый кадр во время перетаскивания слайдера.
-        {
-            let current_rev = self.config.current_rev();
-            if current_rev != self.last_observed_config_rev {
-                // Конфиг изменился С ПРОШЛОГО кадра — (пере)запускаем таймер
-                // ожидания. Сравнение именно с last_observed (а не с
-                // saved_config_rev) критично: saved_config_rev не меняется,
-                // пока таймер не сработает, поэтому сравнение с ним оставалось
-                // бы истинным КАЖДЫЙ кадр и бесконечно откладывало таймер.
-                self.last_observed_config_rev = current_rev;
-                self.pending_save_at = Some(Instant::now() + Duration::from_millis(500));
-            }
-            if let Some(at) = self.pending_save_at {
-                if Instant::now() >= at {
-                    let cfg = self.config.get();
-                    match crate::settings::save(&cfg) {
-                        Ok(p) => self.logs.push(format!("Settings saved → {}", p.display())),
-                        Err(e) => self.logs.push(format!("Failed to save settings: {}", e)),
-                    }
-                    self.saved_config_rev = current_rev;
-                    self.pending_save_at = None;
-                } else {
-                    // Пока ждём, но не реагировали на смену rev в этом кадре — перерисуем позже.
-                    ctx.request_repaint_after(Duration::from_millis(120));
-                }
-            }
-        }
-
-        if ctx.input(|i| i.viewport().close_requested()) {
-            // Сохраняем синхронно перед закрытием, чтобы не потерять последние изменения.
-            let cfg = self.config.get();
-            if self.config.current_rev() != self.saved_config_rev {
-                match crate::settings::save(&cfg) {
-                    Ok(p) => self.logs.push(format!("Settings saved on exit → {}", p.display())),
-                    Err(e) => self.logs.push(format!("Failed to save settings on exit: {}", e)),
-                }
-            }
-        }
+        // Автосохранение убрано намеренно: запись на диск теперь происходит
+        // ТОЛЬКО по явному нажатию кнопки Save (дискета) в верхней панели —
+        // см. floppy_icon_button / aircraft_profiles::save_active. Ни смена
+        // слайдера, ни смена самолёта, ни закрытие окна сами по себе больше
+        // ничего не пишут на диск.
 
         loop {
             match self.rx_ui.try_recv() {

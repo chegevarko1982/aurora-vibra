@@ -1,3 +1,4 @@
+pub mod aircraft_profiles;
 pub mod hid;
 pub mod log;
 pub mod profiles;

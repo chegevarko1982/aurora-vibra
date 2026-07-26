@@ -259,6 +259,8 @@ pub fn sim_worker(
     hold: Arc<AtomicBool>,
     status: Arc<Mutex<SimStatus>>,
     aircraft_title: Arc<Mutex<String>>,
+    aircraft_profiles: Arc<Mutex<crate::aircraft_profiles::AircraftProfiles>>,
+    profile_state: Arc<Mutex<crate::profiles::ProfileState>>,
 ) {
     logs.push("SimConnect: worker started");
 
@@ -602,7 +604,6 @@ pub fn sim_worker(
 
             let mut title_resolved = false;
             let mut last_title_request_time = Instant::now() - Duration::from_secs(10); // force immediate request first tick
-            let mut profile_state = crate::profiles::ProfileState::new();
 
             loop {
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
@@ -678,7 +679,13 @@ pub fn sim_worker(
                                         let prev = std::mem::replace(&mut *aircraft_title.lock(), title.clone());
                                         title_resolved = true;
                                         if prev != title {
-                                            profile_state.on_aircraft_changed(&config, &title, &logs);
+                                            crate::aircraft_profiles::apply_for_aircraft(
+                                                &mut aircraft_profiles.lock(),
+                                                &config,
+                                                &mut profile_state.lock(),
+                                                &title,
+                                                &logs,
+                                            );
                                         }
                                     } else {
                                         logs.push("SimConnect: received empty/null TITLE, will retry polling...".to_string());
@@ -824,7 +831,13 @@ pub fn sim_worker(
                                     let prev = std::mem::replace(&mut *aircraft_title.lock(), title.clone());
                                     title_resolved = true;
                                     if prev != title {
-                                        profile_state.on_aircraft_changed(&config, &title, &logs);
+                                        crate::aircraft_profiles::apply_for_aircraft(
+                                            &mut aircraft_profiles.lock(),
+                                            &config,
+                                            &mut profile_state.lock(),
+                                            &title,
+                                            &logs,
+                                        );
                                     }
                                 }
                             }

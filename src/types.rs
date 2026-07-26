@@ -105,11 +105,11 @@ pub struct EffectDeviceTarget {
 
 impl Default for EffectDeviceTarget {
     fn default() -> Self {
-        // Сохраняем прежнее поведение по умолчанию: все эффекты идут на
-        // джойстик, РУД молчит, пока пользователь явно не включит его в UI.
+        // По умолчанию все эффекты идут и на джойстик, и на РУД — пользователь
+        // может выключить любое из направлений вручную в UI.
         Self {
             enable_joystick: true,
-            enable_throttle: false,
+            enable_throttle: true,
         }
     }
 }
@@ -411,11 +411,9 @@ impl ConfigShared {
         }
     }
 
-    /// Создаёт ConfigShared, пытаясь подгрузить сохранённый конфиг с диска
-    /// (см. settings::load()). Если файла нет или он повреждён — используются
-    /// значения по умолчанию.
-    pub fn new_loaded() -> Self {
-        let cfg = crate::settings::load().unwrap_or_default();
+    /// Создаёт ConfigShared с уже готовым конфигом (например, полем `default`
+    /// загруженного с диска SettingsFile — см. main.rs).
+    pub fn new_with(cfg: RumbleConfig) -> Self {
         Self {
             inner: Mutex::new(cfg),
             rev: AtomicU64::new(1),
