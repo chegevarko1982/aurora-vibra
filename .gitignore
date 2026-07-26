@@ -17,3 +17,6 @@ target/
 
 # Local release packaging output (zip/checksums built manually, not part of source)
 /dist/
+
+# Local Claude Code settings (machine-specific permissions, not project config)
+/.claude/
