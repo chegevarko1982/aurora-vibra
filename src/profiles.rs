@@ -10,6 +10,7 @@ pub struct AircraftOverrides {
     pub spoilers_threshold_pct: Option<f64>,
     pub engine_idle_n2: Option<f32>,
     pub flaps_track_slats: Option<bool>,
+    pub overspeed_lear_horn_enabled: Option<bool>,
 }
 
 const BUILT_IN_PROFILES: &[(&str, AircraftOverrides)] = &[
@@ -30,6 +31,22 @@ const BUILT_IN_PROFILES: &[(&str, AircraftOverrides)] = &[
             // ручки (реальная работа мотора) останется без эффекта — поэтому
             // для этого борта дополнительно следим за slats_pct.
             flaps_track_slats: Some(true),
+            overspeed_lear_horn_enabled: None,
+        },
+    ),
+    (
+        "LEARJET",
+        AircraftOverrides {
+            spoilers_threshold_pct: None,
+            engine_idle_n2: None,
+            flaps_track_slats: None,
+            // Экспериментально: на Flysimware Learjet 35A дополнительно
+            // используем L:XMLSND75 (клаксон "overspeed / mach trim" из
+            // sound.xml аддона) как альтернативный триггер эффекта Overspeed
+            // — см. rumble.rs. Включается ТОЛЬКО для этого борта (подстрока
+            // "LEARJET" в title), на остальных самолётах этот L-var не
+            // определён и был бы бессмысленным сигналом.
+            overspeed_lear_horn_enabled: Some(true),
         },
     ),
 ];
@@ -43,6 +60,14 @@ fn find_built_in(title: &str) -> Option<(&'static str, &'static AircraftOverride
         .map(|(name, overrides)| (*name, overrides))
 }
 
+/// true, если для этого борта (по подстроке в title) есть встроенный профиль
+/// с кастомной логикой эффектов (MADDOG, LEARJET, ...). Используется в UI,
+/// чтобы визуально отметить название самолёта, для которого что-то отличается
+/// от общих дефолтов.
+pub fn has_built_in_profile(title: &str) -> bool {
+    find_built_in(title).is_some()
+}
+
 fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
     if let Some(v) = overrides.spoilers_threshold_pct {
         cfg.spoilers_threshold_pct = v;
@@ -52,6 +77,9 @@ fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
     }
     if let Some(v) = overrides.flaps_track_slats {
         cfg.flaps_track_slats = v;
+    }
+    if let Some(v) = overrides.overspeed_lear_horn_enabled {
+        cfg.overspeed_lear_horn_enabled = v;
     }
 }
 
@@ -66,7 +94,7 @@ fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
 pub struct ProfileState {
     // Значения полей ДО применения текущего оверрайда — восстанавливаются,
     // когда борт больше не подпадает ни под один встроенный профиль.
-    base: Option<(f64, f32, bool)>,
+    base: Option<(f64, f32, bool, bool)>,
 }
 
 impl ProfileState {
@@ -84,6 +112,7 @@ impl ProfileState {
                             cfg.spoilers_threshold_pct,
                             cfg.engine_idle_n2,
                             cfg.flaps_track_slats,
+                            cfg.overspeed_lear_horn_enabled,
                         ));
                     }
                     apply(cfg, overrides);
@@ -94,13 +123,18 @@ impl ProfileState {
                 ));
             }
             None => {
-                if let Some((spoilers_threshold_pct, engine_idle_n2, flaps_track_slats)) =
-                    self.base.take()
+                if let Some((
+                    spoilers_threshold_pct,
+                    engine_idle_n2,
+                    flaps_track_slats,
+                    overspeed_lear_horn_enabled,
+                )) = self.base.take()
                 {
                     config.with_mut(|cfg| {
                         cfg.spoilers_threshold_pct = spoilers_threshold_pct;
                         cfg.engine_idle_n2 = engine_idle_n2;
                         cfg.flaps_track_slats = flaps_track_slats;
+                        cfg.overspeed_lear_horn_enabled = overspeed_lear_horn_enabled;
                     });
                     logs.push("Aircraft profile: left known aircraft, restored base config".to_string());
                 }

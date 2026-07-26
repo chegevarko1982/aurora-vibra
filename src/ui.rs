@@ -127,24 +127,19 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn effect_row(
-        ui: &mut egui::Ui,
-        name: &str,
-        val: &mut f32,
-        enabled: &mut bool,
-        range: std::ops::RangeInclusive<f32>,
-        active: bool,
-        on_change: &mut bool,
-    ) {
-        Self::effect_row_hinted(ui, name, val, enabled, range, active, on_change, None);
-    }
+    /// Строка эффекта, где сила/амплитуда вибрации отображается и настраивается
+    /// пользователем всегда в диапазоне 0..100%, независимо от технического
+    /// предела эффекта в движке (255, 50, 55, 200...).
+    /// `native_max` — во что превращается 100% при передаче в RumbleConfig;
+    /// хранимое значение (`val`) остаётся в исходных технических единицах —
+    /// rumble.rs ничего не знает о процентах.
 
-    fn effect_row_hinted(
+    fn effect_row_percent_hinted(
         ui: &mut egui::Ui,
         name: &str,
         val: &mut f32,
+        native_max: f32,
         enabled: &mut bool,
-        range: std::ops::RangeInclusive<f32>,
         active: bool,
         on_change: &mut bool,
         hint: Option<&str>,
@@ -154,25 +149,35 @@ impl UiState {
             if cb.changed() {
                 *on_change = true;
             }
-            
+
             let name_label = ui.label(RichText::new(name).strong());
             if let Some(h) = hint {
                 name_label.on_hover_text(h);
             }
-            
+
             ui.add_enabled_ui(*enabled, |ui| {
-                let slider = egui::Slider::new(val, range)
+                // Процент всегда пересчитывается заново из исходного (технического)
+                // значения — никакого накопления погрешности округления между кадрами.
+                let mut pct = if native_max > 0.0 {
+                    (*val / native_max * 100.0).clamp(0.0, 100.0)
+                } else {
+                    0.0
+                };
+                let slider = egui::Slider::new(&mut pct, 0.0..=100.0)
                     .trailing_fill(true)
-                    .show_value(true);
+                    .show_value(true)
+                    .suffix("%")
+                    .fixed_decimals(0);
                 let resp = ui.add(slider);
                 if let Some(h) = hint {
                     resp.clone().on_hover_text(h);
                 }
                 if resp.changed() {
+                    *val = (pct / 100.0) * native_max;
                     *on_change = true;
                 }
             });
-            
+
             let (color, filled) = if active && *enabled {
                 (Color32::WHITE, true)
             } else {
@@ -183,7 +188,8 @@ impl UiState {
     }
 
     /// Строка эффекта Overspeed: порог больше не задаётся вручную ползунком,
-    /// а приходит динамически из SimConnect (DESIGN SPEED VC) для текущего
+    /// а приходит динамически из SimConnect (AIRSPEED BARBER POLE — красная
+    /// черта Vmo/Mmo, сим сам двигает её вниз при наборе высоты) для текущего
     /// загруженного самолёта. `threshold_kn` — None, если SimConnect ещё не
     /// отдал значение (например, самолёт не загружен) — в этом случае
     /// показываем "Limit: N/A" и эффект не может сработать.
@@ -193,6 +199,8 @@ impl UiState {
         threshold_kn: Option<f64>,
         active: bool,
         on_change: &mut bool,
+        override_enabled: &mut bool,
+        override_kn: &mut f64,
     ) {
         ui.horizontal(|ui| {
             let cb = ui.checkbox(enabled, "");
@@ -201,6 +209,26 @@ impl UiState {
             }
 
             ui.label(RichText::new("Overspeed Effect").strong());
+
+            let override_hint = "Задать порог Overspeed вручную вместо AIRSPEED BARBER POLE из SimConnect — полезно, если аддон не синхронизирует эту переменную с реальным прибором на панели";
+            let override_cb = ui.checkbox(override_enabled, "Override").on_hover_text(override_hint);
+            if override_cb.changed() {
+                *on_change = true;
+            }
+            ui.add_enabled_ui(*override_enabled, |ui| {
+                let mut manual_kn = *override_kn as f32;
+                let resp = ui.add(
+                    egui::DragValue::new(&mut manual_kn)
+                        .speed(1.0)
+                        .clamp_range(50.0..=700.0)
+                        .suffix(" kt"),
+                );
+                resp.clone().on_hover_text(override_hint);
+                if resp.changed() {
+                    *override_kn = manual_kn as f64;
+                    *on_change = true;
+                }
+            });
 
             let limit_text = match threshold_kn {
                 Some(kn) => format!("Limit: {:.0} kts", kn),
@@ -228,7 +256,7 @@ impl UiState {
 
     /// Компактная строка с двумя чекбоксами маршрутизации эффекта на
     /// устройства: "J" (Combat Joystick R) и "T" (URSA MINOR Throttle).
-    /// Рисуется сразу под соответствующим effect_row/effect_row_hinted.
+    /// Рисуется сразу под соответствующей строкой эффекта (effect_row_percent/_hinted).
     fn device_target_row(ui: &mut egui::Ui, target: &mut EffectDeviceTarget, on_change: &mut bool) {
         ui.horizontal(|ui| {
             ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
@@ -258,21 +286,27 @@ impl UiState {
         range: std::ops::RangeInclusive<f64>,
         active: bool,
         on_change: &mut bool,
+        hint: Option<&str>,
     ) {
         ui.horizontal(|ui| {
             let cb = ui.checkbox(enabled, "");
             if cb.changed() {
                 *on_change = true;
             }
-            
-            ui.label(RichText::new(name).strong());
-            
+
+            let name_label = ui.label(RichText::new(name).strong());
+            if let Some(h) = hint {
+                name_label.on_hover_text(h);
+            }
+
             ui.add_enabled_ui(*enabled, |ui| {
                 let mut tmp = *val as f32;
                 let r = (*range.start() as f32)..=(*range.end() as f32);
-                if ui
-                    .add(egui::Slider::new(&mut tmp, r).trailing_fill(true).show_value(true))
-                    .changed()
+                let resp = ui.add(egui::Slider::new(&mut tmp, r).trailing_fill(true).show_value(true));
+                if let Some(h) = hint {
+                    resp.clone().on_hover_text(h);
+                }
+                if resp.changed()
                 {
                     *val = tmp as f64;
                     *on_change = true;
@@ -315,7 +349,14 @@ impl eframe::App for UiState {
 
                 let ac = self.aircraft_title.lock().clone();
                 ui.separator();
-                ui.label(RichText::new(format_aircraft_label(&ac)).italics());
+                // Голубой цвет = для этого борта есть встроенный профиль с
+                // кастомной логикой эффектов (см. src/profiles.rs, MADDOG/LEARJET/...).
+                let ac_color = if crate::profiles::has_built_in_profile(&ac) {
+                    Color32::from_rgb(70, 160, 255)
+                } else {
+                    Color32::WHITE
+                };
+                ui.label(RichText::new(format_aircraft_label(&ac)).italics().color(ac_color));
 
                 #[cfg(debug_assertions)]
                 {
@@ -366,19 +407,26 @@ impl eframe::App for UiState {
                         let taxi_start_crossed = self.effects.taxi_start_crossed.load(Ordering::Relaxed);
                         let taxi_end_crossed = self.effects.taxi_end_crossed.load(Ordering::Relaxed);
 
-                        // Динамический порог Overspeed (DESIGN SPEED VC), полученный
-                        // от SimConnect для текущего самолёта. None, если ещё не
-                        // подключены/самолёт не загружен.
-                        let overspeed_threshold_kn = self
-                            .last_vars
-                            .lock()
-                            .as_ref()
-                            .map(|fv| fv.design_speed_vc_kn)
-                            .filter(|kn| *kn > 0.0);
+                        // Динамический порог Overspeed (AIRSPEED BARBER POLE),
+                        // полученный от SimConnect для текущего самолёта — либо,
+                        // если включён Override, значение, заданное вручную.
+                        // None, если порог не определён (сим не подключён/выключен override без значения).
+                        let overspeed_cfg_snapshot = self.config.get();
+                        let overspeed_threshold_kn = if overspeed_cfg_snapshot.overspeed_override_enabled {
+                            Some(overspeed_cfg_snapshot.overspeed_manual_kn).filter(|kn| *kn > 0.0)
+                        } else {
+                            self.last_vars
+                                .lock()
+                                .as_ref()
+                                .map(|fv| fv.overspeed_barber_pole_kn)
+                                .filter(|kn| *kn > 0.0)
+                        };
 
                         self.config.with_mut(|cfg| {
                              // Overspeed
                              let mut overspeed_enabled = cfg.overspeed_enabled;
+                             let mut overspeed_override = cfg.overspeed_override_enabled;
+                             let mut overspeed_manual_kn = cfg.overspeed_manual_kn;
 
                              UiState::overspeed_row(
                                  ui,
@@ -386,23 +434,53 @@ impl eframe::App for UiState {
                                  overspeed_threshold_kn,
                                  self.effects.overspeed_active.load(Ordering::Relaxed),
                                  &mut _changed,
+                                 &mut overspeed_override,
+                                 &mut overspeed_manual_kn,
                              );
                              cfg.overspeed_enabled = overspeed_enabled;
+                             cfg.overspeed_override_enabled = overspeed_override;
+                             cfg.overspeed_manual_kn = overspeed_manual_kn;
                              UiState::device_target_row(ui, &mut cfg.device_targets.overspeed, &mut _changed);
+
+                             // Overspeed intensity slider - отображается как 0..100%, технический предел 255
+                             ui.horizontal(|ui| {
+                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+                                 let intensity_hint = "Сила вибрации при превышении красной черты (Vmo/Mmo). Минимум 10% сразу на 1 узле превышения, дальше растёт вместе с превышением — 100% при +120 узлов";
+                                 let lbl = ui.label(RichText::new("Intensity:").strong());
+                                 lbl.on_hover_text(intensity_hint);
+                                 let mut pct = (cfg.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0);
+                                 let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
+                                     .trailing_fill(true)
+                                     .show_value(true)
+                                     .suffix("%")
+                                     .fixed_decimals(0));
+                                 resp.clone().on_hover_text(intensity_hint);
+                                 if resp.changed() {
+                                     cfg.overspeed_intensity = pct / 100.0 * 255.0;
+                                     _changed = true;
+                                 }
+
+                                 let limit_text = match overspeed_threshold_kn {
+                                     Some(kn) => format!("Limit: {:.0} kts", kn),
+                                     None => "Limit: N/A".to_string(),
+                                 };
+                                 ui.label(RichText::new(limit_text).weak())
+                                     .on_hover_text("Текущая красная черта (AIRSPEED BARBER POLE / Vmo·Mmo) для этого борта на этой высоте — сим двигает её сам");
+                             });
 
                             ui.add_space(8.0);
 
                             // Ground Roll
                             let mut ground_enabled = cfg.ground_enabled;
-                            UiState::effect_row_hinted(
+                            UiState::effect_row_percent_hinted(
                                 ui,
                                 "Ground Roll",
                                 &mut cfg.ground_roll,
+                                50.0,
                                 &mut ground_enabled,
-                                0.0..=50.0,
                                 ground_active || ground_thump_active,
                                 &mut _changed,
-                                Some("Факт. сила на выходе: 0–50 (мягкий фон, ниже удара сжатия стоек)"),
+                                Some("Мягкий фоновый эффект (ниже удара сжатия стоек при касании)"),
                             );
                             cfg.ground_enabled = ground_enabled;
                             UiState::device_target_row(ui, &mut cfg.device_targets.ground_roll, &mut _changed);
@@ -427,6 +505,7 @@ impl eframe::App for UiState {
                                     0.0..=20.0,
                                     taxi_start_crossed,
                                     &mut _changed,
+                                    Some("Скорость, с которой начинает работать эффект стыков плит ВПП (Ground Roll thump)"),
                                 );
                                 cfg.taxi_start_enabled = start_enabled;
 
@@ -442,6 +521,7 @@ impl eframe::App for UiState {
                                     1.0..=250.0, // Изменили верхний порог слайдера до 250
                                     taxi_end_crossed,
                                     &mut _changed,
+                                    Some("Скорость полного эффекта: удары учащаются от Start до End, дальше частота не растёт"),
                                 );
                                 cfg.taxi_end_enabled = end_enabled;
 
@@ -482,59 +562,80 @@ impl eframe::App for UiState {
 
                             // Flaps effect
                             let mut flaps_enabled = cfg.flaps_enabled;
-                            UiState::effect_row(
+                            UiState::effect_row_percent_hinted(
                                 ui,
                                 "Flaps (bump)",
                                 &mut cfg.flaps_peak,
+                                255.0,
                                 &mut flaps_enabled,
-                                0.0..=255.0,
                                 self.effects.flaps_bump_active.load(Ordering::Relaxed),
                                 &mut _changed,
+                                Some("Вибрация моторчика закрылков/предкрылков во время их движения (следит за положением flaps/slats, не за ручкой)"),
                             );
                             cfg.flaps_enabled = flaps_enabled;
                             UiState::device_target_row(ui, &mut cfg.device_targets.flaps, &mut _changed);
 
                             // Gear effect
                             let mut gear_enabled = cfg.gear_enabled;
-                            UiState::effect_row(
+                            UiState::effect_row_percent_hinted(
                                 ui,
                                 "Landing Gear (bump)",
                                 &mut cfg.gear_peak,
+                                255.0,
                                 &mut gear_enabled,
-                                0.0..=255.0,
                                 self.effects.gear_bump_active.load(Ordering::Relaxed),
                                 &mut _changed,
+                                Some("Толчок при перемещении рычага шасси (вверх/вниз) — не путать с ударом при касании земли (Gear Strut Compression)"),
                             );
                             cfg.gear_enabled = gear_enabled;
                             UiState::device_target_row(ui, &mut cfg.device_targets.gear_bump, &mut _changed);
 
                             // Stall effect
                             let mut stall_enabled = cfg.stall_enabled;
-                            UiState::effect_row(
+                            UiState::effect_row_percent_hinted(
                                 ui,
                                 "Stall ceiling",
                                 &mut cfg.stall_ceiling,
+                                255.0,
                                 &mut stall_enabled,
-                                0.0..=255.0,
                                 self.effects.stall_active.load(Ordering::Relaxed),
                                 &mut _changed,
+                                Some("Минимальная сила вибрации во время сваливания — итог не опускается ниже этого значения (но может быть выше, если накладываются другие эффекты)"),
                             );
                             cfg.stall_enabled = stall_enabled;
                             UiState::device_target_row(ui, &mut cfg.device_targets.stall, &mut _changed);
 
                              // Spoilers effect
                              let mut spoilers_enabled = cfg.spoilers_enabled;
-                             UiState::effect_row(
+                             UiState::effect_row_percent_hinted(
                                  ui,
                                  "Spoilers Airflow",
                                  &mut cfg.spoilers_intensity,
+                                 250.0,
                                  &mut spoilers_enabled,
-                                 0.0..=250.0,
                                  self.effects.spoilers_active.load(Ordering::Relaxed),
                                  &mut _changed,
+                                 Some("Сила вибрации при симметрично выпущенных спойлерах/интерцепторах — растёт с глубиной выпуска и приборной скоростью"),
                              );
                              cfg.spoilers_enabled = spoilers_enabled;
                              UiState::device_target_row(ui, &mut cfg.device_targets.spoilers, &mut _changed);
+
+                             // Spoilers threshold slider - диапазон 0..100%
+                             ui.horizontal(|ui| {
+                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+                                 let threshold_hint = "Минимальный симметричный выпуск спойлеров (%), после которого включается эффект";
+                                 let lbl = ui.label(RichText::new("Threshold (%):").strong());
+                                 lbl.on_hover_text(threshold_hint);
+                                 let mut threshold = cfg.spoilers_threshold_pct as f32;
+                                 let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=100.0)
+                                     .trailing_fill(true)
+                                     .show_value(true));
+                                 resp.clone().on_hover_text(threshold_hint);
+                                 if resp.changed() {
+                                     cfg.spoilers_threshold_pct = threshold as f64;
+                                     _changed = true;
+                                 }
+                             });
 
                              ui.add_space(8.0);
 
@@ -551,12 +652,15 @@ impl eframe::App for UiState {
                                  // включения эффекта, естественным потоком строки (без
                                  // выравнивания по правому краю).
                                  ui.add_space(8.0);
-                                 ui.label(RichText::new("N2 Idle%:").strong());
+                                 let n2_hint = "Обороты N2 (%), при которых двигатель считается вышедшим на холостые — задаёт форму кривой разгона (не громкость). У некоторых бортов подменяется автоматически профилем самолёта";
+                                 let n2_label = ui.label(RichText::new("N2 Idle%:").strong());
+                                 n2_label.on_hover_text(n2_hint);
                                  let n2_resp = ui.add(
                                      egui::DragValue::new(&mut cfg.engine_idle_n2)
                                          .speed(1.0)
                                          .clamp_range(10.0..=100.0),
                                  );
+                                 n2_resp.clone().on_hover_text(n2_hint);
                                  if n2_resp.changed() {
                                      _changed = true;
                                  }
@@ -567,12 +671,16 @@ impl eframe::App for UiState {
                                  name_label.on_hover_text(engine_start_hint);
 
                                  ui.add_enabled_ui(engine_start_enabled, |ui| {
-                                     let slider = egui::Slider::new(&mut cfg.engine_start_strength, 0.0..=255.0)
+                                     let mut pct = (cfg.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0);
+                                     let slider = egui::Slider::new(&mut pct, 0.0..=100.0)
                                          .trailing_fill(true)
-                                         .show_value(true);
+                                         .show_value(true)
+                                         .suffix("%")
+                                         .fixed_decimals(0);
                                      let resp = ui.add(slider);
                                      resp.clone().on_hover_text(engine_start_hint);
                                      if resp.changed() {
+                                         cfg.engine_start_strength = pct / 100.0 * 255.0;
                                          _changed = true;
                                      }
                                  });
@@ -663,15 +771,15 @@ impl eframe::App for UiState {
                             cfg.gear_comp_enabled = gear_comp_enabled;
 
                             ui.add_enabled_ui(gear_comp_enabled, |ui| {
-                                let headroom_hint = "Слайдер: запас 0–55 над полом 200. Факт. сила на выходе: 200–255";
+                                let headroom_hint = "0% = фиксированная сила удара при любой посадке. 100% = чем жёстче посадка, тем сильнее удар";
                                 // Nose
                                 let mut nose_enabled = cfg.gear_comp_nose_enabled;
-                                UiState::effect_row_hinted(
+                                UiState::effect_row_percent_hinted(
                                     ui,
                                     "Nose Peak",
                                     &mut cfg.gear_comp_nose_peak,
+                                    55.0,
                                     &mut nose_enabled,
-                                    0.0..=55.0,
                                     self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
                                     &mut _changed,
                                     Some(headroom_hint),
@@ -681,12 +789,12 @@ impl eframe::App for UiState {
 
                                 // Left
                                 let mut left_enabled = cfg.gear_comp_left_enabled;
-                                UiState::effect_row_hinted(
+                                UiState::effect_row_percent_hinted(
                                     ui,
                                     "Left Peak",
                                     &mut cfg.gear_comp_left_peak,
+                                    55.0,
                                     &mut left_enabled,
-                                    0.0..=55.0,
                                     self.effects.gear_comp_left_active.load(Ordering::Relaxed),
                                     &mut _changed,
                                     Some(headroom_hint),
@@ -696,12 +804,12 @@ impl eframe::App for UiState {
 
                                 // Right
                                 let mut right_enabled = cfg.gear_comp_right_enabled;
-                                UiState::effect_row_hinted(
+                                UiState::effect_row_percent_hinted(
                                     ui,
                                     "Right Peak",
                                     &mut cfg.gear_comp_right_peak,
+                                    55.0,
                                     &mut right_enabled,
-                                    0.0..=55.0,
                                     self.effects.gear_comp_right_active.load(Ordering::Relaxed),
                                     &mut _changed,
                                     Some(headroom_hint),
@@ -755,15 +863,38 @@ impl eframe::App for UiState {
                             cfg.bank_enabled = bank_enabled;
                             UiState::device_target_row(ui, &mut cfg.device_targets.bank, &mut _changed);
 
+                            // Bank intensity slider - отображается как 0..100%, технический предел 200
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
+                                let intensity_hint = "Сила вибрации при превышении порога крена (Threshold ниже). Импульсы учащаются, чем больше угол превышает порог";
+                                let lbl = ui.label(RichText::new("Intensity:").strong());
+                                lbl.on_hover_text(intensity_hint);
+                                let mut pct = (cfg.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0);
+                                let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
+                                    .trailing_fill(true)
+                                    .show_value(true)
+                                    .suffix("%")
+                                    .fixed_decimals(0));
+                                resp.clone().on_hover_text(intensity_hint);
+                                if resp.changed()
+                                {
+                                    cfg.bank_intensity = pct / 100.0 * 200.0;
+                                    _changed = true;
+                                }
+                            });
+
                             // Bank threshold slider - диапазон 0..90°
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                ui.label(RichText::new("Threshold (°):").strong());
+                                let threshold_hint = "Угол крена (°), после которого включается эффект Bank/Turb";
+                                let lbl = ui.label(RichText::new("Threshold (°):").strong());
+                                lbl.on_hover_text(threshold_hint);
                                 let mut threshold = cfg.bank_threshold_deg;
-                                if ui.add(egui::Slider::new(&mut threshold, 0.0..=90.0)
+                                let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=90.0)
                                     .trailing_fill(true)
-                                    .show_value(true))
-                                    .changed() 
+                                    .show_value(true));
+                                resp.clone().on_hover_text(threshold_hint);
+                                if resp.changed()
                                 {
                                     cfg.bank_threshold_deg = threshold;
                                     _changed = true;
@@ -813,6 +944,22 @@ ui.columns(2, |columns| {
                 Some(v) => {
                     ui.label("Airspeed (kt):");
                     ui.label(format!("{:.1}", v.airspeed_indicated));
+                    ui.end_row();
+
+                    ui.label("Barber Pole (kt):");
+                    if v.overspeed_barber_pole_kn > 0.0 {
+                        ui.label(format!("{:.1}", v.overspeed_barber_pole_kn));
+                    } else {
+                        ui.label("N/A");
+                    }
+                    ui.end_row();
+
+                    ui.label("Overspeed Warning:");
+                    ui.label(v.overspeed_warning.to_string());
+                    ui.end_row();
+
+                    ui.label("Lear Horn (XMLSND75):");
+                    ui.label(v.overspeed_lear_horn.to_string());
                     ui.end_row();
 
                     ui.label("GS (kt):");

@@ -400,10 +400,11 @@ pub fn sim_worker(
                 ("PROP RPM:2", "Rpm"),
                 ("PROP RPM:3", "Rpm"),
                 ("PROP RPM:4", "Rpm"),
-                // DESIGN SPEED VC — динамический порог срабатывания эффекта
-                // Overspeed (Vmo/Vc самолёта), заменяет ручной слайдер в UI.
+                // AIRSPEED BARBER POLE — динамическая "красная черта" (Vmo/Mmo,
+                // сим сам двигает её вниз при наборе высоты), порог срабатывания
+                // эффекта Overspeed, заменяет ручной слайдер в UI.
                 // Индекс 38 в буфере elem[] ниже.
-                ("DESIGN SPEED VC", "Knots"),
+                ("AIRSPEED BARBER POLE", "Knots"),
                 // Предкрылки (Slats) — пока только для отображения в UI
                 // ("Live Aircraft Data"), в логику эффектов не задействованы.
                 // Индексы 39/40 в буфере elem[] ниже.
@@ -432,6 +433,19 @@ pub fn sim_worker(
                 ("L:MD11_EXT_R_SPOILER_3", "Number"),
                 ("L:MD11_EXT_R_SPOILER_4", "Number"),
                 ("L:MD11_EXT_R_SPOILER_5", "Number"),
+                // OVERSPEED WARNING — булев флаг сима "клацера" (overspeed
+                // clacker), для сравнения с нашим порогом AIRSPEED BARBER POLE
+                // в телеметрии (пока только для отображения в UI). Индекс 53.
+                ("OVERSPEED WARNING", "Bool"),
+                // Learjet 35A (Flysimware, FSW_L35A): L:XMLSND75 — тот же
+                // L-var, к которому в sound.xml аддона привязан звук
+                // "overspeed / mach trim" (аварийный клаксон превышения
+                // Vmo/Mmo). Экспериментальный альтернативный триггер эффекта
+                // Overspeed для этого борта (см. profiles.rs/rumble.rs) — на
+                // остальных самолётах L-var не определён, SimConnect отдаёт
+                // 0.0 (самонейтрализуется, тот же паттерн, что у
+                // L:MD11_EXT_*_SPOILER_* выше). Индекс 54.
+                ("L:XMLSND75", "Bool"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -717,7 +731,7 @@ pub fn sim_worker(
                                 // наконец сырая телеметрия поршневых двигателей:
                                 // GENERAL ENG RPM:1/2/3/4 (30/31/32/33),
                                 // PROP RPM:1/2/3/4 (34/35/36/37) и, наконец,
-                                // DESIGN SPEED VC (38) — динамический порог
+                                // AIRSPEED BARBER POLE (38) — динамический порог
                                 // срабатывания эффекта Overspeed. LEADING EDGE
                                 // FLAPS LEFT/RIGHT PERCENT (39/40) — предкрылки
                                 // (Slats), пока только для UI. SPOILERS LEFT/RIGHT
@@ -725,11 +739,22 @@ pub fn sim_worker(
                                 // по крыльям для фильтра симметрии (см. parse.rs).
                                 // L:MD11_EXT_L/R_SPOILER_1..5 (43-52) — TFDI MD-11,
                                 // дополнительная проверка симметрии по секциям.
-                                let mut elem = [0f64; 53];
+                                // OVERSPEED WARNING (53) — булев флаг "клацера" сима,
+                                // для сравнения в телеметрии с нашим порогом.
+                                // L:XMLSND75 (54) — клаксон "overspeed / mach trim"
+                                // на Learjet 35A (Flysimware), см. profiles.rs.
+                                //
+                                // ВНИМАНИЕ: длина elem[] и clamp count.min(..) ниже
+                                // должны покрывать ВСЕ зарегистрированные индексы
+                                // (0..=54, т.е. 55 элементов) — раньше здесь стоял
+                                // count.min(53), из-за чего индекс 53 (OVERSPEED
+                                // WARNING) никогда не копировался из живых данных
+                                // SimConnect и оставался равен 0.0/false.
+                                let mut elem = [0f64; 55];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(53),
+                                        count.min(55),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -737,7 +762,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(53),
+                                        count.min(55),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

@@ -161,11 +161,17 @@ impl RumbleEngine {
         let at_or_above_end = cfg.ground_enabled && cfg.taxi_end_enabled && fv.on_ground && gs >= end;
         let at_or_above_start = cfg.taxi_start_enabled && fv.on_ground && gs >= start;
 
-        // Порог Overspeed теперь приходит динамически из SimConnect
-        // (DESIGN SPEED VC) для текущего самолёта, а не из ручного слайдера.
-        // 0.0 означает "SimConnect ещё не отдал значение" — в этом случае
-        // эффект не должен срабатывать (иначе сработает от IAS >= 0).
-        let overspeed_threshold_kn = fv.design_speed_vc_kn;
+        // Порог Overspeed приходит динамически из SimConnect (AIRSPEED BARBER
+        // POLE — Vmo/Mmo, сим сам двигает её вниз при наборе высоты). Некоторые
+        // сложные аддоны (напр. TFDI MADDOG) не синхронизируют эту переменную
+        // с реальным прибором в кабине — для них есть ручной override.
+        // 0.0 означает "порог неизвестен" — в этом случае эффект не должен
+        // срабатывать (иначе сработает от IAS >= 0).
+        let overspeed_threshold_kn = if cfg.overspeed_override_enabled {
+            cfg.overspeed_manual_kn
+        } else {
+            fv.overspeed_barber_pole_kn
+        };
         let overspeed_threshold_known = overspeed_threshold_kn > 0.0;
         let bank_threshold_deg = cfg.bank_threshold_deg as f64;
 
@@ -365,8 +371,10 @@ impl RumbleEngine {
 
         let flaps_is_moving = fv.sim_time_s < s.flaps_active_until;
 
-        // Целевая рабочая мощность (0.8 — это примерно 200 из 255)
-        let max_amplitude = cfg.flaps_duty.clamp(0.01, 0.8);
+        // Целевая рабочая мощность берётся из слайдера "Flaps (bump)"
+        // (0..255, как и остальные *_peak-слайдеры), переведённого в duty
+        // cycle 0.01..0.8 (0.8 — это примерно 200 из 255).
+        let max_amplitude = (cfg.flaps_peak as f64 / 255.0).clamp(0.01, 0.8);
 
         s.current_flaps_amplitude = if flaps_is_moving { max_amplitude } else { 0.0 };
 
@@ -565,12 +573,34 @@ impl RumbleEngine {
         //     air_term += ratio * BASE_RUMBLE_MAGNITUDE;
         // }
 
-        if cfg.overspeed_enabled && overspeed_threshold_known {
-            if !fv.on_ground && fv.airspeed_indicated >= overspeed_threshold_kn {
-                let overspeed = fv.airspeed_indicated - overspeed_threshold_kn;
-                let ratio = (overspeed / 120.0).clamp(0.0, 1.0);
+        if cfg.overspeed_enabled {
+            let ias_overspeed = if overspeed_threshold_known {
+                (fv.airspeed_indicated - overspeed_threshold_kn).max(0.0)
+            } else {
+                0.0
+            };
+            // Learjet 35A (Flysimware, экспериментально): дополнительный
+            // триггер по L:XMLSND75 — клаксону "overspeed / mach trim" из
+            // sound.xml аддона (см. profiles.rs). Включён только на этом
+            // борту (overspeed_lear_horn_enabled ставится профилем по title);
+            // на прочих самолётах fv.overspeed_lear_horn всегда false, и это
+            // условие не меняет прежнее поведение.
+            let horn_triggered = cfg.overspeed_lear_horn_enabled && fv.overspeed_lear_horn;
+            if !fv.on_ground && (ias_overspeed > 0.0 || horn_triggered) {
+                // Умная вибрация: сразу ощутимая (не меньше 10% силы) уже на 1
+                // узле превышения красной черты (Vmo/Mmo), дальше нарастает вместе
+                // с величиной превышения — чем яростнее разгон сверх лимита, тем
+                // сильнее и чаще бьёт мотор. 120 узлов превышения = полная сила.
+                // Если сработал только клаксон (IAS-порог неизвестен/не превышен),
+                // магнитуды превышения нет — трактуем как полную силу.
+                let growth = if ias_overspeed > 0.0 {
+                    (ias_overspeed / 120.0).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let ratio = 0.1 + 0.9 * growth;
                 let intensity = ratio * (cfg.overspeed_intensity as f64);
-                let oscillation = (2.0 * std::f64::consts::PI * (5.0 + ratio * 15.0) * fv.sim_time_s).sin() * 0.5 + 0.5;
+                let oscillation = (2.0 * std::f64::consts::PI * (5.0 + growth * 15.0) * fv.sim_time_s).sin() * 0.5 + 0.5;
                 let term = intensity * (0.7 + 0.3 * oscillation);
                 if dt_.overspeed.enable_joystick { air_term_j += term; }
                 if dt_.overspeed.enable_throttle { air_term_t += term; }

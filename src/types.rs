@@ -71,14 +71,26 @@ pub struct FlightVars {
     pub prop2_rpm: f64,
     pub prop3_rpm: f64,
     pub prop4_rpm: f64,
-    // DESIGN SPEED VC — динамический порог Overspeed, приходящий из SimConnect
-    // для текущего загруженного самолёта (вместо ручного слайдера в UI).
-    // 0.0 означает "ещё не получено от SimConnect" (см. UI: "Limit: N/A").
-    pub design_speed_vc_kn: f64,
+    // AIRSPEED BARBER POLE — динамическая "красная черта" (Vmo/Mmo), которую
+    // сим сам двигает вниз при наборе высоты. Порог Overspeed, приходящий из
+    // SimConnect для текущего загруженного самолёта (вместо ручного слайдера
+    // в UI). 0.0 означает "ещё не получено от SimConnect" (см. UI: "Limit: N/A").
+    pub overspeed_barber_pole_kn: f64,
     // Предкрылки (Slats): среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
     // Пока только для отображения в UI ("Live Aircraft Data"), в логику
     // эффектов не задействовано.
     pub slats_pct: f64,
+    // OVERSPEED WARNING — булев флаг "клацера" сима (сработавшего предупреждения
+    // о превышении скорости). Пока только для отображения в UI, чтобы сравнить
+    // с нашим порогом overspeed_barber_pole_kn — на некоторых аддонах (см. Override
+    // в UI) эти значения могут не совпадать.
+    pub overspeed_warning: bool,
+    // Learjet 35A (Flysimware, FSW_L35A): L:XMLSND75 — L-var, к которому в
+    // sound.xml аддона привязан звук "overspeed / mach trim" (аварийный
+    // клаксон превышения Vmo/Mmo). На прочих самолётах этот L-var не
+    // определён, SimConnect отдаёт 0.0 — поле остаётся false (см.
+    // src/profiles.rs про включение самого эффекта только на этом борту).
+    pub overspeed_lear_horn: bool,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
@@ -124,11 +136,25 @@ pub struct EffectDeviceTargets {
 pub struct RumbleConfig {
     // Overspeed settings
     // Порог скорости (overspeed_threshold_kn) больше не хранится в конфиге —
-    // он приходит динамически из SimConnect (DESIGN SPEED VC) для текущего
-    // самолёта, см. FlightVars::design_speed_vc_kn.
+    // он приходит динамически из SimConnect (AIRSPEED BARBER POLE) для
+    // текущего самолёта, см. FlightVars::overspeed_barber_pole_kn. Исключение —
+    // overspeed_override_enabled: некоторые сложные аддоны (например TFDI
+    // MADDOG) не синхронизируют эту переменную с реальным прибором в кабине,
+    // тогда порог можно задать вручную через overspeed_manual_kn.
     pub overspeed_enabled: bool,
     pub overspeed_intensity: f32,
      pub overspeed_max_kn: f32,
+    pub overspeed_override_enabled: bool,
+    pub overspeed_manual_kn: f64,
+    // Learjet 35A (Flysimware): дополнительный триггер эффекта Overspeed от
+    // L:XMLSND75 — того же L-var, к которому в sound.xml аддона привязан
+    // звук "overspeed / mach trim" (аварийный клаксон превышения Vmo/Mmo).
+    // Экспериментально: AIRSPEED BARBER POLE может быть ненадёжен на этом
+    // борту, поэтому вместо/вместе с порогом IAS используем сам сигнал
+    // клаксона. Включается автоматически встроенным профилем самолёта
+    // (src/profiles.rs, подстрока "LEARJET" в title) — не предназначено
+    // для ручного переключения в UI.
+    pub overspeed_lear_horn_enabled: bool,
 
     // Gear Strut Compression settings
     // РЕМАРКА: слайдер *_peak в UI имеет диапазон 0..55 — это НЕ итоговая сила,
@@ -200,7 +226,6 @@ pub struct RumbleConfig {
     // который разгоняется/тормозит" — поэтому значение маленькое.
     pub flaps_bump_duration_s: f64,
     pub flaps_bump_eps_pct: f64,
-    pub flaps_duty: f64,
     pub gear_bump_duration_s: f64,
 
     pub ground_enabled: bool,
@@ -265,22 +290,25 @@ impl Default for RumbleConfig {
             overspeed_enabled: true,
             overspeed_intensity: 100.0,
             overspeed_max_kn: 350.0,
+            overspeed_override_enabled: false,
+            overspeed_manual_kn: 350.0,
+            overspeed_lear_horn_enabled: false,
 
             bank_enabled: true,
             bank_intensity: 70.0,
             bank_threshold_deg: 45.0,
 
-            ground_roll: 38.0,
-            flaps_peak: 60.0,
+            ground_roll: 7.5, // 15% от техн. предела 50
+            flaps_peak: 153.0, // ~0.6 duty cycle — прежняя фиксированная сила эффекта
             gear_peak: 110.0,
             stall_ceiling: 160.0,
             max_output: 255,
             smoothing_alpha: 0.18,
             ias_deadband_kn: 1.0,
             taxi_start_enabled: true,
-            taxi_start_kn: 3.0,
+            taxi_start_kn: 1.0,
             taxi_end_enabled: true,
-            taxi_end_kn: 10.0,
+            taxi_end_kn: 120.0,
             // ВНИМАНИЕ: thump_min_period_s ограничен полосой передачи на устройство —
             // hid/worker.rs шлёт интенсивность не чаще раза в SEND_INTERVAL (сейчас 50мс = 20 Гц).
             // Частота Найквиста этого канала = 10 Гц, поэтому min_period_s не должен
@@ -294,7 +322,6 @@ impl Default for RumbleConfig {
             thump_period_curve: 2.5, // плавнее на старте, чем чистая физика
             flaps_bump_duration_s: 0.15,
             flaps_bump_eps_pct: 2.0,
-            flaps_duty: 0.6,
             gear_bump_duration_s: 0.8,
 
             ground_enabled: true,
