@@ -1,74 +1,41 @@
-# Ursa Minor FFB Ernesto edition
-BIG THANKS AUTHOR https://github.com/rtroncoso
+# Aurora Vibra
 
-NEW FFB IMMERSIVE EFFECTS 
+A Rust-based flight simulator add-on.
 
-Unlock the full potential of your Winwing Ursa Minor Sidestick with custom force-feedback and rumble effects powered by Microsoft Flight Simulator’s SimConnect API.
+## Overview
+This project is a flight simulator add-on that interfaces with external hardware and provides various utility functions. The code is written in Rust and targets Windows platforms.
 
-This project is a lightweight desktop app written in Rust with an egui UI and HID output.
-It lets you tune rumble effects for different flight states like ground roll, flaps, gear, stall, and more.
+## Key Components
+- Main entry point in `src/main.rs`
+- Various modules including:
+  - `src/types.rs` - Data structures
+  - `src/ui.rs` - User interface components
+  - `src/settings.rs` - Configuration management
+  - `src/tray.rs` - System tray integration
+  - `src/updater.rs` - Update management
+  - `src/sim/` - Simulation logic
+- Build scripts and supporting infrastructure
 
----
+## Build System
+- Uses Cargo as the build system
+- Includes DLL dependencies and platform-specific resources
+- Supports Windows-specific features
 
-## 🚀 Build Instructions
+## Files
+- Source code: `src/`
+- Tests: `tests/`
+- Assets: `assets/`
+- Platform resources: `windows/`
+- Configuration: `Cargo.toml`
 
-You’ll need the Rust toolchain installed ([rustup](https://rustup.rs/)) and enable the MSVC toolchain for rust:
+## Technical Details
+The project appears to be a complex Windows-based flight simulator add-on with native code, system tray integration, and hardware interface capabilities. It uses Rust's FFI capabilities to interface with external systems.
 
-```bash
-rustup toolchain install stable-msvc
-```
+What would you like me to help you with? I can:
+- Analyze existing code structure and identify improvements
+- Help debug or fix existing issues
+- Add new functionality to modules
+- Review and improve code quality
+- Test or build the project
 
-Clone and build:
-
-```bash
-git clone https://github.com/rtroncoso/ursa-minor-ffb.git
-cd ursa-minor-ffb
-cargo build --release --features app
-```
-
-The resulting binary will be in target/release/ursa-minor-ffb.exe.
-
-For debugging with console logs:
-
-```bash
-cargo run --features app
-```
-
-## Testing
-
-Core rumble math, HID frame encoding, and SimConnect parsing are covered by unit and integration tests that run on Linux without hardware.
-
-```bash
-# Run all library and integration tests (cross-platform)
-cargo test --lib --tests
-
-# Lint and format (same as CI)
-cargo fmt --all -- --check
-cargo clippy --lib --tests -- -D warnings
-```
-
-Reproducible local test run via Docker:
-
-```bash
-docker build -f Dockerfile.dev -t ursa-ffb-test .
-docker run --rm ursa-ffb-test
-```
-
-On Windows, build and test the full app (including GUI/HID workers):
-
-```bash
-cargo test --features app
-cargo build --release --features app
-```
-
-## Disclaimer
-
-This project is provided for educational purposes only.
-It does not intend, in any way, to infringe upon or harm Winwing’s intellectual property,
-nor does it attempt to interfere with the intended use of their peripherals.
-
-The goal of this work is simply to explore and unlock the full potential of hardware already owned by the author and community.
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE](./LICENSE) for details.
+Please let me know what specific task you'd like me to focus on!

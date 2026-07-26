@@ -1,16 +1,16 @@
 [package]
-name = "ursa_minor_ffb"
-version = "2.1.0"
+name = "aurora_vibra"
+version = "4.0.1"
 edition = "2021"
 build = "src/build.rs"
-default-run = "ursa-minor-ffb"  # Оставляем основное приложение
+default-run = "aurora-vibra"  # Оставляем основное приложение
 
 [lib]
-name = "ursa_minor_ffb"
+name = "aurora_vibra"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ursa-minor-ffb"
+name = "aurora-vibra"
 path = "src/main.rs"
 required-features = ["app"]
 
@@ -39,6 +39,7 @@ libloading = "0.8"
 anyhow = "1.0"
 thiserror = "1.0"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 

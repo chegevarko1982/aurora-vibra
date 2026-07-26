@@ -47,7 +47,7 @@ pub fn early_self_update_hook() -> bool {
                 elevated,
             ) {
                 // Last-chance message box (no parent HWND here)
-                msgbox_raw(crate::i18n::get().strings().upd_title_update_failed, &format!("{e:#}"), true);
+                msgbox_raw("Update failed", &format!("{e:#}"), true);
             }
             return true;
         }
@@ -60,8 +60,7 @@ pub fn spawn_check(hwnd_parent: HWND, current_version: &str) {
     let current = current_version.to_string();
     thread::spawn(move || {
         if let Err(e) = check_install_and_restart(hwnd_parent, &current) {
-            let t = crate::i18n::get().strings();
-            msgbox(hwnd_parent, t.upd_title_update_check_failed, &format!("{e:#}"), true);
+            msgbox(hwnd_parent, "Update check failed", &format!("{e:#}"), true);
         }
     });
 }
@@ -72,21 +71,21 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
     let new_ver = tag.trim_start_matches('v');
     let cur_ver = current_version.trim_start_matches('v');
 
-    let lang = crate::i18n::get();
-    let t = lang.strings();
-
     if !is_newer(new_ver, cur_ver) {
         msgbox(
             hwnd,
-            t.upd_title_up_to_date,
-            &crate::i18n::upd_body_up_to_date(lang, current_version),
+            "Up to date",
+            &format!("You are running the latest version ({}).", current_version),
             false,
         );
         return Ok(());
     }
 
-    let text = crate::i18n::upd_body_update_available(lang, current_version, new_ver, &name);
-    if !confirm(hwnd, t.upd_title_update_available, &text) {
+    let text = format!(
+        "A new version is available.\n\nCurrent: {}\nLatest:  {}\n\nRelease: {}\n\nInstall now? The app will restart.",
+        current_version, new_ver, name
+    );
+    if !confirm(hwnd, "Update available", &text) {
         return Ok(());
     }
 
@@ -273,10 +272,12 @@ fn launch_helper_and_exit(
 
     let _ = cmd.spawn().context("spawn helper")?;
 
-    {
-        let t = crate::i18n::get().strings();
-        msgbox(HWND(0), t.upd_title_updating, t.upd_body_updating, false);
-    }
+    msgbox(
+        HWND(0),
+        "Updating",
+        "The application will now close to apply the update. It will relaunch automatically.",
+        false,
+    );
 
     thread::sleep(Duration::from_millis(200));
     std::process::exit(0);
@@ -326,10 +327,9 @@ fn apply_update(
             SW_SHOWNORMAL,
         );
         if (hinst.0 as isize) <= 32 {
-            let lang = crate::i18n::get();
             msgbox_raw(
-                lang.strings().upd_title_launch_failed,
-                &crate::i18n::upd_body_launch_failed(lang, &target.display().to_string()),
+                "Launch failed",
+                &format!("Could not start:\n{}", target.display()),
                 true,
             );
         }
@@ -374,8 +374,12 @@ fn relaunch_self_elevated(
             SW_SHOWNORMAL,
         );
         if (h.0 as isize) <= 32 {
-            let t = crate::i18n::get().strings();
-            msgbox_raw(t.upd_title_admin_required, t.upd_body_admin_required, true);
+            msgbox_raw(
+                "Administrator permission required",
+                "The app is installed in a protected folder (e.g., Program Files).\n\
+                    To update, click Yes on the elevation prompt, or move the app to a writable folder (e.g., Documents) and try again.",
+                true,
+            );
             bail!("User denied elevation or ShellExecuteW(runas) failed");
         }
     }

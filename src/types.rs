@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -16,25 +17,204 @@ pub struct FlightVars {
     pub stalled: bool,
     pub ground_speed_kt: f64,
     pub paused: bool,
-    pub spoilers_pct: f64, // Положение спойлеров в % (0.0 - 100.0)
+    pub spoilers_pct: f64, // min(L, R) — эффективное положение спойлеров для эффекта, см. sim/parse.rs
+    pub spoilers_left_pct: f64,  // сырое положение левой плоскости, для телеметрии/отладки
+    pub spoilers_right_pct: f64, // сырое положение правой плоскости, для телеметрии/отладки
+    // TFDI MD-11: среднее по 5 секциям L:MD11_EXT_L/R_SPOILER_1..5 — доп.
+    // проверка симметрии для этого борта (см. rumble.rs). На других самолётах
+    // эти L-vars не определены и остаются 0.0 (самонейтрализуется).
+    pub spoilers_md11_left_avg: f64,
+    pub spoilers_md11_right_avg: f64,
+    pub gear_comp_nose: f64,
+    pub gear_comp_left: f64,
+    pub gear_comp_right: f64,
+    pub trailing_edge_flaps_left_percent: f64,
+    // Телеметрия запуска двигателей (Engine Spool-up & Ignition)
+    pub eng1_n2_percent: f64,
+    pub eng1_combustion: f64,
+    pub eng2_n2_percent: f64,
+    pub eng2_combustion: f64,
+    // Двигатели 3/4 — для 4-моторных самолётов (см. RumbleConfig::four_engine_mode).
+    // На 2-моторных самолётах SimConnect обычно возвращает 0.0 для этих индексов,
+    // что корректно интерпретируется как "двигатель выключен" (deadzone).
+    pub eng3_n2_percent: f64,
+    pub eng3_combustion: f64,
+    pub eng4_n2_percent: f64,
+    pub eng4_combustion: f64,
+    // GENERAL ENG STARTER:1..4 — универсальная модель запуска (Starter + Combustion),
+    // работает одинаково на поршневых и турбинных двигателях (в отличие от N2,
+    // которое на поршневых обычно недоступно/равно 0). true = стартер крутит
+    // двигатель (турбина ещё не воспламенилась / поршневой ещё не завёлся).
+    pub eng1_starter: bool,
+    pub eng2_starter: bool,
+    pub eng3_starter: bool,
+    pub eng4_starter: bool,
+    // GENERAL ENG PCT MAX RPM — универсальная поддержка поршневых двигателей.
+    // На турбинах примерно повторяет N2; на поршневых даёт реальный % оборотов
+    // (в отличие от TURB ENG N2, которое на поршневых обычно равно 0). См.
+    // rumble.rs: effective spool value = max(n2_percent, pct_max_rpm).
+    pub eng1_pct_max_rpm: f64,
+    pub eng2_pct_max_rpm: f64,
+    pub eng3_pct_max_rpm: f64,
+    pub eng4_pct_max_rpm: f64,
+    // Поршневые двигатели (Piston Engine Telemetry) — сырые обороты для
+    // телеметрической панели в UI. GENERAL ENG RPM — обороты коленвала,
+    // PROP RPM — обороты воздушного винта (могут отличаться от RPM
+    // двигателя из-за редуктора). Порядок полей ниже соответствует порядку
+    // add_data_definition() в src/sim/worker.rs (см. рядом идущий комментарий
+    // там же с индексами elem[]).
+    pub eng1_rpm: f64,
+    pub eng2_rpm: f64,
+    pub eng3_rpm: f64,
+    pub eng4_rpm: f64,
+    pub prop1_rpm: f64,
+    pub prop2_rpm: f64,
+    pub prop3_rpm: f64,
+    pub prop4_rpm: f64,
+    // AIRSPEED BARBER POLE — динамическая "красная черта" (Vmo/Mmo), которую
+    // сим сам двигает вниз при наборе высоты. Порог Overspeed, приходящий из
+    // SimConnect для текущего загруженного самолёта (вместо ручного слайдера
+    // в UI). 0.0 означает "ещё не получено от SimConnect" (см. UI: "Limit: N/A").
+    pub overspeed_barber_pole_kn: f64,
+    // Предкрылки (Slats): среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
+    // Пока только для отображения в UI ("Live Aircraft Data"), в логику
+    // эффектов не задействовано.
+    pub slats_pct: f64,
+    // OVERSPEED WARNING — булев флаг "клацера" сима (сработавшего предупреждения
+    // о превышении скорости). Пока только для отображения в UI, чтобы сравнить
+    // с нашим порогом overspeed_barber_pole_kn — на некоторых аддонах (см. Override
+    // в UI) эти значения могут не совпадать.
+    pub overspeed_warning: bool,
+    // Learjet 35A (Flysimware, FSW_L35A): L:XMLSND75 — L-var, к которому в
+    // sound.xml аддона привязан звук "overspeed / mach trim" (аварийный
+    // клаксон превышения Vmo/Mmo). На прочих самолётах этот L-var не
+    // определён, SimConnect отдаёт 0.0 — поле остаётся false (см.
+    // src/profiles.rs про включение самого эффекта только на этом борту).
+    pub overspeed_lear_horn: bool,
+    // PMDG 737 (NG3, MSFS): L:EngineStart1b/2b_Ext — true, пока стартер крутит
+    // двигатель до воспламенения (взято из sound.xml PMDG). Подтверждено
+    // тестом в симе как надёжный сигнал — используется в rumble.rs для
+    // маркера воспламенения (момент, когда real TURB ENG N2 впервые > 0) и
+    // для чуть более раннего распознавания борта как джета; сама N2-кривая
+    // раскрутки читает реальный TURB ENG N2 напрямую (см. rumble.rs — real-world
+    // capture показал, что N2 у PMDG растёт плавно с момента включения
+    // стартера, никакой синтетической рампы не нужно). Отдельный
+    // L:EngineStart1c/2c_Ext ("маркер воспламенения") был проверен в реальном
+    // тесте и ОТКЛОНЁН — не сработал корректно, поэтому здесь не читается. На
+    // прочих самолётах L:EngineStart1b/2b_Ext не определены, читается false
+    // (самонейтрализуется).
+    pub eng1_pmdg_starter_ext: bool,
+    pub eng2_pmdg_starter_ext: bool,
+    // GENERAL ENG STARTER ACTIVE:1/2 — пока только для телеметрии (сравнение
+    // с L:EngineStart1b/2b_Ext в UI).
+    pub eng1_starter_active: bool,
+    pub eng2_starter_active: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RumbleConfig {
-    pub overspeed_enabled: bool,
-    pub overspeed_threshold_kn: f32,
-    pub overspeed_intensity: f32,
-    pub overspeed_max_kn: f32,
-    
-    pub bank_enabled: bool,
-    pub bank_intensity: f32,        
-    pub bank_threshold_deg: f32,    
-    
-    // Настройки спойлеров
-    pub spoilers_enabled: bool,
-    pub spoilers_intensity: f32,    
-    pub spoilers_threshold_pct: f64, 
+/// Привязка одного эффекта вибрации к устройствам вывода.
+/// Позволяет независимо включать/выключать отправку конкретного эффекта
+/// на Combat Joystick R и/или на WINCTRL URSA MINOR Throttle (РУД).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EffectDeviceTarget {
+    pub enable_joystick: bool, // Отправлять на Combat Joystick R
+    pub enable_throttle: bool, // Отправлять на URSA MINOR Throttle
+}
 
+impl Default for EffectDeviceTarget {
+    fn default() -> Self {
+        // По умолчанию все эффекты идут и на джойстик, и на РУД — пользователь
+        // может выключить любое из направлений вручную в UI.
+        Self {
+            enable_joystick: true,
+            enable_throttle: true,
+        }
+    }
+}
+
+/// Привязка к устройствам для каждого эффекта вибрации по отдельности.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct EffectDeviceTargets {
+    pub overspeed: EffectDeviceTarget,
+    pub ground_roll: EffectDeviceTarget, // Удар о стыки плит ВПП (Taxi/Takeoff Thump)
+    pub flaps: EffectDeviceTarget,
+    pub gear_bump: EffectDeviceTarget, // Импульс от ручки шасси (Down/Up)
+    pub stall: EffectDeviceTarget,
+    pub spoilers: EffectDeviceTarget,
+    pub bank: EffectDeviceTarget,
+    pub gear_comp_nose: EffectDeviceTarget,  // Обжатие носовой стойки (Touchdown)
+    pub gear_comp_left: EffectDeviceTarget,  // Обжатие левой стойки (Touchdown)
+    pub gear_comp_right: EffectDeviceTarget, // Обжатие правой стойки (Touchdown)
+    pub gear_transit: EffectDeviceTarget,    // Движение стоек + удар дверей на замке
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RumbleConfig {
+    // Overspeed settings
+    // Порог скорости (overspeed_threshold_kn) больше не хранится в конфиге —
+    // он приходит динамически из SimConnect (AIRSPEED BARBER POLE) для
+    // текущего самолёта, см. FlightVars::overspeed_barber_pole_kn. Исключение —
+    // overspeed_override_enabled: некоторые сложные аддоны (например TFDI
+    // MADDOG) не синхронизируют эту переменную с реальным прибором в кабине,
+    // тогда порог можно задать вручную через overspeed_manual_kn.
+    pub overspeed_enabled: bool,
+    pub overspeed_intensity: f32,
+     pub overspeed_max_kn: f32,
+    pub overspeed_override_enabled: bool,
+    pub overspeed_manual_kn: f64,
+    // Learjet 35A (Flysimware): дополнительный триггер эффекта Overspeed от
+    // L:XMLSND75 — того же L-var, к которому в sound.xml аддона привязан
+    // звук "overspeed / mach trim" (аварийный клаксон превышения Vmo/Mmo).
+    // Экспериментально: AIRSPEED BARBER POLE может быть ненадёжен на этом
+    // борту, поэтому вместо/вместе с порогом IAS используем сам сигнал
+    // клаксона. Включается автоматически встроенным профилем самолёта
+    // (src/profiles.rs, подстрока "LEARJET" в title) — не предназначено
+    // для ручного переключения в UI.
+    pub overspeed_lear_horn_enabled: bool,
+
+    // Gear Strut Compression settings
+    // РЕМАРКА: слайдер *_peak в UI имеет диапазон 0..55 — это НЕ итоговая сила,
+    // а "запас сверху" над обязательным полом 200 (см. rumble.rs). 0 → всегда
+    // строго 200 (на любой посадке). 55 → диапазон 200 (мягкая посадка) ..
+    // 255 (жёсткая). Итоговая сила эффекта физически не выходит за [200..255].
+    pub gear_comp_enabled: bool,
+    pub gear_comp_nose_enabled: bool,
+    pub gear_comp_nose_peak: f32,
+    pub gear_comp_left_enabled: bool,
+    pub gear_comp_left_peak: f32,
+    pub gear_comp_right_enabled: bool,
+    pub gear_comp_right_peak: f32,
+    pub gear_transit_enabled: bool,
+    // SPLIT-режим для удара обжатия стоек (three-point landing awareness).
+    // ВАЖНО: оба мотора РУД (throttle_left/throttle_right) физически находятся
+    // в ОДНОЙ руке (один блок), джойстик — в другой. Поэтому ЛЕВАЯ и ПРАВАЯ
+    // основные стойки (которые почти всегда касаются практически ОДНОВРЕМЕННО
+    // на посадке на два колеса) разводятся по РАЗНЫМ рукам — РУД vs джойстик
+    // — иначе они сливались бы в одно ощущение в одной ладони. Какая сторона
+    // достаётся какой руке — определяет swap_hand_layout (по умолчанию: левая
+    // стойка → РУД, правая → джойстик; при swap_hand_layout — наоборот; та же
+    // семантика, что уже используется для двигателей). Носовая стойка касается
+    // заметно ПОЗЖЕ основных, поэтому безопасно делит руку РУД со "своей"
+    // основной стойкой на свободный второй мотор — плюс у неё намеренно другая,
+    // более резкая и короткая форма импульса (см. rumble.rs), чтобы не сливаться
+    // с основной стойкой даже при редком наложении по времени. Все три маршрута
+    // игнорируют обычные чекбоксы device_targets.gear_comp_*. Когда SPLIT
+    // выключен — все три стойки маршрутизируются обычными чекбоксами
+    // device_targets.gear_comp_nose/left/right (throttle означает ОБА мотора
+    // РУД одновременно).
+    pub split_touchdown: bool,
+
+    // Bank/Turb settings
+    pub bank_enabled: bool,
+    pub bank_intensity: f32,     // Максимальная интенсивность (0-200)
+    pub bank_threshold_deg: f32, // Порог срабатывания (0-90°)
+
+    // РЕМАРКА: слайдер ground_roll в UI имеет диапазон 0..50 — это и есть
+    // итоговый потолок силы эффекта стыков плит (amplitude_curve лишь
+    // масштабирует от 0 до этого значения). Мягкий фоновый эффект, НЕ должен
+    // соперничать по ощущению с ударом сжатия стоек (200-255).
     pub ground_roll: f32,
     pub flaps_peak: f32,
     pub gear_peak: f32,
@@ -42,11 +222,26 @@ pub struct RumbleConfig {
     pub max_output: u8,
     pub smoothing_alpha: f32,
     pub ias_deadband_kn: f64,
+    pub taxi_start_enabled: bool,
     pub taxi_start_kn: f64,
+    pub taxi_end_enabled: bool,
     pub taxi_end_kn: f64,
     pub thump_min_period_s: f64,
     pub thump_max_period_s: f64,
     pub thump_duty: f64,
+    // Физическая модель удара о стыки бетонных плит (заменяет старую duty-based модель)
+    pub runway_slab_length_m: f32, // Длина одной плиты ВПП в метрах
+    pub thump_duration_ms: f32,    // Длительность одного импульса удара в мс
+    // Коэффициент кривизны нарастания частоты ударов (см. ремарку в rumble.rs):
+    // 1.0 = чистая физика (t=S/V), >1.0 = плавнее на старте, <1.0 = резче на старте
+    pub thump_period_curve: f32,
+    // Минимальное время, на которое motor-hum закрылков остаётся включённым
+    // после КАЖДОГО зафиксированного изменения flaps_pct/slats_pct (см.
+    // rumble.rs) — нужно только чтобы мгновенный скачок за один тик
+    // (например MADDOG: 0 -> 27) успел дать ощутимый щелчок, а не потерялся
+    // за один PWM-кадр. Не выведено в UI намеренно: включение/выключение
+    // эффекта должно ощущаться практически мгновенным, а не "мотором,
+    // который разгоняется/тормозит" — поэтому значение маленькое.
     pub flaps_bump_duration_s: f64,
     pub flaps_bump_eps_pct: f64,
     pub gear_bump_duration_s: f64,
@@ -55,68 +250,166 @@ pub struct RumbleConfig {
     pub flaps_enabled: bool,
     pub gear_enabled: bool,
     pub stall_enabled: bool,
+    // На некоторых бортах (см. src/profiles.rs, MADDOG) предкрылки убираются
+    // отдельным, более поздним движением ручки, чем закрылки — flaps_pct уже
+    // 0, когда slats_pct только падает в 0. Этот флаг включается автоматически
+    // встроенным профилем самолёта (не предназначен для ручного переключения
+    // в UI) и заставляет motor-hum дополнительно ловить движение по slats_pct.
+    pub flaps_track_slats: bool,
+
+    // Spoilers settings
+    pub spoilers_enabled: bool,
+    pub spoilers_threshold_pct: f64,
+    pub spoilers_intensity: f32,
 
     pub is_combat_edition: bool,
+
+    // Engine Spool-up & Ignition settings
+    pub enable_engine_start: bool,
+    pub engine_start_strength: f32,
+    // Порог N2 (%), при котором двигатель считается вышедшим на Idle.
+    // Разные самолёты выходят на Idle при разных значениях N2, поэтому
+    // это значение настраивается пользователем в UI (по умолчанию 60.0).
+    pub engine_idle_n2: f32,
+    // 4-моторный режим: двигатели группируются по крылу — Eng1/Eng2 → Throttle
+    // (левая рука), Eng3/Eng4 → Joystick (правая рука). Используется максимум N2
+    // в паре и OR по combustion для срабатывания удара воспламенения.
+    pub four_engine_mode: bool,
+
+    // Зеркалирование посадки рук: по умолчанию side-bound эффекты
+    // (engine-start pre-combustion, split_touchdown — см. поле ниже) считают,
+    // что РУД — под левой рукой, джойстик — под правой (Eng1/left strut → РУД,
+    // Eng2/right strut → джойстик). Если физически джойстик стоит слева, а РУД
+    // справа — этот флаг меняет местами, какая сторона считается "рукой РУД",
+    // а какая "рукой джойстика". Для двигателей это не трогает маршрутизацию
+    // по мотору РУД (throttle_left/throttle_right остаются жёстко привязаны к
+    // Eng1/Eng2 — это железо квадранта, а не поза за столом), но для
+    // split_touchdown ЭТОТ флаг как раз и определяет, какая основная стойка
+    // (лево/право) достаётся РУДу, а какая — джойстику (см. split_touchdown).
+    pub swap_hand_layout: bool,
+
+    // Привязка каждого эффекта к устройствам (Джойстик / РУД / оба).
+    // #[serde(default)] на уровне структуры уже гарантирует, что старые
+    // settings.json без этого поля подхватят EffectDeviceTargets::default()
+    // (все эффекты → джойстик, РУД выключен — прежнее поведение).
+    pub device_targets: EffectDeviceTargets,
+
+    // Состояние UI (не параметр эффекта): развёрнута ли секция телеметрии
+    // (Live Aircraft Data / Engine Telemetry) под кнопкой "Telemetry".
+    // Хранится здесь только потому, что это уже готовый персистентный
+    // канал (settings.json) — по умолчанию (и для старых settings.json без
+    // этого поля, см. #[serde(default)] на структуре) секция развёрнута.
+    pub telemetry_expanded: bool,
 }
 
 impl Default for RumbleConfig {
     fn default() -> Self {
         Self {
             overspeed_enabled: true,
-            overspeed_threshold_kn: 250.0,
             overspeed_intensity: 100.0,
             overspeed_max_kn: 350.0,
-            
+            overspeed_override_enabled: false,
+            overspeed_manual_kn: 350.0,
+            overspeed_lear_horn_enabled: false,
+
             bank_enabled: true,
             bank_intensity: 70.0,
             bank_threshold_deg: 45.0,
-            
-            spoilers_enabled: true,
-            spoilers_intensity: 150.0, 
-            spoilers_threshold_pct: 5.0,
 
-            ground_roll: 38.0,
-            flaps_peak: 60.0,
+            ground_roll: 7.5, // 15% от техн. предела 50
+            flaps_peak: 153.0, // ~0.6 duty cycle — прежняя фиксированная сила эффекта
             gear_peak: 110.0,
             stall_ceiling: 160.0,
             max_output: 255,
             smoothing_alpha: 0.18,
             ias_deadband_kn: 1.0,
-            taxi_start_kn: 3.0,
-            taxi_end_kn: 10.0,
-            thump_min_period_s: 0.25,
-            thump_max_period_s: 0.90,
-            thump_duty: 0.22,
-            flaps_bump_duration_s: 1.0,
+            taxi_start_enabled: true,
+            taxi_start_kn: 1.0,
+            taxi_end_enabled: true,
+            taxi_end_kn: 120.0,
+            // ВНИМАНИЕ: thump_min_period_s ограничен полосой передачи на устройство —
+            // hid/worker.rs шлёт интенсивность не чаще раза в SEND_INTERVAL (сейчас 50мс = 20 Гц).
+            // Частота Найквиста этого канала = 10 Гц, поэтому min_period_s не должен
+            // быть меньше ~0.12-0.15с (6.7-8.3 Гц), иначе рост частоты с ростом GS
+            // перестанет ощущаться корректно (часть импульсов "съедается" между отправками).
+            thump_min_period_s: 0.15,
+            thump_max_period_s: 1.3,
+            thump_duty: 0.18,
+            runway_slab_length_m: 6.0,
+            thump_duration_ms: 300.0,
+            thump_period_curve: 2.5, // плавнее на старте, чем чистая физика
+            flaps_bump_duration_s: 0.15,
             flaps_bump_eps_pct: 2.0,
             gear_bump_duration_s: 0.8,
 
             ground_enabled: true,
             flaps_enabled: true,
-            gear_enabled: true,
+            gear_enabled: false, // "Landing Gear (bump)" — временно отключён и скрыт из UI, см. ui.rs
             stall_enabled: true,
+            flaps_track_slats: false,
+
+            spoilers_enabled: true,
+            spoilers_threshold_pct: 10.0,
+            spoilers_intensity: 90.0,
+
+            gear_comp_enabled: true,
+            gear_comp_nose_enabled: true,
+            gear_comp_nose_peak: 25.0, // запас 0..55 над полом 200 → факт. 200..225..255
+            gear_comp_left_enabled: true,
+            gear_comp_left_peak: 30.0,
+            gear_comp_right_enabled: true,
+            gear_transit_enabled: true,
+            gear_comp_right_peak: 30.0,
+            split_touchdown: false,
+
             is_combat_edition: false,
+
+            enable_engine_start: true,
+            engine_start_strength: 100.0,
+            engine_idle_n2: 60.0,
+            four_engine_mode: false,
+            swap_hand_layout: false,
+
+            device_targets: EffectDeviceTargets::default(),
+
+            telemetry_expanded: false,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct EffectsSnapshot {
-    pub flaps_bump_active: bool,
-    pub gear_bump_active: bool,
-    pub ground_active: bool,
-    pub ground_thump_active: bool,
-    pub taxi_start_crossed: bool,
-    pub taxi_end_crossed: bool,
-    pub base_active: bool,
-    pub bank_active: bool,
-    pub stall_active: bool,
-    pub spoilers_active: bool, 
-}
+ pub struct EffectsSnapshot {
+     pub flaps_bump_active: bool,
+     pub gear_bump_active: bool,
+     pub ground_active: bool,
+     pub ground_thump_active: bool,
+     pub taxi_start_crossed: bool,
+     pub taxi_end_crossed: bool,
+     pub bank_active: bool,
+     pub stall_active: bool,
+     pub spoilers_active: bool,
+     pub overspeed_active: bool,
+     
+     // Gear Strut Compression (Touchdown) status
+     pub gear_comp_nose_active: bool,
+     pub gear_comp_left_active: bool,
+     pub gear_comp_right_active: bool,
+
+     // Gear Transit & Doors (движение стоек + удар фиксации на замке)
+     pub gear_transit_active: bool,
+
+     // Engine Spool-up & Ignition status
+     pub engine_start_active: bool,
+ }
 
 #[derive(Debug)]
 pub enum HidCmd {
-    SendIntensity(u8),
+    /// Раздельная интенсивность для Combat Joystick R и для WINCTRL URSA
+    /// MINOR Throttle (РУД) — какое значение реально уйдёт на каждое
+    /// устройство, решает EffectDeviceTarget конкретного эффекта в rumble.rs.
+    /// РУД имеет два независимых вибромотора (левый/правый), поэтому
+    /// throttle тоже разбит на два канала.
+    SendIntensity { joystick: u8, throttle_left: u8, throttle_right: u8 },
     SendRaw(Vec<u8>),
     StopAll,
     ReopenDevices,
@@ -132,6 +425,15 @@ impl ConfigShared {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(RumbleConfig::default()),
+            rev: AtomicU64::new(1),
+        }
+    }
+
+    /// Создаёт ConfigShared с уже готовым конфигом (например, полем `default`
+    /// загруженного с диска SettingsFile — см. main.rs).
+    pub fn new_with(cfg: RumbleConfig) -> Self {
+        Self {
+            inner: Mutex::new(cfg),
             rev: AtomicU64::new(1),
         }
     }
@@ -159,6 +461,12 @@ impl ConfigShared {
     }
 }
 
+impl Default for ConfigShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Default)]
 pub struct EffectsState {
     pub flaps_bump_active: AtomicBool,
@@ -167,26 +475,56 @@ pub struct EffectsState {
     pub ground_thump_active: AtomicBool,
     pub taxi_start_crossed: AtomicBool,
     pub taxi_end_crossed: AtomicBool,
-    pub base_active: AtomicBool,
     pub bank_active: AtomicBool,
     pub stall_active: AtomicBool,
-    pub spoilers_active: AtomicBool, 
+    pub spoilers_active: AtomicBool,
+    pub overspeed_active: AtomicBool,
+
+    pub gear_comp_nose_active: AtomicBool,
+    pub gear_comp_left_active: AtomicBool,
+    pub gear_comp_right_active: AtomicBool,
+
+    pub gear_transit_active: AtomicBool,
+
+    pub engine_start_active: AtomicBool,
 }
 
 pub type EffectsShared = Arc<EffectsState>;
 
 impl EffectsState {
     pub fn apply_snapshot(&self, snap: &EffectsSnapshot) {
-        self.flaps_bump_active.store(snap.flaps_bump_active, Ordering::Relaxed);
-        self.gear_bump_active.store(snap.gear_bump_active, Ordering::Relaxed);
-        self.ground_active.store(snap.ground_active, Ordering::Relaxed);
-        self.ground_thump_active.store(snap.ground_thump_active, Ordering::Relaxed);
-        self.taxi_start_crossed.store(snap.taxi_start_crossed, Ordering::Relaxed);
-        self.taxi_end_crossed.store(snap.taxi_end_crossed, Ordering::Relaxed);
-        self.base_active.store(snap.base_active, Ordering::Relaxed);
+        self.flaps_bump_active
+            .store(snap.flaps_bump_active, Ordering::Relaxed);
+        self.gear_bump_active
+            .store(snap.gear_bump_active, Ordering::Relaxed);
+        self.ground_active
+            .store(snap.ground_active, Ordering::Relaxed);
+        self.ground_thump_active
+            .store(snap.ground_thump_active, Ordering::Relaxed);
+        self.taxi_start_crossed
+            .store(snap.taxi_start_crossed, Ordering::Relaxed);
+        self.taxi_end_crossed
+            .store(snap.taxi_end_crossed, Ordering::Relaxed);
         self.bank_active.store(snap.bank_active, Ordering::Relaxed);
-        self.stall_active.store(snap.stall_active, Ordering::Relaxed);
-        self.spoilers_active.store(snap.spoilers_active, Ordering::Relaxed); 
+        self.stall_active
+            .store(snap.stall_active, Ordering::Relaxed);
+        self.spoilers_active
+            .store(snap.spoilers_active, Ordering::Relaxed);
+        self.overspeed_active
+            .store(snap.overspeed_active, Ordering::Relaxed);
+
+        self.gear_comp_nose_active
+            .store(snap.gear_comp_nose_active, Ordering::Relaxed);
+        self.gear_comp_left_active
+            .store(snap.gear_comp_left_active, Ordering::Relaxed);
+        self.gear_comp_right_active
+            .store(snap.gear_comp_right_active, Ordering::Relaxed);
+
+        self.gear_transit_active
+            .store(snap.gear_transit_active, Ordering::Relaxed);
+
+        self.engine_start_active
+            .store(snap.engine_start_active, Ordering::Relaxed);
     }
 
     pub fn clear_all(&self) {

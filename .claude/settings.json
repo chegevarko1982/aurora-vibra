@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/chege/.cargo/registry/src/**)",
+      "Bash(echo $HOME; ls \"$HOME/.cargo/registry/src\" 2>&1 | head; find / -maxdepth 6 -iname \"winit-0.29*\" -type d 2>/dev/null)",
+      "Read(//g//**)",
+      "Read(//c/Users/chege/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.29.15/src/platform_impl/windows/**)",
+      "Read(//c/Users/chege/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/eframe-0.27.2/**)",
+      "Read(//c/Users/chege/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/eframe-0.27.2/src/**)"
+    ]
+  }
+}
