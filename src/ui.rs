@@ -345,46 +345,20 @@ impl eframe::App for UiState {
 
                 let ac = self.aircraft_title.lock().clone();
                 ui.separator();
-                // Голубой цвет = для этого борта есть кастомная логика эффектов —
-                // либо встроенный профиль (см. src/profiles.rs, MADDOG/LEARJET/...),
-                // либо PMDG (pre-spool разгон по L:EngineStart1b/2b_Ext, см. rumble.rs).
-                let ac_color = if crate::profiles::has_built_in_profile(&ac)
-                    || crate::profiles::is_pmdg_aircraft(&ac)
-                {
-                    Color32::from_rgb(70, 160, 255)
+                // Кнопку "+ Save profile for this aircraft" убрали как лишний шаг —
+                // Save (ниже) теперь сам создаёт именной профиль при первом
+                // сохранении для нового борта. Вместо отдельного текста-статуса —
+                // сама метка с названием борта просто меняет цвет: белый — для
+                // этого борта ещё нет сохранённого профиля, #82f16a (ярче старого
+                // зелёного, не сливается с индикатором "Connected" у джойстика/РУД
+                // рядом) — профиль сохранён.
+                let has_saved_profile = self.aircraft_profiles.lock().active_match.is_some();
+                let ac_color = if has_saved_profile {
+                    Color32::from_rgb(0x82, 0xf1, 0x6a) // #82f16a
                 } else {
                     Color32::WHITE
                 };
                 ui.label(RichText::new(format_aircraft_label(&ac)).italics().color(ac_color));
-
-                let active_match = self.aircraft_profiles.lock().active_match.clone();
-                match &active_match {
-                    Some(m) => {
-                        ui.label(
-                            RichText::new(format!("· profile: {m}"))
-                                .color(Color32::from_rgb(120, 220, 140)),
-                        );
-                    }
-                    None => {
-                        let known_aircraft = !ac.trim().is_empty();
-                        if known_aircraft
-                            && ui
-                                .button("+ Save profile for this aircraft")
-                                .on_hover_text(
-                                    "Создаёт именной профиль для текущего борта из живого конфига (в памяти — Save всё ещё нужен, чтобы записать на диск)",
-                                )
-                                .clicked()
-                        {
-                            let mut ap = self.aircraft_profiles.lock();
-                            ap.profiles.push(AircraftProfile {
-                                match_substring: ac.clone(),
-                                config: self.config.get(),
-                            });
-                            ap.active_match = Some(ac.clone());
-                            self.logs.push(format!("Created in-memory profile for '{}' (press Save to persist)", ac));
-                        }
-                    }
-                }
 
                 ui.separator();
 
@@ -419,6 +393,21 @@ impl eframe::App for UiState {
                 if ui.button(save_label).on_hover_text("Save").clicked() {
                     let live = self.config.get();
                     let sanitized = self.profile_state.lock().sanitize_for_save(&live);
+
+                    // Первое сохранение для ещё не имеющего именного профиля борта:
+                    // создаём его прямо здесь (раньше для этого была отдельная кнопка
+                    // "+ Save profile for this aircraft" — убрана как лишний шаг).
+                    {
+                        let mut ap = self.aircraft_profiles.lock();
+                        if ap.active_match.is_none() && !ac.trim().is_empty() {
+                            ap.profiles.push(AircraftProfile {
+                                match_substring: ac.clone(),
+                                config: sanitized.clone(),
+                            });
+                            ap.active_match = Some(ac.clone());
+                        }
+                    }
+
                     match aircraft_profiles::save_active(
                         &self.aircraft_profiles,
                         sanitized,
@@ -713,20 +702,23 @@ impl eframe::App for UiState {
                             cfg.flaps_enabled = flaps_enabled;
                             UiState::device_target_row(ui, &mut cfg.device_targets.flaps, &mut _changed);
 
-                            // Gear effect
-                            let mut gear_enabled = cfg.gear_enabled;
-                            UiState::effect_row_percent_hinted(
-                                ui,
-                                "Landing Gear (bump)",
-                                &mut cfg.gear_peak,
-                                255.0,
-                                &mut gear_enabled,
-                                self.effects.gear_bump_active.load(Ordering::Relaxed),
-                                &mut _changed,
-                                Some("Толчок при перемещении рычага шасси (вверх/вниз) — не путать с ударом при касании земли (Gear Strut Compression)"),
-                            );
-                            cfg.gear_enabled = gear_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.gear_bump, &mut _changed);
+                            // Gear effect — временно скрыт из UI по просьбе (пока не
+                            // используется). cfg.gear_enabled=false по умолчанию
+                            // (см. types.rs), сама логика в rumble.rs не тронута —
+                            // раскомментировать этот блок, чтобы вернуть в UI.
+                            // let mut gear_enabled = cfg.gear_enabled;
+                            // UiState::effect_row_percent_hinted(
+                            //     ui,
+                            //     "Landing Gear (bump)",
+                            //     &mut cfg.gear_peak,
+                            //     255.0,
+                            //     &mut gear_enabled,
+                            //     self.effects.gear_bump_active.load(Ordering::Relaxed),
+                            //     &mut _changed,
+                            //     Some("Толчок при перемещении рычага шасси (вверх/вниз) — не путать с ударом при касании земли (Gear Strut Compression)"),
+                            // );
+                            // cfg.gear_enabled = gear_enabled;
+                            // UiState::device_target_row(ui, &mut cfg.device_targets.gear_bump, &mut _changed);
 
                             // Stall effect
                             let mut stall_enabled = cfg.stall_enabled;
@@ -779,7 +771,7 @@ impl eframe::App for UiState {
 
                              // Engine Start / Ignition effect
                              let mut engine_start_enabled = cfg.enable_engine_start;
-                             let engine_start_hint = "Раскрутка стартером (пульсация растущей частоты) + удар воспламенения при запуске двигателя";
+                             let engine_start_hint = "Раскрутка стартером + удар воспламенения (фиксированная сила, 1с) при запуске двигателя. Слайдер задаёт потолок кривой ПОСЛЕ воспламенения — от 1% (в крайнем левом положении) до 80% максимальной силы (в крайнем правом), удара воспламенения не касается";
                              ui.horizontal(|ui| {
                                  let cb = ui.checkbox(&mut engine_start_enabled, "");
                                  if cb.changed() {

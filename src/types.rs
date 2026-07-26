@@ -344,7 +344,7 @@ impl Default for RumbleConfig {
 
             ground_enabled: true,
             flaps_enabled: true,
-            gear_enabled: true,
+            gear_enabled: false, // "Landing Gear (bump)" — временно отключён и скрыт из UI, см. ui.rs
             stall_enabled: true,
             flaps_track_slats: false,
 

@@ -362,7 +362,16 @@ impl RumbleEngine {
 
         if cfg.gear_comp_enabled && dt > 0.0 {
             // Nose Gear
-            if cfg.gear_comp_nose_enabled && fv.gear_comp_nose >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_nose < GEAR_COMP_TOUCHDOWN_THRESHOLD {
+            // gs > 0.5 (не 0.0): настоящее касание при посадке всегда
+            // происходит с ненулевой путевой скоростью — при GS=0 самолёт уже
+            // стоит (на стоянке/после полной остановки), и любой скачок
+            // gear_comp_* (перезагрузка сценария, телепорт, вес/баланс) не
+            // должен восприниматься как удар обжатия стойки. Порог не строго
+            // 0.0: GROUND VELOCITY у части бортов не бывает ЛИТЕРАЛЬНО нулём
+            // даже стоя на месте (шум телеметрии/дробные остатки), а на
+            // кокпит-дисплее округляется до "0" — 0.5 узла отсекает этот шум,
+            // не мешая реальному касанию (там GS всегда заметно выше).
+            if cfg.gear_comp_nose_enabled && gs > 0.5 && fv.gear_comp_nose >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_nose < GEAR_COMP_TOUCHDOWN_THRESHOLD {
                 s.gear_comp_nose_t0 = fv.sim_time_s;
                 let comp_rate = (fv.gear_comp_nose - s.prev_gear_comp_nose) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
@@ -376,7 +385,7 @@ impl RumbleEngine {
             s.prev_gear_comp_nose = fv.gear_comp_nose;
 
             // Left Gear
-            if cfg.gear_comp_left_enabled && fv.gear_comp_left >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_left < GEAR_COMP_TOUCHDOWN_THRESHOLD {
+            if cfg.gear_comp_left_enabled && gs > 0.5 && fv.gear_comp_left >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_left < GEAR_COMP_TOUCHDOWN_THRESHOLD {
                 s.gear_comp_left_t0 = fv.sim_time_s;
                 let comp_rate = (fv.gear_comp_left - s.prev_gear_comp_left) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
@@ -390,7 +399,7 @@ impl RumbleEngine {
             s.prev_gear_comp_left = fv.gear_comp_left;
 
             // Right Gear
-            if cfg.gear_comp_right_enabled && fv.gear_comp_right >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_right < GEAR_COMP_TOUCHDOWN_THRESHOLD {
+            if cfg.gear_comp_right_enabled && gs > 0.5 && fv.gear_comp_right >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_right < GEAR_COMP_TOUCHDOWN_THRESHOLD {
                 s.gear_comp_right_t0 = fv.sim_time_s;
                 let comp_rate = (fv.gear_comp_right - s.prev_gear_comp_right) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
@@ -950,7 +959,25 @@ impl RumbleEngine {
             // воспламенения — см. starter_only_amplitude выше для ДО-воспламенительной
             // фазы). 1.0 — просто "не строго ноль, двигатель определённо крутится".
             const ENGINE_SPOOL_MIN_AMPLITUDE: f64 = 1.0;
-            const ENGINE_IGNITION_KICK_DURATION: Duration = Duration::from_millis(500);
+            // Потолок ШИМ для N2-кривой ПОСЛЕ воспламенения — управляется тем же
+            // слайдером "Engine Start" (cfg.engine_start_strength), который
+            // раньше напрямую задавал силу удара воспламенения. По требованию
+            // сам слайдер (диапазон в UI не менялся, 0..100%/0..255 raw)
+            // теперь маппится в потолок кривой 1%..80% от максимума (255), а
+            // не в силу удара — удар теперь фиксирован (см. ниже). НЕЗАВИСИМО
+            // от того, один двигатель работает или несколько (см. клэмп
+            // throttle_eng_vib/joystick_eng_vib ПОСЛЕ маршрутизации по бортам
+            // ниже — иначе при одновременной работе обоих двигателей их
+            // кросс-роутинг мог бы просуммироваться выше этого потолка).
+            let engine_spool_max_pct =
+                1.0 + (cfg.engine_start_strength as f64 / 255.0).clamp(0.0, 1.0) * 79.0; // 1%..80%
+            let engine_spool_max_amplitude: f64 = engine_spool_max_pct / 100.0 * 255.0;
+            // Удар воспламенения: по требованию фиксированная максимальная
+            // сила (255, больше НЕ завязана на cfg.engine_start_strength —
+            // тот теперь полностью отдан под потолок кривой выше; у поршневых
+            // двигателей (PISTON-ветка ниже) слайдер по-прежнему задаёт силу
+            // удара напрямую, как раньше) и длительность 1с (была 500мс).
+            const ENGINE_IGNITION_KICK_DURATION: Duration = Duration::from_millis(1000);
 
             // Фиксируем момент воспламенения (передний фронт) для КАЖДОГО двигателя
             // НЕЗАВИСИМО — на реальном wall-clock Instant::now(), как требуется для
@@ -1054,37 +1081,46 @@ impl RumbleEngine {
 
             // ШАГ 1: ВСЕГДА считаем базовую вибрацию раскрутки по N2 — независимо
             // от того, активен ли сейчас удар воспламенения. Именно поэтому после
-            // истечения 500 мс переход происходит бесшовно, а не через провал в 0.
-            // Дэдзона: N2 < 1.0 → 0 (двигатель выключен). При N2 в [1.0 .. engine_idle_n2):
-            // минимум 1, линейный рост к пику 255 у engine_idle_n2/3, ПЛАВНЫЙ
-            // НЕлинейный (smoothstep-ease) спад к строго 0 у engine_idle_n2 (Idle).
-            // Раньше спад был линейным ("(max - n2) / (max - peak)"), из-за чего
-            // вибрация ощущалась как резкий обрыв прямо на пороге Idle. Кубический
-            // smoothstep имеет нулевую производную на обоих концах интервала спада,
-            // поэтому затухание получается мягким и естественным, а не "срезанным".
+            // истечения удара (ENGINE_IGNITION_KICK_DURATION) переход происходит
+            // бесшовно, а не через провал в 0. Дэдзона: N2 < 1.0 → 0 (двигатель
+            // выключен). При N2 в [1.0 .. engine_idle_n2): минимум 1, линейный рост
+            // к потолку слайдера у engine_idle_n2/3, затем степенной ease-out спад
+            // (резкий сразу после пика, пологий к хвосту) к строго 0 у engine_idle_n2
+            // (Idle) — см. DECAY_EXPONENT ниже.
             let engine_spool_term = |n2_percent: f64| -> f64 {
                 if n2_percent < ENGINE_SPOOL_DEADZONE_N2 || n2_percent >= engine_spool_n2_max {
                     // Дэдзона (двигатель выключен) ИЛИ N2 достиг/превысил Idle —
                     // амплитуда строго 0.0 (п.1 и п.5 требований).
                     0.0
                 } else if n2_percent <= engine_spool_peak_n2 {
-                    // Плавный рост от минимума ШИМ=1 до пика 255 ровно на engine_spool_peak_n2
-                    // (peak_n2 = engine_idle_n2 / 3.0, п.2 требований).
+                    // Плавный рост от минимума ШИМ=1 до потолка engine_spool_max_amplitude
+                    // (1%..80% от 255, см. слайдер выше) ровно на engine_spool_peak_n2
+                    // (peak_n2 = engine_idle_n2 / 3.0).
                     let rise_progress = (n2_percent / engine_spool_peak_n2).clamp(0.0, 1.0);
-                    (rise_progress * 255.0).max(ENGINE_SPOOL_MIN_AMPLITUDE)
+                    (rise_progress * engine_spool_max_amplitude).max(ENGINE_SPOOL_MIN_AMPLITUDE)
                 } else {
-                    // Non-linear ease-out спад: decay_progress идёт от 0 (у пика)
-                    // до 1 (точно у engine_idle_n2/Idle).
+                    // Степенной ease-out спад (по требованию/ручной правке кривой,
+                    // см. рисунок): decay_progress идёт от 0 (у пика) до 1 (точно у
+                    // engine_idle_n2/Idle). В отличие от прежнего smoothstep (плавный
+                    // старт спада, резкий перегиб в середине) — здесь спад РЕЗКИЙ
+                    // сразу после пика и всё более пологий к хвосту (степень >1 даёт
+                    // нулевую производную ТОЛЬКО у самого Idle, а не у пика).
+                    // Было 2.5 — на живом тесте (N2=64.4%, разные Idle) хвост
+                    // оказался настолько низким, что эффект был практически
+                    // неощутим уже при Idle=70 (0.5% от потолка), хотя N2 ещё
+                    // далеко не дошёл до настроенного порога — снижено до 1.5:
+                    // спад по-прежнему быстрее старого smoothstep у пика, но
+                    // хвост держит заметно бОльшую силу дольше (см. таблицу в
+                    // истории обсуждения: 1.5 даёт ~5-16% в том же диапазоне
+                    // вместо ~0.3-5% у 2.5).
+                    const DECAY_EXPONENT: f64 = 1.5;
                     let decay_progress = ((n2_percent - engine_spool_peak_n2)
                         / (engine_spool_n2_max - engine_spool_peak_n2))
                         .clamp(0.0, 1.0);
-                    // Кубический smoothstep: eased(0) = 0, eased(1) = 1, производная
-                    // на обоих концах равна нулю — мягкое, "дышащее" затухание.
-                    let eased = decay_progress * decay_progress * (3.0 - 2.0 * decay_progress);
-                    let amplitude_factor = (1.0 - eased).clamp(0.0, 1.0);
+                    let amplitude_factor = (1.0 - decay_progress).powf(DECAY_EXPONENT).clamp(0.0, 1.0);
                     // Без .max(ENGINE_SPOOL_MIN_AMPLITUDE) здесь: амплитуда должна
                     // дойти РОВНО до 0.0 у engine_idle_n2, а не застрять на полу.
-                    (amplitude_factor * 255.0).clamp(0.0, 255.0)
+                    (amplitude_factor * engine_spool_max_amplitude).clamp(0.0, engine_spool_max_amplitude)
                 }
             };
 
@@ -1096,17 +1132,22 @@ impl RumbleEngine {
             // полностью маскирует реальную раскрутку второго, ещё запускающегося
             // двигателя. Максимум нужно брать по уже посчитанным АМПЛИТУДАМ.
             //
-            // Универсальная поддержка поршневых двигателей: TURB ENG N2 на поршневых
-            // самолётах обычно равно 0 (нет турбины), а GENERAL ENG PCT MAX RPM на
-            // турбинах часто отсутствует/неточно. Берём максимум из двух источников —
-            // на турбинах сработает N2, на поршневых сработает Pct Max RPM, и то и
-            // другое одновременно ложно сработать не может (у самолёта либо одно,
-            // либо другое реально ненулевое), поэтому max() здесь безопасен и не
-            // подвержен той же проблеме маскировки, что и max() по паре двигателей.
-            let eng1_effective = fv.eng1_n2_percent.max(fv.eng1_pct_max_rpm);
-            let eng2_effective = fv.eng2_n2_percent.max(fv.eng2_pct_max_rpm);
-            let eng3_effective = fv.eng3_n2_percent.max(fv.eng3_pct_max_rpm);
-            let eng4_effective = fv.eng4_n2_percent.max(fv.eng4_pct_max_rpm);
+            // МЫ УЖЕ ВНУТРИ ВЕТКИ is_jet == true — то есть N2 сам по себе уже
+            // подтверждённо валидный, ненулевой сигнал (это и есть критерий,
+            // по которому is_jet вообще стал true). Раньше здесь дополнительно
+            // брался max(N2, GENERAL ENG PCT MAX RPM) "на случай поршневых", но
+            // это было ошибкой ИМЕННО в этой ветке: предположение "оба сигнала
+            // одновременно ненулевыми быть не могут" не подтвердилось на живом
+            // тесте (A350-900, N2 idle=65 в конфиге) — GENERAL ENG PCT MAX RPM
+            // у этого борта тоже читался ненулевым и местами ВЫШЕ реального N2,
+            // из-за чего eng1_effective пересекал engine_idle_n2 и эффект гас
+            // раньше времени (N2=62.7%, эффект уже 0, хотя порог настроен на 65%).
+            // GENERAL ENG PCT MAX RPM остаётся нужен ТОЛЬКО в PISTON-ветке ниже
+            // (is_jet == false), где TURB ENG N2 гарантированно 0.
+            let eng1_effective = fv.eng1_n2_percent;
+            let eng2_effective = fv.eng2_n2_percent;
+            let eng3_effective = fv.eng3_n2_percent;
+            let eng4_effective = fv.eng4_n2_percent;
 
             // ДО воспламенения — starter_only_amplitude (см. starter-only ramp
             // выше), НЕ engine_spool_term(N2): реальный N2 в фазе прокрутки
@@ -1230,11 +1271,24 @@ impl RumbleEngine {
                 }
             }
 
+            // Финальный клэмп ПОСЛЕ маршрутизации по бортам — гарантирует потолок
+            // слайдера (engine_spool_max_amplitude, 1%..80%) независимо от того,
+            // сколько двигателей сейчас работает: при одновременной работе ОБОИХ
+            // сторон кросс-роутинг суммирует их термины (throttle_side_n2 +
+            // joystick_side_n2) в один канал, а каждый term уже отдельно
+            // ограничен потолком в engine_spool_term — без этого клэмпа их сумма
+            // могла бы превысить его.
+            throttle_eng_vib = throttle_eng_vib.min(engine_spool_max_amplitude);
+            joystick_eng_vib = joystick_eng_vib.min(engine_spool_max_amplitude);
+
             // Удар — глобальный эффект: срабатывает от ЛЮБОГО двигателя (каждый
             // отслеживается независимо, см. выше) и применяется одновременно к
-            // обоим каналам (см. оверрайд ниже).
+            // обоим каналам (см. оверрайд ниже). По требованию — фиксированная
+            // максимальная сила (255), не завязана на cfg.engine_start_strength
+            // (тот остаётся в ходу только у поршневых, см. PISTON-ветку ниже) —
+            // в отличие от кривой ПОСЛЕ удара, сам удар в 80%-й потолок не входит.
             combustion_kick_active = left_kick_active || right_kick_active;
-            combustion_kick_strength = (cfg.engine_start_strength as f64).clamp(0.0, 255.0);
+            combustion_kick_strength = 255.0;
 
             effects.engine_start_active = cfg.enable_engine_start
                 && (throttle_eng_vib.abs() > 0.5 || joystick_eng_vib.abs() > 0.5 || combustion_kick_active);
@@ -1242,8 +1296,8 @@ impl RumbleEngine {
             // Подмешиваем базовую раскрутку в соответствующие каналы через transients
             // (чтобы не гаситься экспоненциальным сглаживанием air_term ниже). Пока
             // удар воспламенения активен, ниже (после clamp) он ПОЛНОСТЬЮ перекроет
-            // итоговое значение максимальной силой; как только 500 мс истекут —
-            // оверрайд снимается и итог автоматически возвращается к этой базе.
+            // итоговое значение максимальной силой; как только ENGINE_IGNITION_KICK_DURATION
+            // (1с) истечёт — оверрайд снимается и итог автоматически возвращается к этой базе.
             // ВАЖНО: transients_t — общий на throttle_left/right (обе копии
             // получают одно и то же значение через сплит ниже) — так исторически
             // и было устроено у джет-модели, роутинг по бортам её не касается.
