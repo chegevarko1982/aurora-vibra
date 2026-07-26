@@ -1,16 +1,16 @@
 [package]
-name = "ursa_minor_ffb"
-version = "2.1.0"
+name = "aurora_vibra"
+version = "4.0.1"
 edition = "2021"
 build = "src/build.rs"
-default-run = "ursa-minor-ffb"  # Оставляем основное приложение
+default-run = "aurora-vibra"  # Оставляем основное приложение
 
 [lib]
-name = "ursa_minor_ffb"
+name = "aurora_vibra"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ursa-minor-ffb"
+name = "aurora-vibra"
 path = "src/main.rs"
 required-features = ["app"]
 

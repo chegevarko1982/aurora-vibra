@@ -14,7 +14,7 @@ jobs:
 
     env:
       # Human-readable app name you show in the UI
-      BIN_NAME: Ursa Minor FFB
+      BIN_NAME: Aurora Vibra
 
     steps:
       - name: Checkout
@@ -42,13 +42,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
           # Try to locate the exe produced by cargo:
-          #   - dashed (cargo default from package name) e.g. "ursa-minor-ffb.exe"
+          #   - dashed (cargo default from package name) e.g. "aurora-vibra.exe"
           #   - exact BIN_NAME (if you defined [[bin]] name with spaces)
           $binDashed = ($env:BIN_NAME -replace '[^\w\-]', '-').ToLower()
           $candidates = @(
             "target\release\$binDashed.exe",
             "target\release\$($env:BIN_NAME).exe",
-            "target\release\ursa_minor_ffb.exe"
+            "target\release\aurora_vibra.exe"
           )
 
           $exePath = $null
@@ -65,7 +65,7 @@ jobs:
 
           Write-Host "Found EXE: $exePath"
 
-          # Zip name: <repo>-<tag>-windows-x64.zip (e.g. ursa-minor-ffb-v1.2.3-windows-x64.zip)
+          # Zip name: <repo>-<tag>-windows-x64.zip (e.g. aurora-vibra-v3.0.0-windows-x64.zip)
           $zipName = "$repo-$tag-windows-x64.zip"
           $zipPath = Join-Path $dist $zipName
 

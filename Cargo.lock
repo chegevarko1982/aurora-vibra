@@ -468,6 +468,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurora_vibra"
+version = "4.0.1"
+dependencies = [
+ "anyhow",
+ "approx",
+ "chrono",
+ "crossbeam-channel",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "embed-resource",
+ "hidapi",
+ "libloading 0.8.9",
+ "mockall",
+ "once_cell",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "widestring",
+ "windows 0.56.0",
+ "zip",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3905,32 +3931,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
-]
-
-[[package]]
-name = "ursa_minor_ffb"
-version = "2.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "chrono",
- "crossbeam-channel",
- "eframe",
- "egui",
- "egui_extras",
- "embed-resource",
- "hidapi",
- "libloading 0.8.9",
- "mockall",
- "once_cell",
- "parking_lot",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "widestring",
- "windows 0.56.0",
- "zip",
 ]
 
 [[package]]

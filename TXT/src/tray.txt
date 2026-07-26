@@ -33,8 +33,8 @@ const ID_TRAY_CHECK_UPDATES: u32 = 1003;
 const ID_TRAY_QUIT: u32 = 1004;
 
 const WM_TRAYICON: u32 = WM_USER + 0x42;
-const WC_TRAY: &str = "UrsaMinorFFB.TrayWindow";
-const MAIN_WINDOW_TITLE: &str = "Ursa Minor FFB"; // must match run_native title
+const WC_TRAY: &str = "AuroraVibra.TrayWindow";
+const MAIN_WINDOW_TITLE: &str = "Aurora Vibra v3.0"; // must match run_native title
 
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
@@ -244,7 +244,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         let hwnd = CreateWindowExW(
             Default::default(),
             PCWSTR(class_name_w.as_ptr()),
-            PCWSTR(wide("Ursa Minor FFB Tray").as_ptr()),
+            PCWSTR(wide("Aurora Vibra Tray").as_ptr()),
             WS_OVERLAPPED,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -264,7 +264,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         nid.hIcon = load_app_icon(hinst);
         nid.uID = 1; // stable classic identity
 
-        let tip = format!("Ursa Minor FFB v{}", app_version);
+        let tip = format!("Aurora Vibra v{}", app_version);
         let mut buf = [0u16; 128];
         let tip_w = wide(&tip);
         let n = tip_w.len().min(buf.len() - 1);

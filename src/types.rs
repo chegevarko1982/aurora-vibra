@@ -372,7 +372,7 @@ impl Default for RumbleConfig {
 
             device_targets: EffectDeviceTargets::default(),
 
-            telemetry_expanded: true,
+            telemetry_expanded: false,
         }
     }
 }

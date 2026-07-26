@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use ursa_minor_ffb::{
+use aurora_vibra::{
     aircraft_profiles::AircraftProfiles,
     hid::hid_worker,
     log::LogBuffer,
@@ -20,7 +20,7 @@ use std::sync::{
 use std::{thread, time::Duration};
 
 fn main() -> Result<()> {
-    if ursa_minor_ffb::updater::early_self_update_hook() {
+    if aurora_vibra::updater::early_self_update_hook() {
         return Ok(());
     }
 
@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
-    let status = Arc::new(Mutex::new(ursa_minor_ffb::SimStatus::Disconnected));
+    let status = Arc::new(Mutex::new(aurora_vibra::SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
     let logs = LogBuffer::default();
 
@@ -41,16 +41,19 @@ fn main() -> Result<()> {
         Err(e) => logs.push(format!("File logging disabled: {}", e)),
     }
 
-    let settings_file = match ursa_minor_ffb::settings::load() {
+    let settings_file = match aurora_vibra::settings::load() {
         Some(sf) => {
             logs.push("Settings loaded from disk".to_string());
             sf
         }
         None => {
             logs.push("No saved settings found, using defaults".to_string());
-            ursa_minor_ffb::settings::SettingsFile::default()
+            aurora_vibra::settings::SettingsFile::default()
         }
     };
+
+    let lang = settings_file.lang;
+    aurora_vibra::i18n::set(lang);
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
     let aircraft_profiles = Arc::new(Mutex::new(AircraftProfiles {
@@ -104,12 +107,24 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([550.0, 700.0]) // Увеличили размер окна
-            .with_min_inner_size([480.0, 600.0]) // Увеличили минимальный размер
+            // Ширина — чтобы верхняя панель (статусы, Load/Save, Options, ?,
+            // EN/RU) помещалась в одну строку без переноса. Высота — чтобы
+            // список эффектов был виден целиком до кнопки "Show Telemetry"
+            // включительно (сама телеметрия свёрнута по умолчанию, см.
+            // RumbleConfig::telemetry_expanded). Точные значения не проверены
+            // визуально в этой среде — подгони при первом запуске, если не
+            // совпадёт с реальным рендером/экраном.
+            .with_inner_size([1000.0, 985.0])
+            .with_min_inner_size([700.0, 600.0])
             .with_resizable(true) // Разрешили изменение размера
             .with_maximize_button(true)
             .with_minimize_button(true)
             .with_icon(icon),
+        // eframe по умолчанию запоминает размер/позицию окна между запусками
+        // (persist_window: true) и подставляет их вместо with_inner_size выше —
+        // из-за этого окно каждый раз открывалось в старом (узком) размере.
+        // Отключаем, чтобы дефолтный размер всегда применялся при запуске.
+        persist_window: false,
         ..Default::default()
     };
 
@@ -145,6 +160,7 @@ fn main() -> Result<()> {
 
         active_tab: Tab::Main,
         hold,
+        lang,
 
         rx_ui,
         tx_ui: tx_ui.clone(),
@@ -153,11 +169,11 @@ fn main() -> Result<()> {
     let tx_ui_for_tray = tx_ui.clone();
 
     let run = eframe::run_native(
-        "Ursa Minor FFB v2.3 Ernesto edition",
+        "Aurora Vibra v4.0.1",
         native_options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
-            ursa_minor_ffb::tray::spawn_tray_with_ctx(
+            aurora_vibra::tray::spawn_tray_with_ctx(
                 tx_ui_for_tray.clone(),
                 ctx.clone(),
                 env!("CARGO_PKG_VERSION"),

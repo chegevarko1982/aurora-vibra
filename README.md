@@ -1,4 +1,4 @@
-# Ursa Minor FFB
+# Aurora Vibra
 
 A Rust-based flight simulator add-on.
 

@@ -51,7 +51,7 @@ impl LogBuffer {
         if let Ok(p) = std::env::current_exe() {
             if let Some(dir) = p.parent() {
                 let mut log_path = dir.to_path_buf();
-                log_path.push("UrsaMinorFFB.log");
+                log_path.push("AuroraVibra.log");
                 if self.attach_file_at(&log_path).is_ok() {
                     return Ok(log_path);
                 }
@@ -59,14 +59,14 @@ impl LogBuffer {
         }
         if let Some(base) = std::env::var_os("LOCALAPPDATA") {
             let mut p = PathBuf::from(base);
-            p.push("UrsaMinorFFB");
+            p.push("AuroraVibra");
             let _ = std::fs::create_dir_all(&p);
-            p.push("UrsaMinorFFB.log");
+            p.push("AuroraVibra.log");
             self.attach_file_at(&p)?;
             return Ok(p);
         }
         let mut p = std::env::temp_dir();
-        p.push("UrsaMinorFFB.log");
+        p.push("AuroraVibra.log");
         self.attach_file_at(&p)?;
         Ok(p)
     }

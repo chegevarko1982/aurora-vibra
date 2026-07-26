@@ -105,7 +105,7 @@ fn load_simconnect() -> Fns {
         Err(e) => {
             println!("normal search failed ({e}), falling back to embedded DLL");
             let mut dst = std::env::temp_dir();
-            dst.push("ursa-engine-probe-simconnect-64.dll");
+            dst.push("aurora-engine-probe-simconnect-64.dll");
             std::fs::write(&dst, EMBED_SIMCONNECT_BYTES).expect("write embedded SimConnect.dll");
             unsafe { libloading::Library::new(&dst) }.expect("load embedded SimConnect.dll")
         }

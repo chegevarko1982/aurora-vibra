@@ -1,8 +1,8 @@
-use crate::{aircraft_profiles::AircraftProfile, RumbleConfig};
+use crate::{aircraft_profiles::AircraftProfile, i18n::Lang, RumbleConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const FILE_NAME: &str = "UrsaMinorFFB.settings.json";
+const FILE_NAME: &str = "AuroraVibra.settings.json";
 
 /// Формат файла на диске: единый default-конфиг (для любого борта без
 /// именного профиля) плюс список именных профилей по самолётам (см.
@@ -13,11 +13,15 @@ const FILE_NAME: &str = "UrsaMinorFFB.settings.json";
 pub struct SettingsFile {
     pub default: RumbleConfig,
     pub profiles: Vec<AircraftProfile>,
+    // Глобальная настройка (не привязана к самолёту/профилю) — старые файлы
+    // без этого поля десериализуются с Lang::default() (En) благодаря
+    // #[serde(default)] на всей структуре.
+    pub lang: Lang,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
 /// 1) рядом с exe-файлом (удобно для портативной установки)
-/// 2) %LOCALAPPDATA%\UrsaMinorFFB\ (на случай, если папка с exe недоступна для записи)
+/// 2) %LOCALAPPDATA%\AuroraVibra\ (на случай, если папка с exe недоступна для записи)
 fn candidate_paths() -> Vec<PathBuf> {
     let mut v = Vec::new();
 
@@ -29,7 +33,7 @@ fn candidate_paths() -> Vec<PathBuf> {
 
     if let Some(base) = std::env::var_os("LOCALAPPDATA") {
         let mut p = PathBuf::from(base);
-        p.push("UrsaMinorFFB");
+        p.push("AuroraVibra");
         p.push(FILE_NAME);
         v.push(p);
     }
@@ -52,7 +56,7 @@ fn primary_save_path() -> PathBuf {
 fn local_appdata_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
     let mut p = PathBuf::from(base);
-    p.push("UrsaMinorFFB");
+    p.push("AuroraVibra");
     Some(p.join(FILE_NAME))
 }
 
@@ -79,6 +83,7 @@ pub fn load() -> Option<SettingsFile> {
                 return Some(SettingsFile {
                     default: cfg,
                     profiles: Vec::new(),
+                    lang: Lang::default(),
                 });
             }
         }
@@ -87,7 +92,7 @@ pub fn load() -> Option<SettingsFile> {
 }
 
 /// Сохраняет набор профилей на диск.
-/// Сначала пробует папку рядом с exe, затем %LOCALAPPDATA%\UrsaMinorFFB.
+/// Сначала пробует папку рядом с exe, затем %LOCALAPPDATA%\AuroraVibra.
 pub fn save(file: &SettingsFile) -> std::io::Result<PathBuf> {
     let json = serde_json::to_string_pretty(file)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;

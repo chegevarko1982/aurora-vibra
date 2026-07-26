@@ -1,7 +1,7 @@
-use ursa_minor_ffb::hid::protocol::{build_simapp_vibe_frame, WW_PID_URSA_MINOR_AIRBUS_L};
-use ursa_minor_ffb::rumble::RumbleEngine;
-use ursa_minor_ffb::sim::parse::{flight_status, parse_main_elems};
-use ursa_minor_ffb::{FlightVars, RumbleConfig, SimStatus};
+use aurora_vibra::hid::protocol::{build_simapp_vibe_frame, WW_PID_URSA_MINOR_AIRBUS_L};
+use aurora_vibra::rumble::RumbleEngine;
+use aurora_vibra::sim::parse::{flight_status, parse_main_elems};
+use aurora_vibra::{FlightVars, RumbleConfig, SimStatus};
 
 mod support;
 
@@ -153,7 +153,7 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
 #[test]
 fn config_shared_rev_triggers_smoothing_reset() {
     use std::sync::Arc;
-    use ursa_minor_ffb::ConfigShared;
+    use aurora_vibra::ConfigShared;
 
     let shared = Arc::new(ConfigShared::new());
     let cfg1 = shared.get();

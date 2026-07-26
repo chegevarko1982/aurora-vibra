@@ -1,5 +1,26 @@
 # Changelog
 
+## v4.0.1
+
+**Rebrand:** Ursa Minor FFB is now **Aurora Vibra**. New name and icon throughout the app (window title, tray, installer metadata), package/binary renamed (`aurora-vibra.exe`), auto-updater now points at the new repository, settings/log folder moved to `%LOCALAPPDATA%\AuroraVibra`. Hardware device names (WinWing/WINCTRL joystick & throttle identifiers) are unchanged — only the application's own branding moved.
+
+**New:**
+- English/Russian UI language switch (EN by default) — toolbar toggle, covers the main window, tray menu, and update dialogs; choice is remembered between runs
+- Per-aircraft configuration profiles: save/load your own preset per tail number (manual Save/Load, falls back to a default profile), on top of built-in overrides for MADDOG and Learjet
+- Reworked engine-start effect: dedicated starter-spool phase tuned against real PMDG 737 SimConnect data, smooth fade-out on an aborted start instead of a hard cutoff, fixed-strength ignition kick
+- Overspeed effect now tracks the live airspeed barber pole (Vmo/Mmo) instead of a static design speed, with a manual override and an extra trigger for the Learjet
+- Separate strut-compression touchdown effect for nose/left/right gear, no longer confused with the ground-roll effect
+- Effect sliders (Ground Roll, Flaps, Gear, Stall, Spoilers) now show 0–100% instead of raw internal units
+- Collapsible telemetry panel in the UI, collapsed by default
+- Independent left/right sidestick vibration channels, plus a hand-swap option for non-standard joystick/throttle seating
+- Reserved "Options" menu and help ("?") button in the toolbar for upcoming features
+- Default window size now shows the entire effects list without scrolling; window size/position are no longer remembered between runs, so this default always applies on launch
+
+**Fixes:**
+- Settings autosave no longer stalls indefinitely while the UI is active (it kept pushing its own save deadline forward every redraw)
+- TFDI MD-11: spoiler effect no longer false-triggers on bank
+- Gear touchdown effect no longer false-triggers while parked due to near-zero ground-speed telemetry noise
+
 ## v2.0.0
 
 - Fixes HID payload for URSA MINOR R version

@@ -1,5 +1,6 @@
 pub mod aircraft_profiles;
 pub mod hid;
+pub mod i18n;
 pub mod log;
 pub mod profiles;
 pub mod rumble;

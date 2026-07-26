@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use ursa_minor_ffb::{
+use aurora_vibra::{
     hid::hid_worker,
     log::LogBuffer,
     sim::sim_worker,
@@ -18,7 +18,7 @@ use std::sync::{
 use std::{thread, time::Duration};
 
 fn main() -> Result<()> {
-    if ursa_minor_ffb::updater::early_self_update_hook() {
+    if aurora_vibra::updater::early_self_update_hook() {
         return Ok(());
     }
 
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     let config = Arc::new(ConfigShared::new_loaded());
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
-    let status = Arc::new(Mutex::new(ursa_minor_ffb::SimStatus::Disconnected));
+    let status = Arc::new(Mutex::new(aurora_vibra::SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
     let logs = LogBuffer::default();
 
@@ -39,7 +39,7 @@ fn main() -> Result<()> {
         Err(e) => logs.push(format!("File logging disabled: {}", e)),
     }
 
-    match ursa_minor_ffb::settings::load() {
+    match aurora_vibra::settings::load() {
         Some(_) => logs.push("Settings loaded from disk".to_string()),
         None => logs.push("No saved settings found, using defaults".to_string()),
     }
@@ -125,11 +125,11 @@ fn main() -> Result<()> {
     let tx_ui_for_tray = tx_ui.clone();
 
     let run = eframe::run_native(
-        "Ursa Minor FFB",
+        "Aurora Vibra v4.0.1",
         native_options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
-            ursa_minor_ffb::tray::spawn_tray_with_ctx(
+            aurora_vibra::tray::spawn_tray_with_ctx(
                 tx_ui_for_tray.clone(),
                 ctx.clone(),
                 env!("CARGO_PKG_VERSION"),

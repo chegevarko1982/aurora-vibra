@@ -3,8 +3,8 @@ MAINICON ICON "assets\\icon.ico"
 
 // Optional VERSIONINFO
 1 VERSIONINFO
-FILEVERSION     2,0,1,0
-PRODUCTVERSION  2,0,1,0
+FILEVERSION     4,0,1,0
+PRODUCTVERSION  4,0,1,0
 FILEFLAGSMASK   0x3fL
 #ifdef _DEBUG
 FILEFLAGS       0x1L
@@ -20,12 +20,12 @@ BEGIN
         BLOCK "040904b0"   // US English, Unicode
         BEGIN
             VALUE "CompanyName",      "rt\0"
-            VALUE "FileDescription",  "Ursa Minor FFB\0"
-            VALUE "FileVersion",      "2.0.1\0"
-            VALUE "InternalName",     "UrsaMinorFFB.exe\0"
-            VALUE "OriginalFilename", "UrsaMinorFFB.exe\0"
-            VALUE "ProductName",      "Ursa Minor FFB\0"
-            VALUE "ProductVersion",   "2.0.1\0"
+            VALUE "FileDescription",  "Aurora Vibra\0"
+            VALUE "FileVersion",      "4.0.1\0"
+            VALUE "InternalName",     "AuroraVibra.exe\0"
+            VALUE "OriginalFilename", "AuroraVibra.exe\0"
+            VALUE "ProductName",      "Aurora Vibra\0"
+            VALUE "ProductVersion",   "4.0.1\0"
         END
     END
     BLOCK "VarFileInfo"

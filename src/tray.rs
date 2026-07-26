@@ -14,7 +14,8 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
@@ -26,15 +27,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
 };
 
-use crate::{updater, UiCmd};
+use crate::{i18n, updater, UiCmd};
 
 const ID_TRAY_STOP_OR_RESUME: u32 = 1002;
 const ID_TRAY_CHECK_UPDATES: u32 = 1003;
 const ID_TRAY_QUIT: u32 = 1004;
 
 const WM_TRAYICON: u32 = WM_USER + 0x42;
-const WC_TRAY: &str = "UrsaMinorFFB.TrayWindow";
-const MAIN_WINDOW_TITLE: &str = "Ursa Minor FFB"; // must match run_native title
+const WC_TRAY: &str = "AuroraVibra.TrayWindow";
+const MAIN_WINDOW_TITLE: &str = "Aurora Vibra v4.0.1"; // must match run_native title
 
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
@@ -104,10 +105,11 @@ unsafe extern "system" fn wnd_proc(
                     Err(_) => return LRESULT(0),
                 };
 
-                let stop_resume = if st.is_held { "Resume" } else { "Stop" };
+                let t = i18n::get().strings();
+                let stop_resume = if st.is_held { t.tray_resume } else { t.tray_stop };
                 let stop_resume_w = wide(stop_resume);
-                let check_updates_w = wide("Check for updates…");
-                let quit_w = wide("Quit");
+                let check_updates_w = wide(t.tray_check_updates);
+                let quit_w = wide(t.tray_quit);
 
                 let _ = AppendMenuW(
                     hmenu,
@@ -244,7 +246,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         let hwnd = CreateWindowExW(
             Default::default(),
             PCWSTR(class_name_w.as_ptr()),
-            PCWSTR(wide("Ursa Minor FFB Tray").as_ptr()),
+            PCWSTR(wide("Aurora Vibra Tray").as_ptr()),
             WS_OVERLAPPED,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -264,7 +266,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
         nid.hIcon = load_app_icon(hinst);
         nid.uID = 1; // stable classic identity
 
-        let tip = format!("Ursa Minor FFB v{}", app_version);
+        let tip = format!("Aurora Vibra v{}", app_version);
         let mut buf = [0u16; 128];
         let tip_w = wide(&tip);
         let n = tip_w.len().min(buf.len() - 1);
@@ -296,5 +298,23 @@ pub fn notify_held(held: bool) {
     if let Some(lock) = TRAY_STATE.get() {
         let mut st = lock.lock().unwrap();
         st.is_held = held;
+    }
+}
+
+/// Re-applies the tray tooltip text — call after the UI language changes so
+/// the tray icon's hover tip stays in sync (the popup menu itself re-reads
+/// i18n::get() fresh every time it's opened, so it doesn't need this).
+pub fn refresh_tooltip() {
+    if let Some(lock) = TRAY_STATE.get() {
+        let mut st = lock.lock().unwrap();
+        let tip = format!("Aurora Vibra v{}", st.version_str);
+        let mut buf = [0u16; 128];
+        let tip_w = wide(&tip);
+        let n = tip_w.len().min(buf.len() - 1);
+        buf[..n].copy_from_slice(&tip_w[..n]);
+        st.nid.szTip = buf;
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &mut st.nid);
+        }
     }
 }

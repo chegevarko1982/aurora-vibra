@@ -14,6 +14,7 @@ use std::{
 
 use crate::{
     aircraft_profiles::{self, AircraftProfile, AircraftProfiles},
+    i18n::{self, Lang, Strings},
     profiles::ProfileState,
     tray, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer,
     RumbleConfig, SimStatus, UiCmd,
@@ -38,11 +39,11 @@ fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
         .circle_stroke(center, r, egui::Stroke::new(1.4, stroke_color));
 }
 
-fn status_badge(ui: &mut egui::Ui, status: &SimStatus) {
+fn status_badge(ui: &mut egui::Ui, status: &SimStatus, t: &Strings) {
     let (text, color, filled) = match status {
-        SimStatus::Disconnected => ("Disconnected", Color32::from_rgb(200, 60, 60), false),
-        SimStatus::Connected => ("Connected", Color32::from_rgb(220, 180, 40), false),
-        SimStatus::InFlight => ("In Flight", Color32::from_rgb(30, 180, 90), true),
+        SimStatus::Disconnected => (t.disconnected, Color32::from_rgb(200, 60, 60), false),
+        SimStatus::Connected => (t.connected, Color32::from_rgb(220, 180, 40), false),
+        SimStatus::InFlight => (t.in_flight, Color32::from_rgb(30, 180, 90), true),
     };
     ui.horizontal(|ui| {
         circle_indicator_colored(ui, color, filled);
@@ -50,7 +51,7 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus) {
     });
 }
 
-fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool) {
+fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool, t: &Strings) {
     let (color, filled) = if connected {
         (Color32::from_rgb(30, 180, 90), true)
     } else {
@@ -61,9 +62,9 @@ fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool) {
         ui.colored_label(
             color,
             if connected {
-                format!("{label}: Connected")
+                format!("{label}: {}", t.connected)
             } else {
-                format!("{label}: Disconnected")
+                format!("{label}: {}", t.disconnected)
             },
         );
     });
@@ -72,10 +73,10 @@ fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool) {
 /// Formats the aircraft title for display, with a fallback while
 /// SimConnect hasn't delivered TITLE yet (or delivered an empty string,
 /// e.g. right after connecting or during a sim restart).
-fn format_aircraft_label(title: &str) -> String {
+fn format_aircraft_label(title: &str, t: &Strings) -> String {
     let trimmed = title.trim();
     if trimmed.is_empty() {
-        "Unknown Aircraft".to_string()
+        t.unknown_aircraft.to_string()
     } else {
         trimmed.to_string()
     }
@@ -120,6 +121,8 @@ pub struct UiState {
 
     pub rx_ui: Receiver<UiCmd>,
     pub tx_ui: Sender<UiCmd>,
+
+    pub lang: Lang,
 }
 
 impl UiState {
@@ -197,6 +200,7 @@ impl UiState {
         on_change: &mut bool,
         override_enabled: &mut bool,
         override_kn: &mut f64,
+        t: &Strings,
     ) {
         ui.horizontal(|ui| {
             let cb = ui.checkbox(enabled, "");
@@ -204,10 +208,10 @@ impl UiState {
                 *on_change = true;
             }
 
-            ui.label(RichText::new("Overspeed Effect").strong());
+            ui.label(RichText::new(t.overspeed_effect_name).strong());
 
-            let override_hint = "Задать порог Overspeed вручную вместо AIRSPEED BARBER POLE из SimConnect — полезно, если аддон не синхронизирует эту переменную с реальным прибором на панели";
-            let override_cb = ui.checkbox(override_enabled, "Override").on_hover_text(override_hint);
+            let override_hint = t.hover_override;
+            let override_cb = ui.checkbox(override_enabled, t.chk_override).on_hover_text(override_hint);
             if override_cb.changed() {
                 *on_change = true;
             }
@@ -227,8 +231,8 @@ impl UiState {
             });
 
             let limit_text = match threshold_kn {
-                Some(kn) => format!("Limit: {:.0} kts", kn),
-                None => "Limit: N/A".to_string(),
+                Some(kn) => format!("{} {:.0} kts", t.lbl_limit, kn),
+                None => t.limit_na.to_string(),
             };
             ui.add_enabled_ui(*enabled, |ui| {
                 ui.label(RichText::new(limit_text).weak());
@@ -243,9 +247,8 @@ impl UiState {
                 (Color32::from_gray(90), false)
             };
             circle_indicator_colored(ui, color, filled);
-            let status_text = if is_triggering { "ACTIVE" } else { "" };
-            if !status_text.is_empty() {
-                ui.colored_label(color, status_text);
+            if is_triggering {
+                ui.colored_label(color, t.status_active);
             }
         });
     }
@@ -253,21 +256,26 @@ impl UiState {
     /// Компактная строка с двумя чекбоксами маршрутизации эффекта на
     /// устройства: "J" (Combat Joystick R) и "T" (URSA MINOR Throttle).
     /// Рисуется сразу под соответствующей строкой эффекта (effect_row_percent/_hinted).
-    fn device_target_row(ui: &mut egui::Ui, target: &mut EffectDeviceTarget, on_change: &mut bool) {
+    fn device_target_row(
+        ui: &mut egui::Ui,
+        target: &mut EffectDeviceTarget,
+        on_change: &mut bool,
+        t: &Strings,
+    ) {
         ui.horizontal(|ui| {
             ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-            ui.label(RichText::new("Устройство:").weak().small());
+            ui.label(RichText::new(t.device_label).weak().small());
 
             let cb_j = ui
                 .checkbox(&mut target.enable_joystick, "J")
-                .on_hover_text("Combat Joystick R");
+                .on_hover_text(t.hover_joystick_hw);
             if cb_j.changed() {
                 *on_change = true;
             }
 
             let cb_t = ui
                 .checkbox(&mut target.enable_throttle, "T")
-                .on_hover_text("WINCTRL URSA MINOR Throttle (РУД)");
+                .on_hover_text(t.hover_throttle_hw);
             if cb_t.changed() {
                 *on_change = true;
             }
@@ -331,17 +339,19 @@ impl eframe::App for UiState {
         style.spacing.slider_width = 160.0;
         ctx.set_style(style);
 
+        let t = self.lang.strings();
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let st = *self.status.lock();
-                status_badge(ui, &st);
+                status_badge(ui, &st, t);
                 ui.separator();
 
                 let controller_ok = self.controller_connected.load(Ordering::Relaxed);
-                controller_badge_dot(ui, "Sidestick", controller_ok);
+                controller_badge_dot(ui, t.sidestick, controller_ok, t);
 
                 let throttle_ok = self.throttle_connected.load(Ordering::Relaxed);
-                controller_badge_dot(ui, "Throttle", throttle_ok);
+                controller_badge_dot(ui, t.throttle, throttle_ok, t);
 
                 let ac = self.aircraft_title.lock().clone();
                 ui.separator();
@@ -358,11 +368,11 @@ impl eframe::App for UiState {
                 } else {
                     Color32::WHITE
                 };
-                ui.label(RichText::new(format_aircraft_label(&ac)).italics().color(ac_color));
+                ui.label(RichText::new(format_aircraft_label(&ac, t)).italics().color(ac_color));
 
                 ui.separator();
 
-                if ui.button("⬆ Load").on_hover_text("Load").clicked() {
+                if ui.button(t.btn_load).clicked() {
                     match crate::settings::load() {
                         Some(sf) => {
                             let title = self.aircraft_title.lock().clone();
@@ -386,11 +396,11 @@ impl eframe::App for UiState {
 
                 let dirty = self.config.current_rev() != self.aircraft_profiles.lock().loaded_rev;
                 let save_label = if dirty {
-                    RichText::new("⬇ Save").color(Color32::from_rgb(230, 170, 40))
+                    RichText::new(t.btn_save).color(Color32::from_rgb(230, 170, 40))
                 } else {
-                    RichText::new("⬇ Save")
+                    RichText::new(t.btn_save)
                 };
-                if ui.button(save_label).on_hover_text("Save").clicked() {
+                if ui.button(save_label).clicked() {
                     let live = self.config.get();
                     let sanitized = self.profile_state.lock().sanitize_for_save(&live);
 
@@ -425,17 +435,15 @@ impl eframe::App for UiState {
                     self.aircraft_profiles.lock().active_match.is_some();
                 ui.add_enabled(
                     has_named_profile_active,
-                    egui::Checkbox::new(&mut self.save_as_default_too, "также Default"),
+                    egui::Checkbox::new(&mut self.save_as_default_too, t.chk_also_default),
                 )
-                .on_hover_text(
-                    "При нажатии Save текущий конфиг дополнительно запишется как default — применится ко всем самолётам без именного профиля",
-                );
+                .on_hover_text(t.hover_also_default);
 
                 #[cfg(debug_assertions)]
                 {
                     ui.separator();
-                    ui.selectable_value(&mut self.active_tab, Tab::Main, "Main");
-                    ui.selectable_value(&mut self.active_tab, Tab::Debug, "Debug");
+                    ui.selectable_value(&mut self.active_tab, Tab::Main, t.tab_main);
+                    ui.selectable_value(&mut self.active_tab, Tab::Debug, t.tab_debug);
                 }
 
                 // TODO: кнопка "Check for updates" временно скрыта из тулбара
@@ -445,16 +453,51 @@ impl eframe::App for UiState {
 
                 let holding = self.hold.load(Ordering::Relaxed);
                 if !holding {
-                    if ui.button("⛔ Stop").clicked() {
+                    let stop_button = egui::Button::new(
+                        RichText::new(t.btn_stop).color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0x6d, 0x12, 0x1b)); // #6d121b
+                    if ui.add(stop_button).clicked() {
                         self.hold.store(true, Ordering::Relaxed);
                         let _ = self.tx_hid.send(HidCmd::SetHold(true));
                         tray::notify_held(true);
                     }
-                } else if ui.button("▶ Resume").clicked() {
+                } else if ui.button(t.btn_resume).clicked() {
                     self.hold.store(false, Ordering::Relaxed);
                     let _ = self.tx_hid.send(HidCmd::SetHold(false));
                     tray::notify_held(false);
                 }
+
+                ui.separator();
+
+                // Резерв на будущее — пока не заполнены.
+                ui.menu_button(t.btn_options, |_ui| {});
+                ui.button("?").on_hover_text(t.hover_help);
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let ru_btn = ui.add(egui::SelectableLabel::new(self.lang == Lang::Ru, "RU"));
+                    let en_btn = ui.add(egui::SelectableLabel::new(self.lang == Lang::En, "EN"));
+                    let new_lang = if en_btn.clicked() {
+                        Some(Lang::En)
+                    } else if ru_btn.clicked() {
+                        Some(Lang::Ru)
+                    } else {
+                        None
+                    };
+                    if let Some(new_lang) = new_lang {
+                        if new_lang != self.lang {
+                            self.lang = new_lang;
+                            i18n::set(new_lang);
+                            tray::refresh_tooltip();
+                            let ap = self.aircraft_profiles.lock();
+                            let _ = crate::settings::save(&crate::settings::SettingsFile {
+                                default: ap.default.clone(),
+                                profiles: ap.profiles.clone(),
+                                lang: new_lang,
+                            });
+                        }
+                    }
+                });
             });
         });
 
@@ -470,15 +513,13 @@ impl eframe::App for UiState {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        egui::CollapsingHeader::new("Aircraft Profiles")
+                        egui::CollapsingHeader::new(t.heading_aircraft_profiles)
                             .default_open(false)
                             .show(ui, |ui| {
                                 let mut profiles_snapshot =
                                     self.aircraft_profiles.lock().profiles.clone();
                                 if profiles_snapshot.is_empty() {
-                                    ui.label(
-                                        "Именных профилей ещё нет — используйте кнопку рядом с названием самолёта наверху, чтобы создать первый.",
-                                    );
+                                    ui.label(t.empty_profiles_hint);
                                 }
                                 let mut rename: Option<(usize, String, String)> = None;
                                 let mut delete: Option<usize> = None;
@@ -489,7 +530,7 @@ impl eframe::App for UiState {
                                         if resp.changed() {
                                             rename = Some((i, before, p.match_substring.clone()));
                                         }
-                                        if ui.button("🗑").on_hover_text("Delete profile").clicked() {
+                                        if ui.button("🗑").on_hover_text(t.hover_delete_profile).clicked() {
                                             delete = Some(i);
                                         }
                                     });
@@ -524,7 +565,7 @@ impl eframe::App for UiState {
                             });
                         ui.add_space(4.0);
 
-                        ui.heading("Rumble Effects");
+                        ui.heading(t.heading_rumble_effects);
                         ui.add_space(4.0);
 
                         let mut _changed = false;
@@ -563,17 +604,18 @@ impl eframe::App for UiState {
                                  &mut _changed,
                                  &mut overspeed_override,
                                  &mut overspeed_manual_kn,
+                                 t,
                              );
                              cfg.overspeed_enabled = overspeed_enabled;
                              cfg.overspeed_override_enabled = overspeed_override;
                              cfg.overspeed_manual_kn = overspeed_manual_kn;
-                             UiState::device_target_row(ui, &mut cfg.device_targets.overspeed, &mut _changed);
+                             UiState::device_target_row(ui, &mut cfg.device_targets.overspeed, &mut _changed, t);
 
                              // Overspeed intensity slider - отображается как 0..100%, технический предел 255
                              ui.horizontal(|ui| {
                                  ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                 let intensity_hint = "Сила вибрации при превышении красной черты (Vmo/Mmo). Минимум 10% сразу на 1 узле превышения, дальше растёт вместе с превышением — 100% при +120 узлов";
-                                 let lbl = ui.label(RichText::new("Intensity:").strong());
+                                 let intensity_hint = t.hover_overspeed_intensity;
+                                 let lbl = ui.label(RichText::new(t.lbl_intensity).strong());
                                  lbl.on_hover_text(intensity_hint);
                                  let mut pct = (cfg.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0);
                                  let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
@@ -588,11 +630,11 @@ impl eframe::App for UiState {
                                  }
 
                                  let limit_text = match overspeed_threshold_kn {
-                                     Some(kn) => format!("Limit: {:.0} kts", kn),
-                                     None => "Limit: N/A".to_string(),
+                                     Some(kn) => format!("{} {:.0} kts", t.lbl_limit, kn),
+                                     None => t.limit_na.to_string(),
                                  };
                                  ui.label(RichText::new(limit_text).weak())
-                                     .on_hover_text("Текущая красная черта (AIRSPEED BARBER POLE / Vmo·Mmo) для этого борта на этой высоте — сим двигает её сам");
+                                     .on_hover_text(t.hover_overspeed_limit_barberpole);
                              });
 
                             ui.add_space(8.0);
@@ -601,23 +643,23 @@ impl eframe::App for UiState {
                             let mut ground_enabled = cfg.ground_enabled;
                             UiState::effect_row_percent_hinted(
                                 ui,
-                                "Ground Roll",
+                                t.name_ground_roll,
                                 &mut cfg.ground_roll,
                                 50.0,
                                 &mut ground_enabled,
                                 ground_active || ground_thump_active,
                                 &mut _changed,
-                                Some("Мягкий фоновый эффект (ниже удара сжатия стоек при касании)"),
+                                Some(t.hover_ground_roll),
                             );
                             cfg.ground_enabled = ground_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.ground_roll, &mut _changed);
+                            UiState::device_target_row(ui, &mut cfg.device_targets.ground_roll, &mut _changed, t);
 
                             ui.add_space(8.0);
 
                             // Taxi thump bounds
-                            ui.label(RichText::new("Taxi Thump Settings").heading());
+                            ui.label(RichText::new(t.heading_taxi_thump).heading());
                             ui.add_space(4.0);
-                            
+
                             {
                                 let mut start = cfg.taxi_start_kn;
                                 let mut end = cfg.taxi_end_kn;
@@ -626,13 +668,13 @@ impl eframe::App for UiState {
 
                                 UiState::taxi_bound_row(
                                     ui,
-                                    "Start (kt)",
+                                    t.name_taxi_start,
                                     &mut start,
                                     &mut start_enabled,
                                     0.0..=20.0,
                                     taxi_start_crossed,
                                     &mut _changed,
-                                    Some("Скорость, с которой начинает работать эффект стыков плит ВПП (Ground Roll thump)"),
+                                    Some(t.hover_taxi_start),
                                 );
                                 cfg.taxi_start_enabled = start_enabled;
 
@@ -642,13 +684,13 @@ impl eframe::App for UiState {
 
                                 UiState::taxi_bound_row(
                                     ui,
-                                    "End (kt)",
+                                    t.name_taxi_end,
                                     &mut end,
                                     &mut end_enabled,
                                     1.0..=250.0, // Изменили верхний порог слайдера до 250
                                     taxi_end_crossed,
                                     &mut _changed,
-                                    Some("Скорость полного эффекта: удары учащаются от Start до End, дальше частота не растёт"),
+                                    Some(t.hover_taxi_end),
                                 );
                                 cfg.taxi_end_enabled = end_enabled;
 
@@ -665,13 +707,8 @@ impl eframe::App for UiState {
                             // <1.0 = резче, чем чистая физика t=S/V; 1.0 = без коррекции.
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                let lbl = ui.label(RichText::new("Period curve:").strong());
-                                lbl.on_hover_text(
-                                    "Как быстро сокращается пауза между ударами с ростом скорости.\n\
-                                     1.0 = чистая физика (t = длина плиты / скорость).\n\
-                                     Больше 1.0 = плавнее на старте рулёжки.\n\
-                                     Меньше 1.0 = резче, чем чистая физика."
-                                );
+                                let lbl = ui.label(RichText::new(t.lbl_period_curve).strong());
+                                lbl.on_hover_text(t.hover_period_curve_full);
                                 let mut curve = cfg.thump_period_curve;
                                 let resp = ui.add(egui::Slider::new(&mut curve, 0.3..=5.0)
                                     .trailing_fill(true)
@@ -691,16 +728,16 @@ impl eframe::App for UiState {
                             let mut flaps_enabled = cfg.flaps_enabled;
                             UiState::effect_row_percent_hinted(
                                 ui,
-                                "Flaps (bump)",
+                                t.name_flaps,
                                 &mut cfg.flaps_peak,
                                 255.0,
                                 &mut flaps_enabled,
                                 self.effects.flaps_bump_active.load(Ordering::Relaxed),
                                 &mut _changed,
-                                Some("Вибрация моторчика закрылков/предкрылков во время их движения (следит за положением flaps/slats, не за ручкой)"),
+                                Some(t.hover_flaps),
                             );
                             cfg.flaps_enabled = flaps_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.flaps, &mut _changed);
+                            UiState::device_target_row(ui, &mut cfg.device_targets.flaps, &mut _changed, t);
 
                             // Gear effect — временно скрыт из UI по просьбе (пока не
                             // используется). cfg.gear_enabled=false по умолчанию
@@ -724,37 +761,37 @@ impl eframe::App for UiState {
                             let mut stall_enabled = cfg.stall_enabled;
                             UiState::effect_row_percent_hinted(
                                 ui,
-                                "Stall ceiling",
+                                t.name_stall,
                                 &mut cfg.stall_ceiling,
                                 255.0,
                                 &mut stall_enabled,
                                 self.effects.stall_active.load(Ordering::Relaxed),
                                 &mut _changed,
-                                Some("Минимальная сила вибрации во время сваливания — итог не опускается ниже этого значения (но может быть выше, если накладываются другие эффекты)"),
+                                Some(t.hover_stall),
                             );
                             cfg.stall_enabled = stall_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.stall, &mut _changed);
+                            UiState::device_target_row(ui, &mut cfg.device_targets.stall, &mut _changed, t);
 
                              // Spoilers effect
                              let mut spoilers_enabled = cfg.spoilers_enabled;
                              UiState::effect_row_percent_hinted(
                                  ui,
-                                 "Spoilers Airflow",
+                                 t.name_spoilers,
                                  &mut cfg.spoilers_intensity,
                                  250.0,
                                  &mut spoilers_enabled,
                                  self.effects.spoilers_active.load(Ordering::Relaxed),
                                  &mut _changed,
-                                 Some("Сила вибрации при симметрично выпущенных спойлерах/интерцепторах — растёт с глубиной выпуска и приборной скоростью"),
+                                 Some(t.hover_spoilers),
                              );
                              cfg.spoilers_enabled = spoilers_enabled;
-                             UiState::device_target_row(ui, &mut cfg.device_targets.spoilers, &mut _changed);
+                             UiState::device_target_row(ui, &mut cfg.device_targets.spoilers, &mut _changed, t);
 
                              // Spoilers threshold slider - диапазон 0..100%
                              ui.horizontal(|ui| {
                                  ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                 let threshold_hint = "Минимальный симметричный выпуск спойлеров (%), после которого включается эффект";
-                                 let lbl = ui.label(RichText::new("Threshold (%):").strong());
+                                 let threshold_hint = t.hover_spoilers_threshold;
+                                 let lbl = ui.label(RichText::new(t.lbl_threshold_pct).strong());
                                  lbl.on_hover_text(threshold_hint);
                                  let mut threshold = cfg.spoilers_threshold_pct as f32;
                                  let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=100.0)
@@ -771,7 +808,7 @@ impl eframe::App for UiState {
 
                              // Engine Start / Ignition effect
                              let mut engine_start_enabled = cfg.enable_engine_start;
-                             let engine_start_hint = "Раскрутка стартером + удар воспламенения (фиксированная сила, 1с) при запуске двигателя. Слайдер задаёт потолок кривой ПОСЛЕ воспламенения — от 1% (в крайнем левом положении) до 80% максимальной силы (в крайнем правом), удара воспламенения не касается";
+                             let engine_start_hint = t.hover_engine_start;
                              ui.horizontal(|ui| {
                                  let cb = ui.checkbox(&mut engine_start_enabled, "");
                                  if cb.changed() {
@@ -782,8 +819,8 @@ impl eframe::App for UiState {
                                  // включения эффекта, естественным потоком строки (без
                                  // выравнивания по правому краю).
                                  ui.add_space(8.0);
-                                 let n2_hint = "Обороты N2 (%), при которых двигатель считается вышедшим на холостые — задаёт форму кривой разгона (не громкость). У некоторых бортов подменяется автоматически профилем самолёта";
-                                 let n2_label = ui.label(RichText::new("N2 Idle%:").strong());
+                                 let n2_hint = t.hover_n2_idle;
+                                 let n2_label = ui.label(RichText::new(t.lbl_n2_idle).strong());
                                  n2_label.on_hover_text(n2_hint);
                                  let n2_resp = ui.add(
                                      egui::DragValue::new(&mut cfg.engine_idle_n2)
@@ -797,7 +834,7 @@ impl eframe::App for UiState {
 
                                  ui.add_space(8.0);
 
-                                 let name_label = ui.label(RichText::new("Engine Start / Ignition").strong());
+                                 let name_label = ui.label(RichText::new(t.name_engine_start).strong());
                                  name_label.on_hover_text(engine_start_hint);
 
                                  ui.add_enabled_ui(engine_start_enabled, |ui| {
@@ -828,16 +865,8 @@ impl eframe::App for UiState {
                              ui.horizontal(|ui| {
                                  ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
                                  if ui
-                                     .checkbox(
-                                         &mut cfg.four_engine_mode,
-                                         "4-Eng Mode (1&2->Left, 3&4->Right)",
-                                     )
-                                     .on_hover_text(
-                                         "4-моторные самолёты: Eng1/Eng2 (левое крыло) группируются \
-                                          на РУД (левая рука), Eng3/Eng4 (правое крыло) — на джойстик \
-                                          (правая рука). Используется максимум N2 в паре, удар \
-                                          воспламенения срабатывает от любого двигателя своей группы.",
-                                     )
+                                     .checkbox(&mut cfg.four_engine_mode, t.chk_four_eng_mode)
+                                     .on_hover_text(t.hover_four_eng_mode)
                                      .changed()
                                  {
                                      _changed = true;
@@ -847,18 +876,8 @@ impl eframe::App for UiState {
                              ui.horizontal(|ui| {
                                  ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
                                  if ui
-                                     .checkbox(
-                                         &mut cfg.swap_hand_layout,
-                                         "Swap hands (Joystick=Left, Throttle=Right)",
-                                     )
-                                     .on_hover_text(
-                                         "По умолчанию side-bound эффекты (engine-start до воспламенения, \
-                                          split touchdown) считают, что РУД — под левой рукой, джойстик — \
-                                          под правой. Если у вас физически джойстик стоит слева, а РУД \
-                                          справа — включите, чтобы зеркалить сторону. На то, какой мотор \
-                                          РУД (левый/правый) отвечает за Eng1/Eng2, это не влияет — это \
-                                          жёстко задано железом квадранта.",
-                                     )
+                                     .checkbox(&mut cfg.swap_hand_layout, t.chk_swap_hands)
+                                     .on_hover_text(t.hover_swap_hands)
                                      .changed()
                                  {
                                      _changed = true;
@@ -871,28 +890,20 @@ impl eframe::App for UiState {
                              // ui.add_space(8.0);
 
                             // Gear Strut Compression (Touchdown) effect
-                            ui.label(RichText::new("Gear Strut Compression (Touchdown)").heading());
+                            ui.label(RichText::new(t.heading_gear_comp).heading());
                             ui.add_space(4.0);
 
                             let mut gear_comp_enabled = cfg.gear_comp_enabled;
                             ui.horizontal(|ui| {
-                                if ui.checkbox(&mut gear_comp_enabled, "Enabled").changed() {
+                                if ui.checkbox(&mut gear_comp_enabled, t.chk_enabled).changed() {
                                     _changed = true;
                                 }
 
                                 ui.add_space(12.0);
 
                                 if ui
-                                    .checkbox(&mut cfg.split_touchdown, "SPLIT (3 стойки → 3 мотора)")
-                                    .on_hover_text(
-                                        "Three-point landing awareness: основные стойки (лево/право) \
-                                         разводятся по РАЗНЫМ рукам (РУД и джойстик), т.к. касаются почти \
-                                         одновременно — иначе слились бы в одной ладони. Носовая стойка \
-                                         (касается позже) делит руку РУД со «своей» основной стойкой на \
-                                         второй мотор, с отдельной, более резкой формой удара. Какая \
-                                         сторона на РУД, а какая на джойстик — переключается Swap Hand \
-                                         Layout. Независимо от чекбоксов маршрутизации ниже.",
-                                    )
+                                    .checkbox(&mut cfg.split_touchdown, t.chk_split_touchdown)
+                                    .on_hover_text(t.hover_split_touchdown)
                                     .changed()
                                 {
                                     _changed = true;
@@ -901,12 +912,12 @@ impl eframe::App for UiState {
                             cfg.gear_comp_enabled = gear_comp_enabled;
 
                             ui.add_enabled_ui(gear_comp_enabled, |ui| {
-                                let headroom_hint = "0% = фиксированная сила удара при любой посадке. 100% = чем жёстче посадка, тем сильнее удар";
+                                let headroom_hint = t.hover_headroom;
                                 // Nose
                                 let mut nose_enabled = cfg.gear_comp_nose_enabled;
                                 UiState::effect_row_percent_hinted(
                                     ui,
-                                    "Nose Peak",
+                                    t.name_nose_peak,
                                     &mut cfg.gear_comp_nose_peak,
                                     55.0,
                                     &mut nose_enabled,
@@ -915,13 +926,13 @@ impl eframe::App for UiState {
                                     Some(headroom_hint),
                                 );
                                 cfg.gear_comp_nose_enabled = nose_enabled;
-                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_nose, &mut _changed);
+                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_nose, &mut _changed, t);
 
                                 // Left
                                 let mut left_enabled = cfg.gear_comp_left_enabled;
                                 UiState::effect_row_percent_hinted(
                                     ui,
-                                    "Left Peak",
+                                    t.name_left_peak,
                                     &mut cfg.gear_comp_left_peak,
                                     55.0,
                                     &mut left_enabled,
@@ -930,13 +941,13 @@ impl eframe::App for UiState {
                                     Some(headroom_hint),
                                 );
                                 cfg.gear_comp_left_enabled = left_enabled;
-                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_left, &mut _changed);
+                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_left, &mut _changed, t);
 
                                 // Right
                                 let mut right_enabled = cfg.gear_comp_right_enabled;
                                 UiState::effect_row_percent_hinted(
                                     ui,
-                                    "Right Peak",
+                                    t.name_right_peak,
                                     &mut cfg.gear_comp_right_peak,
                                     55.0,
                                     &mut right_enabled,
@@ -945,7 +956,7 @@ impl eframe::App for UiState {
                                     Some(headroom_hint),
                                 );
                                 cfg.gear_comp_right_enabled = right_enabled;
-                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_right, &mut _changed);
+                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_right, &mut _changed, t);
                             });
 
                             ui.add_space(8.0);
@@ -958,7 +969,7 @@ impl eframe::App for UiState {
                                     _changed = true;
                                 }
                                 cfg.gear_transit_enabled = gear_transit_enabled;
-                                ui.label(RichText::new("Gear Transit & Doors").strong());
+                                ui.label(RichText::new(t.lbl_gear_transit).strong());
 
                                 let active = self.effects.gear_transit_active.load(Ordering::Relaxed);
                                 let (color, filled) = if active && gear_transit_enabled {
@@ -968,7 +979,7 @@ impl eframe::App for UiState {
                                 };
                                 circle_indicator_colored(ui, color, filled);
                             });
-                            UiState::device_target_row(ui, &mut cfg.device_targets.gear_transit, &mut _changed);
+                            UiState::device_target_row(ui, &mut cfg.device_targets.gear_transit, &mut _changed, t);
 
                             ui.add_space(8.0);
 
@@ -979,9 +990,9 @@ impl eframe::App for UiState {
                                 if cb.changed() {
                                     _changed = true;
                                 }
-                                
-                                ui.label(RichText::new("Bank / Turb").strong());
-                                
+
+                                ui.label(RichText::new(t.lbl_bank_turb).strong());
+
                                 let active = self.effects.bank_active.load(Ordering::Relaxed);
                                 let (color, filled) = if active && bank_enabled {
                                     (Color32::WHITE, true)
@@ -991,13 +1002,13 @@ impl eframe::App for UiState {
                                 circle_indicator_colored(ui, color, filled);
                             });
                             cfg.bank_enabled = bank_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.bank, &mut _changed);
+                            UiState::device_target_row(ui, &mut cfg.device_targets.bank, &mut _changed, t);
 
                             // Bank intensity slider - отображается как 0..100%, технический предел 200
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                let intensity_hint = "Сила вибрации при превышении порога крена (Threshold ниже). Импульсы учащаются, чем больше угол превышает порог";
-                                let lbl = ui.label(RichText::new("Intensity:").strong());
+                                let intensity_hint = t.hover_bank_intensity;
+                                let lbl = ui.label(RichText::new(t.lbl_intensity).strong());
                                 lbl.on_hover_text(intensity_hint);
                                 let mut pct = (cfg.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0);
                                 let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
@@ -1016,8 +1027,8 @@ impl eframe::App for UiState {
                             // Bank threshold slider - диапазон 0..90°
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                let threshold_hint = "Угол крена (°), после которого включается эффект Bank/Turb";
-                                let lbl = ui.label(RichText::new("Threshold (°):").strong());
+                                let threshold_hint = t.hover_bank_threshold;
+                                let lbl = ui.label(RichText::new(t.lbl_threshold_deg).strong());
                                 lbl.on_hover_text(threshold_hint);
                                 let mut threshold = cfg.bank_threshold_deg;
                                 let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=90.0)
@@ -1039,7 +1050,7 @@ impl eframe::App for UiState {
                         ui.add_space(8.0);
                         let mut telemetry_expanded = self.config.get().telemetry_expanded;
                         ui.horizontal(|ui| {
-                            if ui.button("Reset to defaults").clicked() {
+                            if ui.button(t.btn_reset_defaults).clicked() {
                                 // Только сбрасывает ЖИВОЙ конфиг — на диск ничего не пишет,
                                 // как и любое другое изменение. Нажмите Save (дискета в
                                 // верхней панели), чтобы зафиксировать сброс.
@@ -1047,7 +1058,7 @@ impl eframe::App for UiState {
                                 telemetry_expanded = true;
                             }
 
-                            let toggle_label = if telemetry_expanded { "Hide Telemetry" } else { "Show Telemetry" };
+                            let toggle_label = if telemetry_expanded { t.btn_hide_telemetry } else { t.btn_show_telemetry };
                             if ui.button(toggle_label).clicked() {
                                 telemetry_expanded = !telemetry_expanded;
                                 self.config.with_mut(|cfg| cfg.telemetry_expanded = telemetry_expanded);
@@ -1060,7 +1071,7 @@ if telemetry_expanded {
 ui.columns(2, |columns| {
     // --- Левая колонка: общая телеметрия борта ---
     let ui = &mut columns[0];
-    ui.heading("Live Aircraft Data");
+    ui.heading(t.heading_live_aircraft_data);
 
     egui::Grid::new("aircraft_data")
         .num_columns(2)
@@ -1069,86 +1080,86 @@ ui.columns(2, |columns| {
             let v = *self.last_vars.lock();
             match v {
                 Some(v) => {
-                    ui.label("Airspeed (kt):");
+                    ui.label(t.lbl_airspeed);
                     ui.label(format!("{:.1}", v.airspeed_indicated));
                     ui.end_row();
 
-                    ui.label("Barber Pole (kt):");
+                    ui.label(t.lbl_barber_pole);
                     if v.overspeed_barber_pole_kn > 0.0 {
                         ui.label(format!("{:.1}", v.overspeed_barber_pole_kn));
                     } else {
-                        ui.label("N/A");
+                        ui.label(t.val_na);
                     }
                     ui.end_row();
 
-                    ui.label("Overspeed Warning:");
+                    ui.label(t.lbl_overspeed_warning);
                     ui.label(v.overspeed_warning.to_string());
                     ui.end_row();
 
-                    ui.label("Lear Horn (XMLSND75):");
+                    ui.label(t.lbl_lear_horn);
                     ui.label(v.overspeed_lear_horn.to_string());
                     ui.end_row();
 
-                    ui.label("GS (kt):");
+                    ui.label(t.lbl_gs);
                     ui.label(format!("{:.1}", v.ground_speed_kt));
                     ui.end_row();
 
-                    ui.label("On Ground:");
+                    ui.label(t.lbl_on_ground);
                     ui.label(v.on_ground.to_string());
                     ui.end_row();
 
-                    ui.label("Bank (°):");
+                    ui.label(t.lbl_bank_deg);
                     ui.label(format!("{:.1}", v.bank_deg));
                     ui.end_row();
 
-                    ui.label("Flaps (%):");
+                    ui.label(t.lbl_flaps_pct);
                     ui.label(format!("{:.0}", v.flaps_pct));
                     ui.end_row();
 
-                    ui.label("Slats (%):");
+                    ui.label(t.lbl_slats_pct);
                     ui.label(format!("{:.0}", v.slats_pct));
                     ui.end_row();
 
-                    ui.label("Gear:");
-                    ui.label(if v.gear_handle > 0.5 { "Down" } else { "Up" });
+                    ui.label(t.lbl_gear);
+                    ui.label(if v.gear_handle > 0.5 { t.val_down } else { t.val_up });
                     ui.end_row();
 
-                    ui.label("Spoilers (%):");
+                    ui.label(t.lbl_spoilers_pct);
                     ui.label(format!("{:.0}", v.spoilers_pct));
                     ui.end_row();
 
-                    ui.label("Spoiler L (%):");
+                    ui.label(t.lbl_spoiler_l);
                     ui.label(format!("{:.0}", v.spoilers_left_pct));
                     ui.end_row();
 
-                    ui.label("Spoiler R (%):");
+                    ui.label(t.lbl_spoiler_r);
                     ui.label(format!("{:.0}", v.spoilers_right_pct));
                     ui.end_row();
 
                     // --- ДОБАВЛЕНА ТЕЛЕМЕТРИЯ ОБЖАТИЯ СТОЕК ШАССИ ---
-                    ui.label("Nose Gear (%):");
+                    ui.label(t.lbl_nose_gear);
                     ui.label(format!("{:.1}", v.gear_comp_nose));
                     ui.end_row();
 
-                    ui.label("Left Main (%):");
+                    ui.label(t.lbl_left_main);
                     ui.label(format!("{:.1}", v.gear_comp_left));
                     ui.end_row();
 
-                    ui.label("Right Main (%):");
+                    ui.label(t.lbl_right_main);
                     ui.label(format!("{:.1}", v.gear_comp_right));
                     ui.end_row();
                     // ------------------------------------------------
 
-                    ui.label("Stall:");
+                    ui.label(t.lbl_stall);
                     ui.label(v.stalled.to_string());
                     ui.end_row();
 
-                    ui.label("Paused:");
+                    ui.label(t.lbl_paused);
                     ui.label(v.paused.to_string());
                     ui.end_row();
                 }
                 None => {
-                    ui.label("No data");
+                    ui.label(t.lbl_no_data);
                     ui.label("");
                     ui.end_row();
                 }
@@ -1157,7 +1168,7 @@ ui.columns(2, |columns| {
 
     // --- Правая колонка: телеметрия двигателей ---
     let ui = &mut columns[1];
-    ui.heading("Engine Telemetry");
+    ui.heading(t.heading_engine_telemetry);
     ui.add_space(4.0);
 
     egui::Grid::new("engine_telemetry")
@@ -1169,128 +1180,128 @@ ui.columns(2, |columns| {
                 Some(v) => {
                     let combustion_label = |ui: &mut egui::Ui, active: bool| {
                         if active {
-                            ui.colored_label(Color32::from_rgb(30, 180, 90), "ON");
+                            ui.colored_label(Color32::from_rgb(30, 180, 90), t.val_on);
                         } else {
-                            ui.colored_label(Color32::from_gray(140), "OFF");
+                            ui.colored_label(Color32::from_gray(140), t.val_off);
                         }
                     };
 
-                    ui.label(RichText::new("Engine 1 (Left / Throttle)").strong());
+                    ui.label(RichText::new(t.eng1_header).strong());
                     ui.label("");
                     ui.end_row();
 
-                    ui.label("N2:");
+                    ui.label(t.lbl_n2);
                     ui.label(format!("{:.1}%", v.eng1_n2_percent));
                     ui.end_row();
 
-                    ui.label("Combustion:");
+                    ui.label(t.lbl_combustion);
                     combustion_label(ui, v.eng1_combustion > 0.5);
                     ui.end_row();
 
                     // PMDG 737 (NG3): L:EngineStart1b_Ext используется в
                     // rumble.rs для pre-spool разгона, здесь — для сверки.
-                    ui.label("Starter Active:");
+                    ui.label(t.lbl_starter_active);
                     combustion_label(ui, v.eng1_starter_active);
                     ui.end_row();
 
-                    ui.label("PMDG Starter L-Var:");
+                    ui.label(t.lbl_pmdg_starter_lvar);
                     combustion_label(ui, v.eng1_pmdg_starter_ext);
                     ui.end_row();
 
-                    ui.label("% Max RPM:");
+                    ui.label(t.lbl_pct_max_rpm);
                     ui.label(format!("{:.1}%", v.eng1_pct_max_rpm));
                     ui.end_row();
 
-                    ui.label("Engine RPM:");
+                    ui.label(t.lbl_engine_rpm);
                     ui.label(format!("{:.0}", v.eng1_rpm));
                     ui.end_row();
 
-                    ui.label("Prop RPM:");
+                    ui.label(t.lbl_prop_rpm);
                     ui.label(format!("{:.0}", v.prop1_rpm));
                     ui.end_row();
 
-                    ui.label(RichText::new("Engine 2 (Right / Joystick)").strong());
+                    ui.label(RichText::new(t.eng2_header).strong());
                     ui.label("");
                     ui.end_row();
 
-                    ui.label("N2:");
+                    ui.label(t.lbl_n2);
                     ui.label(format!("{:.1}%", v.eng2_n2_percent));
                     ui.end_row();
 
-                    ui.label("Combustion:");
+                    ui.label(t.lbl_combustion);
                     combustion_label(ui, v.eng2_combustion > 0.5);
                     ui.end_row();
 
-                    ui.label("Starter Active:");
+                    ui.label(t.lbl_starter_active);
                     combustion_label(ui, v.eng2_starter_active);
                     ui.end_row();
 
-                    ui.label("PMDG Starter L-Var:");
+                    ui.label(t.lbl_pmdg_starter_lvar);
                     combustion_label(ui, v.eng2_pmdg_starter_ext);
                     ui.end_row();
 
-                    ui.label("% Max RPM:");
+                    ui.label(t.lbl_pct_max_rpm);
                     ui.label(format!("{:.1}%", v.eng2_pct_max_rpm));
                     ui.end_row();
 
-                    ui.label("Engine RPM:");
+                    ui.label(t.lbl_engine_rpm);
                     ui.label(format!("{:.0}", v.eng2_rpm));
                     ui.end_row();
 
-                    ui.label("Prop RPM:");
+                    ui.label(t.lbl_prop_rpm);
                     ui.label(format!("{:.0}", v.prop2_rpm));
                     ui.end_row();
 
-                    ui.label(RichText::new("Engine 3 (4-Eng: contributes to Left)").strong());
+                    ui.label(RichText::new(t.eng3_header).strong());
                     ui.label("");
                     ui.end_row();
 
-                    ui.label("N2:");
+                    ui.label(t.lbl_n2);
                     ui.label(format!("{:.1}%", v.eng3_n2_percent));
                     ui.end_row();
 
-                    ui.label("Combustion:");
+                    ui.label(t.lbl_combustion);
                     combustion_label(ui, v.eng3_combustion > 0.5);
                     ui.end_row();
 
-                    ui.label("% Max RPM:");
+                    ui.label(t.lbl_pct_max_rpm);
                     ui.label(format!("{:.1}%", v.eng3_pct_max_rpm));
                     ui.end_row();
 
-                    ui.label("Engine RPM:");
+                    ui.label(t.lbl_engine_rpm);
                     ui.label(format!("{:.0}", v.eng3_rpm));
                     ui.end_row();
 
-                    ui.label("Prop RPM:");
+                    ui.label(t.lbl_prop_rpm);
                     ui.label(format!("{:.0}", v.prop3_rpm));
                     ui.end_row();
 
-                    ui.label(RichText::new("Engine 4 (4-Eng: contributes to Right)").strong());
+                    ui.label(RichText::new(t.eng4_header).strong());
                     ui.label("");
                     ui.end_row();
 
-                    ui.label("N2:");
+                    ui.label(t.lbl_n2);
                     ui.label(format!("{:.1}%", v.eng4_n2_percent));
                     ui.end_row();
 
-                    ui.label("Combustion:");
+                    ui.label(t.lbl_combustion);
                     combustion_label(ui, v.eng4_combustion > 0.5);
                     ui.end_row();
 
-                    ui.label("% Max RPM:");
+                    ui.label(t.lbl_pct_max_rpm);
                     ui.label(format!("{:.1}%", v.eng4_pct_max_rpm));
                     ui.end_row();
 
-                    ui.label("Engine RPM:");
+                    ui.label(t.lbl_engine_rpm);
                     ui.label(format!("{:.0}", v.eng4_rpm));
                     ui.end_row();
 
-                    ui.label("Prop RPM:");
+                    ui.label(t.lbl_prop_rpm);
                     ui.label(format!("{:.0}", v.prop4_rpm));
                     ui.end_row();
                 }
                 None => {
-                    ui.label("No data");
+                    ui.label(t.lbl_no_data);
                     ui.label("");
                     ui.end_row();
                 }
@@ -1306,9 +1317,9 @@ ui.columns(2, |columns| {
         if show_debug {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading("Logs");
+                    ui.heading(t.heading_logs);
                     ui.separator();
-                    ui.checkbox(&mut self.autoscroll, "Auto-scroll");
+                    ui.checkbox(&mut self.autoscroll, t.chk_autoscroll);
                 });
                 ui.separator();
 

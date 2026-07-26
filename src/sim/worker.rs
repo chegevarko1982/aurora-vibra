@@ -181,7 +181,7 @@ const EMBED_SIMCONNECT_BYTES: &[u8] =
 
 fn try_load_embedded_simconnect(logs: &LogBuffer) -> Result<Library> {
     let mut dst = std::env::temp_dir();
-    dst.push("ursa-simconnect-embedded-64.dll");
+    dst.push("aurora-simconnect-embedded-64.dll");
 
     logs.push(format!(
         "SimConnect: writing embedded DLL to {}",
@@ -278,7 +278,7 @@ pub fn sim_worker(
     unsafe {
         loop {
             let mut h_sc: Handle = std::ptr::null_mut();
-            let name = std::ffi::CString::new("UrsaMinorFFB").unwrap();
+            let name = std::ffi::CString::new("AuroraVibra").unwrap();
             let hr = (fns.open)(
                 &mut h_sc,
                 name.as_ptr(),

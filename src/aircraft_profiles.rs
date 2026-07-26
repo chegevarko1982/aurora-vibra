@@ -111,5 +111,6 @@ pub fn save_active(
     settings::save(&settings::SettingsFile {
         default: ap.default.clone(),
         profiles: ap.profiles.clone(),
+        lang: crate::i18n::get(),
     })
 }

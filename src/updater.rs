@@ -20,8 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, IDOK, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, SW_SHOWNORMAL,
 };
 
-const LATEST_API: &str = "https://api.github.com/repos/rtroncoso/ursa-minor-ffb/releases/latest";
-const UA: &str = "UrsaMinorFFB-Updater (+https://github.com/rtroncoso/ursa-minor-ffb)";
+const LATEST_API: &str = "https://api.github.com/repos/chegevarko1982/aurora-vibra/releases/latest";
+const UA: &str = "AuroraVibra-Updater (+https://github.com/chegevarko1982/aurora-vibra)";
 
 /// Call this **at the very start of `main()`**. If the process was started in
 /// helper mode it will perform the update and then relaunch the app.
@@ -47,7 +47,7 @@ pub fn early_self_update_hook() -> bool {
                 elevated,
             ) {
                 // Last-chance message box (no parent HWND here)
-                msgbox_raw("Update failed", &format!("{e:#}"), true);
+                msgbox_raw(crate::i18n::get().strings().upd_title_update_failed, &format!("{e:#}"), true);
             }
             return true;
         }
@@ -60,7 +60,8 @@ pub fn spawn_check(hwnd_parent: HWND, current_version: &str) {
     let current = current_version.to_string();
     thread::spawn(move || {
         if let Err(e) = check_install_and_restart(hwnd_parent, &current) {
-            msgbox(hwnd_parent, "Update check failed", &format!("{e:#}"), true);
+            let t = crate::i18n::get().strings();
+            msgbox(hwnd_parent, t.upd_title_update_check_failed, &format!("{e:#}"), true);
         }
     });
 }
@@ -71,21 +72,21 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
     let new_ver = tag.trim_start_matches('v');
     let cur_ver = current_version.trim_start_matches('v');
 
+    let lang = crate::i18n::get();
+    let t = lang.strings();
+
     if !is_newer(new_ver, cur_ver) {
         msgbox(
             hwnd,
-            "Up to date",
-            &format!("You are running the latest version ({}).", current_version),
+            t.upd_title_up_to_date,
+            &crate::i18n::upd_body_up_to_date(lang, current_version),
             false,
         );
         return Ok(());
     }
 
-    let text = format!(
-        "A new version is available.\n\nCurrent: {}\nLatest:  {}\n\nRelease: {}\n\nInstall now? The app will restart.",
-        current_version, new_ver, name
-    );
-    if !confirm(hwnd, "Update available", &text) {
+    let text = crate::i18n::upd_body_update_available(lang, current_version, new_ver, &name);
+    if !confirm(hwnd, t.upd_title_update_available, &text) {
         return Ok(());
     }
 
@@ -195,7 +196,7 @@ fn download_asset(url: &str, asset_name: &str) -> Result<PathBuf> {
     }
 
     let mut out = std::env::temp_dir();
-    out.push(format!("ursa-minor-ffb-{}", asset_name));
+    out.push(format!("aurora-vibra-{}", asset_name));
     let mut f = File::create(&out)?;
     io::copy(&mut resp, &mut f)?;
     Ok(out)
@@ -206,7 +207,7 @@ fn extract_zip(zip_path: &Path) -> Result<PathBuf> {
     let mut zip = ZipArchive::new(file)?;
     let mut out_dir = std::env::temp_dir();
     out_dir.push(format!(
-        "ursa-minor-ffb-extract-{}",
+        "aurora-vibra-extract-{}",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
     create_dir_all(&out_dir)?;
@@ -241,7 +242,7 @@ fn find_new_exe_name(extracted_dir: &Path) -> Result<PathBuf> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_ascii_lowercase()
-                .contains("ursa")
+                .contains("aurora")
         })
         .ok_or_else(|| anyhow::anyhow!("No .exe found in extracted package"))?;
     Ok(exe.file_name().unwrap().into())
@@ -249,7 +250,7 @@ fn find_new_exe_name(extracted_dir: &Path) -> Result<PathBuf> {
 
 fn copy_self_to_temp_helper(current_exe: &Path) -> Result<PathBuf> {
     let mut helper = std::env::temp_dir();
-    helper.push("ursa-minor-updater-helper.exe");
+    helper.push("aurora-vibra-updater-helper.exe");
     fs::copy(current_exe, &helper).context("copy helper")?;
     Ok(helper)
 }
@@ -272,12 +273,10 @@ fn launch_helper_and_exit(
 
     let _ = cmd.spawn().context("spawn helper")?;
 
-    msgbox(
-        HWND(0),
-        "Updating",
-        "The application will now close to apply the update. It will relaunch automatically.",
-        false,
-    );
+    {
+        let t = crate::i18n::get().strings();
+        msgbox(HWND(0), t.upd_title_updating, t.upd_body_updating, false);
+    }
 
     thread::sleep(Duration::from_millis(200));
     std::process::exit(0);
@@ -327,9 +326,10 @@ fn apply_update(
             SW_SHOWNORMAL,
         );
         if (hinst.0 as isize) <= 32 {
+            let lang = crate::i18n::get();
             msgbox_raw(
-                "Launch failed",
-                &format!("Could not start:\n{}", target.display()),
+                lang.strings().upd_title_launch_failed,
+                &crate::i18n::upd_body_launch_failed(lang, &target.display().to_string()),
                 true,
             );
         }
@@ -339,7 +339,7 @@ fn apply_update(
 }
 
 fn can_write_dir(dir: &Path) -> io::Result<bool> {
-    let probe = dir.join(".__ursa_write_test.tmp");
+    let probe = dir.join(".__aurora_write_test.tmp");
     match File::create(&probe) {
         Ok(_) => {
             let _ = fs::remove_file(&probe);
@@ -374,12 +374,8 @@ fn relaunch_self_elevated(
             SW_SHOWNORMAL,
         );
         if (h.0 as isize) <= 32 {
-            msgbox_raw(
-                "Administrator permission required",
-                "The app is installed in a protected folder (e.g., Program Files).\n\
-                    To update, click Yes on the elevation prompt, or move the app to a writable folder (e.g., Documents) and try again.",
-                true,
-            );
+            let t = crate::i18n::get().strings();
+            msgbox_raw(t.upd_title_admin_required, t.upd_body_admin_required, true);
             bail!("User denied elevation or ShellExecuteW(runas) failed");
         }
     }
