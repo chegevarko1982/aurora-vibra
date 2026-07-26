@@ -66,6 +66,12 @@ cargo build --release --bin aurora-vibra --features app
 
 Special thanks to [Rodrigo Troncoso](https://github.com/rtroncoso) for creating the original base repository ([ursa-minor-ffb](https://github.com/rtroncoso/ursa-minor-ffb)), its foundational architecture, and the open-source codebase that made this extended and enhanced utility possible.
 
+## ☕ Support the Project
+
+If Aurora Vibra improved your sim setup, consider supporting further development:
+
+**BTC:** `bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5`
+
 ## 📜 License
 
 Distributed under the [MIT License](LICENSE).
