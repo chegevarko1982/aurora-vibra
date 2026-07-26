@@ -88,6 +88,13 @@ pub fn parse_main_elems(
         // L:XMLSND75 — клаксон "overspeed / mach trim" на Learjet 35A
         // (Flysimware); на прочих самолётах L-var не определён, читается 0.0.
         overspeed_lear_horn: elem.get(54).copied().unwrap_or(0.0) != 0.0,
+        // PMDG 737 (NG3): L:EngineStart1b/2b_Ext, см. sim/worker.rs (индексы
+        // 55-58) и rumble.rs (pre-spool разгон). На прочих самолётах L-var'ы
+        // не определены, читается 0.0/false (самонейтрализуется).
+        eng1_pmdg_starter_ext: elem.get(55).copied().unwrap_or(0.0) != 0.0,
+        eng2_pmdg_starter_ext: elem.get(56).copied().unwrap_or(0.0) != 0.0,
+        eng1_starter_active: elem.get(57).copied().unwrap_or(0.0) != 0.0,
+        eng2_starter_active: elem.get(58).copied().unwrap_or(0.0) != 0.0,
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);
@@ -304,5 +311,28 @@ fn sample_elems() -> [f64; 53] {
         e[1] = 0.0;
         let fv = parse_main_elems(&e, false, 1.0);
         assert_eq!(flight_status(&fv), SimStatus::Connected);
+    }
+
+    #[test]
+    fn pmdg_diagnostic_lvars_default_to_false_on_other_aircraft() {
+        let fv = parse_main_elems(&sample_elems(), false, 1.0);
+        assert!(!fv.eng1_pmdg_starter_ext);
+        assert!(!fv.eng2_pmdg_starter_ext);
+        assert!(!fv.eng1_starter_active);
+        assert!(!fv.eng2_starter_active);
+    }
+
+    #[test]
+    fn pmdg_diagnostic_lvars_parsed_from_indices_55_to_58() {
+        let mut e = [0.0; 59];
+        e[55] = 1.0; // L:EngineStart1b_Ext
+        e[56] = 1.0; // L:EngineStart2b_Ext
+        e[57] = 1.0; // GENERAL ENG STARTER ACTIVE:1
+        e[58] = 1.0; // GENERAL ENG STARTER ACTIVE:2
+        let fv = parse_main_elems(&e, false, 1.0);
+        assert!(fv.eng1_pmdg_starter_ext);
+        assert!(fv.eng2_pmdg_starter_ext);
+        assert!(fv.eng1_starter_active);
+        assert!(fv.eng2_starter_active);
     }
 }

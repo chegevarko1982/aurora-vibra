@@ -345,9 +345,12 @@ impl eframe::App for UiState {
 
                 let ac = self.aircraft_title.lock().clone();
                 ui.separator();
-                // Голубой цвет = для этого борта есть встроенный профиль с
-                // кастомной логикой эффектов (см. src/profiles.rs, MADDOG/LEARJET/...).
-                let ac_color = if crate::profiles::has_built_in_profile(&ac) {
+                // Голубой цвет = для этого борта есть кастомная логика эффектов —
+                // либо встроенный профиль (см. src/profiles.rs, MADDOG/LEARJET/...),
+                // либо PMDG (pre-spool разгон по L:EngineStart1b/2b_Ext, см. rumble.rs).
+                let ac_color = if crate::profiles::has_built_in_profile(&ac)
+                    || crate::profiles::is_pmdg_aircraft(&ac)
+                {
                     Color32::from_rgb(70, 160, 255)
                 } else {
                     Color32::WHITE
@@ -1192,6 +1195,16 @@ ui.columns(2, |columns| {
                     combustion_label(ui, v.eng1_combustion > 0.5);
                     ui.end_row();
 
+                    // PMDG 737 (NG3): L:EngineStart1b_Ext используется в
+                    // rumble.rs для pre-spool разгона, здесь — для сверки.
+                    ui.label("Starter Active:");
+                    combustion_label(ui, v.eng1_starter_active);
+                    ui.end_row();
+
+                    ui.label("PMDG Starter L-Var:");
+                    combustion_label(ui, v.eng1_pmdg_starter_ext);
+                    ui.end_row();
+
                     ui.label("% Max RPM:");
                     ui.label(format!("{:.1}%", v.eng1_pct_max_rpm));
                     ui.end_row();
@@ -1214,6 +1227,14 @@ ui.columns(2, |columns| {
 
                     ui.label("Combustion:");
                     combustion_label(ui, v.eng2_combustion > 0.5);
+                    ui.end_row();
+
+                    ui.label("Starter Active:");
+                    combustion_label(ui, v.eng2_starter_active);
+                    ui.end_row();
+
+                    ui.label("PMDG Starter L-Var:");
+                    combustion_label(ui, v.eng2_pmdg_starter_ext);
                     ui.end_row();
 
                     ui.label("% Max RPM:");

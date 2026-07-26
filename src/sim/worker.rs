@@ -448,6 +448,26 @@ pub fn sim_worker(
                 // 0.0 (самонейтрализуется, тот же паттерн, что у
                 // L:MD11_EXT_*_SPOILER_* выше). Индекс 54.
                 ("L:XMLSND75", "Bool"),
+                // PMDG 737 (NG3, MSFS): L:EngineStart1b/2b_Ext — true, пока стартер
+                // крутит двигатель до воспламенения (взято из sound.xml самого PMDG).
+                // Подтверждено тестом в симе, что это надёжный сигнал — используется в
+                // rumble.rs как маркер воспламенения (момент, когда real TURB ENG N2
+                // впервые > 0) и для более раннего распознавания борта как джета; сама
+                // N2-кривая раскрутки идёт напрямую по real TURB ENG N2 (см. rumble.rs —
+                // реальный захват телеметрии показал, что N2 у PMDG растёт плавно с
+                // момента включения стартера, а не держится на 0 до воспламенения).
+                // L:EngineStart1c/2c_Ext (отдельный "маркер воспламенения") ПРОВЕРЕН и
+                // ОТКЛОНЁН — не сработал корректно в реальном тесте, поэтому вместо
+                // него как маркер воспламенения используется момент, когда сам
+                // TURB ENG N2 становится > 0 (см. rumble.rs). На остальных самолётах
+                // L:EngineStart1b/2b_Ext не определены, SimConnect отдаёт false
+                // (самонейтрализуется). Индексы 55/56.
+                ("L:EngineStart1b_Ext", "Bool"),
+                ("L:EngineStart2b_Ext", "Bool"),
+                // GENERAL ENG STARTER ACTIVE:1/2 — пока только для телеметрии
+                // (сравнение с L:EngineStart1b/2b_Ext). Индексы 57/58.
+                ("GENERAL ENG STARTER ACTIVE:1", "Bool"),
+                ("GENERAL ENG STARTER ACTIVE:2", "Bool"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -750,18 +770,22 @@ pub fn sim_worker(
                                 // для сравнения в телеметрии с нашим порогом.
                                 // L:XMLSND75 (54) — клаксон "overspeed / mach trim"
                                 // на Learjet 35A (Flysimware), см. profiles.rs.
+                                // PMDG 737 (NG3), см. defs выше: L:EngineStart1b/2b_Ext
+                                // (55/56) — используется в rumble.rs для pre-spool
+                                // разгона; GENERAL ENG STARTER ACTIVE:1/2 (57/58) —
+                                // пока только для телеметрии.
                                 //
                                 // ВНИМАНИЕ: длина elem[] и clamp count.min(..) ниже
                                 // должны покрывать ВСЕ зарегистрированные индексы
-                                // (0..=54, т.е. 55 элементов) — раньше здесь стоял
+                                // (0..=58, т.е. 59 элементов) — раньше здесь стоял
                                 // count.min(53), из-за чего индекс 53 (OVERSPEED
                                 // WARNING) никогда не копировался из живых данных
                                 // SimConnect и оставался равен 0.0/false.
-                                let mut elem = [0f64; 55];
+                                let mut elem = [0f64; 59];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(55),
+                                        count.min(59),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -769,7 +793,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(55),
+                                        count.min(59),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

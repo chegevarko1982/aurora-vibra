@@ -83,6 +83,26 @@ pub struct RumbleState {
     eng2_kick_started_at: Option<Instant>,
     eng3_kick_started_at: Option<Instant>,
     eng4_kick_started_at: Option<Instant>,
+    // PMDG (737/777) pre-spool tracking: L:EngineStart1b/2b_Ext сигнализирует,
+    // что стартер крутит двигатель. РЕАЛЬНЫЙ ЗАХВАТ ТЕЛЕМЕТРИИ (engine_start_probe,
+    // PMDG 737 NG3, MSFS2024) показал, что предыдущее предположение "TURB ENG N2
+    // держится на 0 пока крутит стартер" БОЛЬШЕ НЕ ВЕРНО: N2 плавно и непрерывно
+    // растёт с самого момента включения стартера (0% -> 15% за ~5с до
+    // воспламенения, без единой паузы на нуле) — то есть обычная N2-кривая
+    // (engine_spool_term) уже сама по себе даёт корректную вибрацию раскрутки, и
+    // синтетическая рампа больше не нужна (раньше дублировала уже живую кривую).
+    // started_at/ignition_locked по-прежнему нужны — но только чтобы (а) пометить
+    // борт джетом на 1-2 кадра раньше, чем real_n2 перевалит дэдзону 1.0, и
+    // (б) триггерить 500-мс удар воспламенения по нашему маркеру вместо
+    // стандартного фронта GENERAL ENG COMBUSTION (см. использование ниже).
+    // На aircraft без этих L-vars (не PMDG) поле starter_ext всегда false
+    // (самонейтрализуется), и вся логика становится no-op.
+    pmdg_eng1_starter_started_at: Option<Instant>,
+    pmdg_eng2_starter_started_at: Option<Instant>,
+    pmdg_eng1_prev_starter_ext: bool,
+    pmdg_eng2_prev_starter_ext: bool,
+    pmdg_eng1_ignition_locked: bool,
+    pmdg_eng2_ignition_locked: bool,
     // PISTON Engine Start tracking (Starter + Combustion boolean model) —
     // используется ТОЛЬКО в ветке is_jet == false. Каждый двигатель
     // отслеживается независимо, как и в джет-модели выше.
@@ -93,6 +113,65 @@ pub struct RumbleState {
     // полностью затухает (fade-out).
     piston_prev_combusting: [bool; 4],
     piston_combustion_timer: [f64; 4],
+}
+
+// Таймаут неудавшейся попытки запуска PMDG (стартер выключился, но
+// воспламенение так и не случилось) — см. использование в pmdg_track_start.
+// Раньше делил это значение с длительностью синтетической prespool-рампы
+// (удалена — реальный N2 уже сам даёт корректную кривую, см. комментарий у
+// pmdg_eng1/2_starter_started_at в RumbleState выше), сейчас это просто
+// запас времени на "дать шанс воспламениться, прежде чем сдаться".
+const PMDG_PRESPOOL_RAMP_SECS: f64 = 10.0;
+// Доп. окно ожидания ПОСЛЕ того, как L:EngineStart1b/2b_Ext уже выключился,
+// но воспламенение (real_n2 > 0) ещё не случилось — см. комментарий у
+// вызова ниже про гонку между этим L-var и появлением реального N2.
+const PMDG_PRESPOOL_ABORT_GRACE_SECS: f64 = 5.0;
+
+/// Отслеживает состояние запуска ОДНОГО двигателя PMDG по L:EngineStart1b/2b_Ext
+/// (см. комментарий у полей pmdg_eng1/2_* в RumbleState) и сообщает, случился
+/// ли ИМЕННО в этом кадре маркер воспламенения (реальный N2 впервые стал > 0,
+/// пока мы следили за прокруткой стартером). На бортах без этого L-var'а
+/// (не PMDG) starter_ext всегда false, started_at никогда не устанавливается,
+/// функция всегда возвращает false (self-neutralizing).
+fn pmdg_track_start(
+    real_n2: f64,
+    starter_ext: bool,
+    prev_starter_ext: &mut bool,
+    started_at: &mut Option<Instant>,
+    ignition_locked: &mut bool,
+) -> bool {
+    if starter_ext && !*prev_starter_ext {
+        // Передний фронт стартера — новая попытка запуска, сбрасываем состояние.
+        *started_at = Some(Instant::now());
+        *ignition_locked = false;
+    }
+    *prev_starter_ext = starter_ext;
+
+    // ВАЖНО: НЕ сбрасываем started_at мгновенно на заднем фронте starter_ext
+    // (стартер выключился) — L:EngineStart1b_Ext у PMDG гасится по СВОЕЙ
+    // внутренней логике воспламенения, которая может сработать РАНЬШЕ, чем
+    // реальный TURB ENG N2 в SimConnect-телеметрии фактически покажет
+    // значение выше 0 (лаг телеметрии в один-два кадра). Мгновенный сброс
+    // здесь стирал бы started_at ДО того, как маркер воспламенения (real_n2 >
+    // 0 ниже) успевал его подхватить — эффект выглядел бы как "не запускается".
+    // Сбрасываем по таймауту ТОЛЬКО если воспламенения так и не случилось.
+    if !starter_ext && !*ignition_locked {
+        if let Some(t0) = *started_at {
+            if t0.elapsed().as_secs_f64() > PMDG_PRESPOOL_RAMP_SECS + PMDG_PRESPOOL_ABORT_GRACE_SECS {
+                // Запуск явно не удался (стартер давно выключен, N2 так и не
+                // появился) — сбрасываем, готовы к следующей попытке.
+                *started_at = None;
+            }
+        }
+    }
+
+    if !*ignition_locked && real_n2 > 0.0 && started_at.is_some() {
+        // Маркер воспламенения: реальный N2 наконец пошёл, пока мы следили
+        // за прокруткой стартером.
+        *ignition_locked = true;
+        return true;
+    }
+    false
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -811,7 +890,15 @@ impl RumbleEngine {
         // почти всегда 0/недоступен). Один и тот же самолёт не может внезапно
         // "переключиться" между типами в полёте, но проверка каждый кадр не
         // стоит ничего и не требует отдельного состояния.
-        let is_jet = fv.eng1_n2_percent > 1.0 || fv.eng2_n2_percent > 1.0;
+        // PMDG: real_n2 пересекает дэдзону (>1.0) только ~0.3с после включения
+        // стартера (см. engine_start_probe capture), поэтому дополнительно
+        // считаем джетом, если сработал L:EngineStart1b/2b_Ext — иначе эта
+        // короткая щель могла бы попасть в PISTON-ветку. На не-PMDG бортах эти
+        // L-vars всегда false (самонейтрализуется), поведение не меняется.
+        let is_jet = fv.eng1_n2_percent > 1.0
+            || fv.eng2_n2_percent > 1.0
+            || fv.eng1_pmdg_starter_ext
+            || fv.eng2_pmdg_starter_ext;
 
         let engine_count: usize = if cfg.four_engine_mode { 4 } else { 2 };
         let (left_engines, right_engines): (&[usize], &[usize]) = if cfg.four_engine_mode {
@@ -869,10 +956,19 @@ impl RumbleEngine {
             let is_combusting_eng3 = fv.eng3_combustion > 0.5;
             let is_combusting_eng4 = fv.eng4_combustion > 0.5;
 
-            if is_combusting_eng1 && !s.prev_eng1_combusting {
+            // PMDG (737/777) на eng1/eng2: если запуск этого двигателя вёлся по
+            // нашей кастомной pre-spool-логике (s.pmdg_engN_starter_started_at
+            // уже Some — L:EngineStart1b/2b_Ext срабатывал в этом заходе), то
+            // момент воспламенения УЖЕ обработан в pmdg_track_start (толчок
+            // ставится отдельно, см. ниже) — исходный 500-мс "удар"
+            // максимальной силы на ВСЕ три канала здесь НЕ нужен и был бы
+            // двойным/конфликтующим срабатыванием поверх кастомной логики.
+            // На не-PMDG бортах pmdg_engN_starter_started_at всегда None
+            // (самонейтрализуется), удар работает как раньше без изменений.
+            if is_combusting_eng1 && !s.prev_eng1_combusting && s.pmdg_eng1_starter_started_at.is_none() {
                 s.eng1_kick_started_at = Some(Instant::now());
             }
-            if is_combusting_eng2 && !s.prev_eng2_combusting {
+            if is_combusting_eng2 && !s.prev_eng2_combusting && s.pmdg_eng2_starter_started_at.is_none() {
                 s.eng2_kick_started_at = Some(Instant::now());
             }
             if is_combusting_eng3 && !s.prev_eng3_combusting {
@@ -939,6 +1035,37 @@ impl RumbleEngine {
             // другое одновременно ложно сработать не может (у самолёта либо одно,
             // либо другое реально ненулевое), поэтому max() здесь безопасен и не
             // подвержен той же проблеме маскировки, что и max() по паре двигателей.
+            // PMDG (737/777): N2-кривая (engine_spool_term) читает real_n2
+            // напрямую, БЕЗ отдельной синтетической до-воспламенительной
+            // рампы или интерполяции после воспламенения — реальная
+            // телеметрия PMDG NG3 растёт гладко от 0% с момента включения
+            // стартера (см. engine_start_probe capture, RumbleState выше), так
+            // что engine_spool_term сама по себе уже даёт корректную вибрацию
+            // раскрутки на всём протяжении запуска. Единственное, что здесь
+            // ещё нужно от PMDG-специфичного трекинга — маркер воспламенения
+            // (eng1/2_pmdg_just_ignited ниже) для 500-мс удара, вместо
+            // стандартного фронта GENERAL ENG COMBUSTION.
+            let eng1_pmdg_just_ignited = pmdg_track_start(
+                fv.eng1_n2_percent,
+                fv.eng1_pmdg_starter_ext,
+                &mut s.pmdg_eng1_prev_starter_ext,
+                &mut s.pmdg_eng1_starter_started_at,
+                &mut s.pmdg_eng1_ignition_locked,
+            );
+            let eng2_pmdg_just_ignited = pmdg_track_start(
+                fv.eng2_n2_percent,
+                fv.eng2_pmdg_starter_ext,
+                &mut s.pmdg_eng2_prev_starter_ext,
+                &mut s.pmdg_eng2_starter_started_at,
+                &mut s.pmdg_eng2_ignition_locked,
+            );
+            if eng1_pmdg_just_ignited {
+                s.eng1_kick_started_at = Some(Instant::now());
+            }
+            if eng2_pmdg_just_ignited {
+                s.eng2_kick_started_at = Some(Instant::now());
+            }
+
             let eng1_effective = fv.eng1_n2_percent.max(fv.eng1_pct_max_rpm);
             let eng2_effective = fv.eng2_n2_percent.max(fv.eng2_pct_max_rpm);
             let eng3_effective = fv.eng3_n2_percent.max(fv.eng3_pct_max_rpm);

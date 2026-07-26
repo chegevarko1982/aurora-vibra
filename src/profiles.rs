@@ -68,6 +68,34 @@ pub fn has_built_in_profile(title: &str) -> bool {
     find_built_in(title).is_some()
 }
 
+// Подстроки (регистронезависимо), по которым борт считается PMDG — только для
+// UI-индикатора (см. is_pmdg_aircraft ниже). TITLE из SimConnect у части
+// ливрей/вариантов не содержит слова "PMDG" вообще (например "Boeing 737-800
+// WestJet...", "B737-700"), поэтому детекция идёт и по бренду, и по типовым
+// обозначениям семейств 737/777, которые в MSFS на практике встречаются
+// только у PMDG (других payware 737/777 нет).
+const PMDG_TITLE_MARKERS: &[&str] = &[
+    "PMDG",
+    "737-600", "737-700", "737-800", "737-900",
+    "7376", "7377", "7378", "7379",
+    "B736", "B737", "B738", "B739",
+    "B737-6", "B737-7", "B737-8", "B737-9",
+    "777-200", "777-300", "777F",
+    "777-200ER", "777-200LR", "777-300ER",
+    "B772", "B773", "B77W", "B77F", "B77L",
+];
+
+/// true, если aircraft title (регистронезависимо) соответствует одному из
+/// маркеров PMDG. В отличие от has_built_in_profile, НЕ завязано на таблицу
+/// AircraftOverrides (у PMDG нет переопределений RumbleConfig) — сама
+/// кастомная логика (pre-spool разгон по L:EngineStart1b/2b_Ext) в rumble.rs
+/// работает через самонейтрализующиеся L-vars и не нуждается в этой функции;
+/// она нужна только для UI-индикатора "у этого борта не дефолтная логика".
+pub fn is_pmdg_aircraft(title: &str) -> bool {
+    let upper = title.to_uppercase();
+    PMDG_TITLE_MARKERS.iter().any(|marker| upper.contains(marker))
+}
+
 fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
     if let Some(v) = overrides.spoilers_threshold_pct {
         cfg.spoilers_threshold_pct = v;

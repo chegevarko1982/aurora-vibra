@@ -91,6 +91,24 @@ pub struct FlightVars {
     // определён, SimConnect отдаёт 0.0 — поле остаётся false (см.
     // src/profiles.rs про включение самого эффекта только на этом борту).
     pub overspeed_lear_horn: bool,
+    // PMDG 737 (NG3, MSFS): L:EngineStart1b/2b_Ext — true, пока стартер крутит
+    // двигатель до воспламенения (взято из sound.xml PMDG). Подтверждено
+    // тестом в симе как надёжный сигнал — используется в rumble.rs для
+    // маркера воспламенения (момент, когда real TURB ENG N2 впервые > 0) и
+    // для чуть более раннего распознавания борта как джета; сама N2-кривая
+    // раскрутки читает реальный TURB ENG N2 напрямую (см. rumble.rs — real-world
+    // capture показал, что N2 у PMDG растёт плавно с момента включения
+    // стартера, никакой синтетической рампы не нужно). Отдельный
+    // L:EngineStart1c/2c_Ext ("маркер воспламенения") был проверен в реальном
+    // тесте и ОТКЛОНЁН — не сработал корректно, поэтому здесь не читается. На
+    // прочих самолётах L:EngineStart1b/2b_Ext не определены, читается false
+    // (самонейтрализуется).
+    pub eng1_pmdg_starter_ext: bool,
+    pub eng2_pmdg_starter_ext: bool,
+    // GENERAL ENG STARTER ACTIVE:1/2 — пока только для телеметрии (сравнение
+    // с L:EngineStart1b/2b_Ext в UI).
+    pub eng1_starter_active: bool,
+    pub eng2_starter_active: bool,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
