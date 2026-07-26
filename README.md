@@ -72,6 +72,8 @@ If Aurora Vibra improved your sim setup, consider supporting further development
 
 **BTC:** `bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5`
 
+**YooMoney:** [410011348629282](https://yoomoney.ru/to/410011348629282)
+
 ## 📜 License
 
 Distributed under the [MIT License](LICENSE).
