@@ -83,26 +83,52 @@ pub struct RumbleState {
     eng2_kick_started_at: Option<Instant>,
     eng3_kick_started_at: Option<Instant>,
     eng4_kick_started_at: Option<Instant>,
-    // PMDG (737/777) pre-spool tracking: L:EngineStart1b/2b_Ext сигнализирует,
-    // что стартер крутит двигатель. РЕАЛЬНЫЙ ЗАХВАТ ТЕЛЕМЕТРИИ (engine_start_probe,
-    // PMDG 737 NG3, MSFS2024) показал, что предыдущее предположение "TURB ENG N2
-    // держится на 0 пока крутит стартер" БОЛЬШЕ НЕ ВЕРНО: N2 плавно и непрерывно
-    // растёт с самого момента включения стартера (0% -> 15% за ~5с до
-    // воспламенения, без единой паузы на нуле) — то есть обычная N2-кривая
-    // (engine_spool_term) уже сама по себе даёт корректную вибрацию раскрутки, и
-    // синтетическая рампа больше не нужна (раньше дублировала уже живую кривую).
-    // started_at/ignition_locked по-прежнему нужны — но только чтобы (а) пометить
-    // борт джетом на 1-2 кадра раньше, чем real_n2 перевалит дэдзону 1.0, и
-    // (б) триггерить 500-мс удар воспламенения по нашему маркеру вместо
-    // стандартного фронта GENERAL ENG COMBUSTION (см. использование ниже).
-    // На aircraft без этих L-vars (не PMDG) поле starter_ext всегда false
-    // (самонейтрализуется), и вся логика становится no-op.
-    pmdg_eng1_starter_started_at: Option<Instant>,
-    pmdg_eng2_starter_started_at: Option<Instant>,
-    pmdg_eng1_prev_starter_ext: bool,
-    pmdg_eng2_prev_starter_ext: bool,
-    pmdg_eng1_ignition_locked: bool,
-    pmdg_eng2_ignition_locked: bool,
+    // PMDG (737/777): раньше здесь был отдельный трекер "запуска" по
+    // L:EngineStart1b/2b_Ext (started_at/ignition_locked/prev_starter_ext),
+    // который считал real_n2 > 0 маркером воспламенения. РЕАЛЬНЫЙ ЗАХВАТ
+    // ТЕЛЕМЕТРИИ (engine_start_probe, PMDG 737 NG3, MSFS2024) показал, что это
+    // предположение неверно вдвойне: (1) real TURB ENG N2 растёт плавно с
+    // САМОГО момента включения стартера, а не держится на 0 до воспламенения
+    // — значит engine_spool_term уже сам по себе даёт корректную кривую без
+    // всякой PMDG-специфики; (2) поэтому "real_n2 > 0" фактически срабатывал
+    // на 1-й же кадр после включения стартера, а НЕ в момент реального
+    // воспламенения (~5с спустя, real N2≈15%) — 500-мс удар воспламенения
+    // стрелял сразу при включении стартера ("толчок"), а на настоящем
+    // воспламенении не срабатывал вовсе (ignition_locked уже true) —
+    // ощущалось как "толчок и тишина". Трекер удалён; PMDG теперь идёт по
+    // ТОЙ ЖЕ ветке, что и любой другой джет (см. is_jet ниже) — удар
+    // триггерится обычным фронтом GENERAL ENG COMBUSTION, который на PMDG
+    // NG3 подтверждён надёжным и точным по времени.
+    // Starter-only ramp (JET, ДО воспламенения): вместо завязки на N2 (тот
+    // же N2, что раньше вызывал "толчок и тишина") амплитуда пока крутит
+    // ТОЛЬКО стартер (GENERAL ENG STARTER == true, combustion ещё false)
+    // считается по РЕАЛЬНОМУ времени с момента переднего фронта стартера —
+    // линейная рампа 0..STARTER_ONLY_AMPLITUDE_CAP за STARTER_ONLY_RAMP_SECS,
+    // подобрана и подтверждена на живом железе (test_hold, Throttle И
+    // Joystick, 0..10 за 12с). Универсальный сигнал (GENERAL ENG STARTER),
+    // работает на любом джете, не только PMDG.
+    prev_eng1_starter: bool,
+    prev_eng2_starter: bool,
+    prev_eng3_starter: bool,
+    prev_eng4_starter: bool,
+    eng1_starter_engaged_at: Option<Instant>,
+    eng2_starter_engaged_at: Option<Instant>,
+    eng3_starter_engaged_at: Option<Instant>,
+    eng4_starter_engaged_at: Option<Instant>,
+    // Starter-only abort fade: если стартер выключился ДО воспламенения
+    // (неудачная/отменённая попытка запуска), амплитуда не должна замирать
+    // на достигнутом уровне рампы — плавно гаснет к нулю за
+    // STARTER_ABORT_FADE_SECS от значения, которое было в момент отключения
+    // стартера (см. вызов в step()). Подтверждено на живом железе (test_hold
+    // fadejerk, без микро-рывков в хвосте).
+    eng1_abort_fade_started_at: Option<Instant>,
+    eng2_abort_fade_started_at: Option<Instant>,
+    eng3_abort_fade_started_at: Option<Instant>,
+    eng4_abort_fade_started_at: Option<Instant>,
+    eng1_abort_fade_start_value: f64,
+    eng2_abort_fade_start_value: f64,
+    eng3_abort_fade_start_value: f64,
+    eng4_abort_fade_start_value: f64,
     // PISTON Engine Start tracking (Starter + Combustion boolean model) —
     // используется ТОЛЬКО в ветке is_jet == false. Каждый двигатель
     // отслеживается независимо, как и в джет-модели выше.
@@ -115,63 +141,38 @@ pub struct RumbleState {
     piston_combustion_timer: [f64; 4],
 }
 
-// Таймаут неудавшейся попытки запуска PMDG (стартер выключился, но
-// воспламенение так и не случилось) — см. использование в pmdg_track_start.
-// Раньше делил это значение с длительностью синтетической prespool-рампы
-// (удалена — реальный N2 уже сам даёт корректную кривую, см. комментарий у
-// pmdg_eng1/2_starter_started_at в RumbleState выше), сейчас это просто
-// запас времени на "дать шанс воспламениться, прежде чем сдаться".
-const PMDG_PRESPOOL_RAMP_SECS: f64 = 10.0;
-// Доп. окно ожидания ПОСЛЕ того, как L:EngineStart1b/2b_Ext уже выключился,
-// но воспламенение (real_n2 > 0) ещё не случилось — см. комментарий у
-// вызова ниже про гонку между этим L-var и появлением реального N2.
-const PMDG_PRESPOOL_ABORT_GRACE_SECS: f64 = 5.0;
+// Длительность и потолок starter-only рампы (JET, ДО воспламенения) — см.
+// комментарий у eng1..4_starter_engaged_at в RumbleState выше. Подтверждены
+// на живом железе (test_hold, Throttle и Joystick, 0..10 за 12с).
+const STARTER_ONLY_RAMP_SECS: f64 = 12.0;
+const STARTER_ONLY_AMPLITUDE_CAP: f64 = 10.0;
 
-/// Отслеживает состояние запуска ОДНОГО двигателя PMDG по L:EngineStart1b/2b_Ext
-/// (см. комментарий у полей pmdg_eng1/2_* в RumbleState) и сообщает, случился
-/// ли ИМЕННО в этом кадре маркер воспламенения (реальный N2 впервые стал > 0,
-/// пока мы следили за прокруткой стартером). На бортах без этого L-var'а
-/// (не PMDG) starter_ext всегда false, started_at никогда не устанавливается,
-/// функция всегда возвращает false (self-neutralizing).
-fn pmdg_track_start(
-    real_n2: f64,
-    starter_ext: bool,
-    prev_starter_ext: &mut bool,
-    started_at: &mut Option<Instant>,
-    ignition_locked: &mut bool,
-) -> bool {
-    if starter_ext && !*prev_starter_ext {
-        // Передний фронт стартера — новая попытка запуска, сбрасываем состояние.
-        *started_at = Some(Instant::now());
-        *ignition_locked = false;
+/// Линейная рампа 0..STARTER_ONLY_AMPLITUDE_CAP за STARTER_ONLY_RAMP_SECS с
+/// момента переднего фронта стартера (см. вызов в step()). None → 0.0
+/// (стартер ещё не включался в этом заходе — self-neutralizing).
+fn starter_only_amplitude(engaged_at: Option<Instant>) -> f64 {
+    match engaged_at {
+        Some(t0) => (t0.elapsed().as_secs_f64() / STARTER_ONLY_RAMP_SECS * STARTER_ONLY_AMPLITUDE_CAP)
+            .min(STARTER_ONLY_AMPLITUDE_CAP),
+        None => 0.0,
     }
-    *prev_starter_ext = starter_ext;
+}
 
-    // ВАЖНО: НЕ сбрасываем started_at мгновенно на заднем фронте starter_ext
-    // (стартер выключился) — L:EngineStart1b_Ext у PMDG гасится по СВОЕЙ
-    // внутренней логике воспламенения, которая может сработать РАНЬШЕ, чем
-    // реальный TURB ENG N2 в SimConnect-телеметрии фактически покажет
-    // значение выше 0 (лаг телеметрии в один-два кадра). Мгновенный сброс
-    // здесь стирал бы started_at ДО того, как маркер воспламенения (real_n2 >
-    // 0 ниже) успевал его подхватить — эффект выглядел бы как "не запускается".
-    // Сбрасываем по таймауту ТОЛЬКО если воспламенения так и не случилось.
-    if !starter_ext && !*ignition_locked {
-        if let Some(t0) = *started_at {
-            if t0.elapsed().as_secs_f64() > PMDG_PRESPOOL_RAMP_SECS + PMDG_PRESPOOL_ABORT_GRACE_SECS {
-                // Запуск явно не удался (стартер давно выключен, N2 так и не
-                // появился) — сбрасываем, готовы к следующей попытке.
-                *started_at = None;
-            }
+// Длительность плавного затухания при отменённом/неудавшемся запуске
+// (стартер выключился ДО воспламенения) — см. eng1..4_abort_fade_* в
+// RumbleState выше. Подтверждена на живом железе (test_hold fadejerk).
+const STARTER_ABORT_FADE_SECS: f64 = 4.0;
+
+/// Линейный спад от start_value к 0.0 за STARTER_ABORT_FADE_SECS с момента
+/// отключения стартера БЕЗ воспламенения. None → 0.0 (фейда сейчас нет).
+fn starter_abort_fade_amplitude(started_at: Option<Instant>, start_value: f64) -> f64 {
+    match started_at {
+        Some(t0) => {
+            let elapsed = t0.elapsed().as_secs_f64();
+            (start_value * (1.0 - elapsed / STARTER_ABORT_FADE_SECS)).max(0.0)
         }
+        None => 0.0,
     }
-
-    if !*ignition_locked && real_n2 > 0.0 && started_at.is_some() {
-        // Маркер воспламенения: реальный N2 наконец пошёл, пока мы следили
-        // за прокруткой стартером.
-        *ignition_locked = true;
-        return true;
-    }
-    false
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,13 +918,16 @@ impl RumbleEngine {
 
         if is_jet {
             // =====================================================================
-            // JET / TURBINE — ОРИГИНАЛЬНАЯ 3-СТАДИЙНАЯ МОДЕЛЬ, БЕЗ ИЗМЕНЕНИЙ.
+            // JET / TURBINE — 3-СТАДИЙНАЯ МОДЕЛЬ.
             // =====================================================================
-            // СТАДИЯ 1 (Pre-Combustion Spool-up): базовая амплитуда вибрации по N2
-            // для каждого двигателя — гладкая треугольная огибающая по шкале 0..255
-            // (дэдзона N2<1.0 → 0, минимум 1 при N2>=1.0, пик 255 у 20% N2, спад к
-            // ~0 у 60% N2/Idle). Маршрутизация: ПОКА combustion == false у данного
-            // двигателя — его N2-вибрация идёт ТОЛЬКО на свой борт:
+            // СТАДИЯ 1 (Pre-Combustion Spool-up): ПОКА combustion == false —
+            // амплитуда НЕ по N2 (см. starter_only_amplitude ниже: реальный N2
+            // растёт медленно и непредсказуемо по бортам, линейная завязка на
+            // него делает раскрутку то незаметной, то слишком резкой) — линейная
+            // рампа 0..STARTER_ONLY_AMPLITUDE_CAP за STARTER_ONLY_RAMP_SECS от
+            // реального времени включения стартера (GENERAL ENG STARTER),
+            // подтверждённая на живом железе. Маршрутизация: ПОКА combustion ==
+            // false у данного двигателя — его вибрация идёт ТОЛЬКО на свой борт:
             //   • Двигатель 1 (левый)  → ТОЛЬКО РУД (Throttle)
             //   • Двигатель 2 (правый) → ТОЛЬКО джойстик (Joystick)
             //
@@ -942,7 +946,10 @@ impl RumbleEngine {
             let engine_spool_n2_max: f64 = (cfg.engine_idle_n2 as f64).max(ENGINE_SPOOL_DEADZONE_N2 + 0.001);
             let engine_spool_peak_n2: f64 = engine_spool_n2_max / 3.0;
             const ENGINE_SPOOL_DEADZONE_N2: f64 = 1.0; // N2 < 1.0 — двигатель считается выключенным (PWM = 0)
-            const ENGINE_SPOOL_MIN_AMPLITUDE: f64 = 1.0; // минимум по ШИМ (0..255) при N2 >= 1.0
+            // Минимум по ШИМ (0..255) в кривой N2 (используется ТОЛЬКО ПОСЛЕ
+            // воспламенения — см. starter_only_amplitude выше для ДО-воспламенительной
+            // фазы). 1.0 — просто "не строго ноль, двигатель определённо крутится".
+            const ENGINE_SPOOL_MIN_AMPLITUDE: f64 = 1.0;
             const ENGINE_IGNITION_KICK_DURATION: Duration = Duration::from_millis(500);
 
             // Фиксируем момент воспламенения (передний фронт) для КАЖДОГО двигателя
@@ -956,19 +963,15 @@ impl RumbleEngine {
             let is_combusting_eng3 = fv.eng3_combustion > 0.5;
             let is_combusting_eng4 = fv.eng4_combustion > 0.5;
 
-            // PMDG (737/777) на eng1/eng2: если запуск этого двигателя вёлся по
-            // нашей кастомной pre-spool-логике (s.pmdg_engN_starter_started_at
-            // уже Some — L:EngineStart1b/2b_Ext срабатывал в этом заходе), то
-            // момент воспламенения УЖЕ обработан в pmdg_track_start (толчок
-            // ставится отдельно, см. ниже) — исходный 500-мс "удар"
-            // максимальной силы на ВСЕ три канала здесь НЕ нужен и был бы
-            // двойным/конфликтующим срабатыванием поверх кастомной логики.
-            // На не-PMDG бортах pmdg_engN_starter_started_at всегда None
-            // (самонейтрализуется), удар работает как раньше без изменений.
-            if is_combusting_eng1 && !s.prev_eng1_combusting && s.pmdg_eng1_starter_started_at.is_none() {
+            // PMDG (737/777) на eng1/eng2 больше не имеет отдельной ветки — см.
+            // комментарий у PISTON/JET-полей в RumbleState: real GENERAL ENG
+            // COMBUSTION на PMDG NG3 подтверждён надёжным и точным по времени
+            // (engine_start_probe capture), поэтому удар воспламенения
+            // триггерится тем же обычным фронтом, что и у любого другого джета.
+            if is_combusting_eng1 && !s.prev_eng1_combusting {
                 s.eng1_kick_started_at = Some(Instant::now());
             }
-            if is_combusting_eng2 && !s.prev_eng2_combusting && s.pmdg_eng2_starter_started_at.is_none() {
+            if is_combusting_eng2 && !s.prev_eng2_combusting {
                 s.eng2_kick_started_at = Some(Instant::now());
             }
             if is_combusting_eng3 && !s.prev_eng3_combusting {
@@ -983,6 +986,71 @@ impl RumbleEngine {
             s.prev_eng2_combusting = is_combusting_eng2;
             s.prev_eng3_combusting = is_combusting_eng3;
             s.prev_eng4_combusting = is_combusting_eng4;
+
+            // Передний фронт стартера — фиксируем момент начала прокрутки
+            // (реальный wall-clock), от которого считается starter_only_amplitude
+            // ниже. Сигнал = GENERAL ENG STARTER ИЛИ PMDG L:EngineStart1b/2b_Ext,
+            // ЛЮБОЙ из двух. Причина: GENERAL ENG STARTER САМ ПО СЕБЕ оказался
+            // на практике недостаточно надёжным сигналом (на живом тесте PMDG —
+            // L-var включался, а GENERAL ENG STARTER на том же кадре нет), а
+            // предыдущая версия (просто N2-кривая без всякого стартер-гейта)
+            // вибрацию честно давала — поэтому здесь берём ЛЮБОЙ доступный
+            // маркер стартера, а не только "универсальный" (который не всегда
+            // universal на практике). На не-PMDG бортах L-var всегда false
+            // (самонейтрализуется), решает GENERAL ENG STARTER как и раньше.
+            let eng1_starter_signal = fv.eng1_starter || fv.eng1_pmdg_starter_ext;
+            let eng2_starter_signal = fv.eng2_starter || fv.eng2_pmdg_starter_ext;
+            let eng3_starter_signal = fv.eng3_starter;
+            let eng4_starter_signal = fv.eng4_starter;
+
+            // Передний фронт стартера: старт рампы, отменяем любой висящий
+            // abort-фейд (новая попытка запуска перекрывает предыдущую).
+            if eng1_starter_signal && !s.prev_eng1_starter {
+                s.eng1_starter_engaged_at = Some(Instant::now());
+                s.eng1_abort_fade_started_at = None;
+            }
+            if eng2_starter_signal && !s.prev_eng2_starter {
+                s.eng2_starter_engaged_at = Some(Instant::now());
+                s.eng2_abort_fade_started_at = None;
+            }
+            if eng3_starter_signal && !s.prev_eng3_starter {
+                s.eng3_starter_engaged_at = Some(Instant::now());
+                s.eng3_abort_fade_started_at = None;
+            }
+            if eng4_starter_signal && !s.prev_eng4_starter {
+                s.eng4_starter_engaged_at = Some(Instant::now());
+                s.eng4_abort_fade_started_at = None;
+            }
+
+            // Задний фронт стартера БЕЗ воспламенения (отменённая/неудавшаяся
+            // попытка запуска) — не замираем на достигнутом уровне рампы,
+            // запоминаем его и плавно гасим к нулю (starter_abort_fade_amplitude
+            // ниже) вместо мгновенного обнуления или зависания.
+            if !eng1_starter_signal && s.prev_eng1_starter && !is_combusting_eng1 {
+                s.eng1_abort_fade_start_value = starter_only_amplitude(s.eng1_starter_engaged_at);
+                s.eng1_abort_fade_started_at = Some(Instant::now());
+                s.eng1_starter_engaged_at = None;
+            }
+            if !eng2_starter_signal && s.prev_eng2_starter && !is_combusting_eng2 {
+                s.eng2_abort_fade_start_value = starter_only_amplitude(s.eng2_starter_engaged_at);
+                s.eng2_abort_fade_started_at = Some(Instant::now());
+                s.eng2_starter_engaged_at = None;
+            }
+            if !eng3_starter_signal && s.prev_eng3_starter && !is_combusting_eng3 {
+                s.eng3_abort_fade_start_value = starter_only_amplitude(s.eng3_starter_engaged_at);
+                s.eng3_abort_fade_started_at = Some(Instant::now());
+                s.eng3_starter_engaged_at = None;
+            }
+            if !eng4_starter_signal && s.prev_eng4_starter && !is_combusting_eng4 {
+                s.eng4_abort_fade_start_value = starter_only_amplitude(s.eng4_starter_engaged_at);
+                s.eng4_abort_fade_started_at = Some(Instant::now());
+                s.eng4_starter_engaged_at = None;
+            }
+
+            s.prev_eng1_starter = eng1_starter_signal;
+            s.prev_eng2_starter = eng2_starter_signal;
+            s.prev_eng3_starter = eng3_starter_signal;
+            s.prev_eng4_starter = eng4_starter_signal;
 
             // ШАГ 1: ВСЕГДА считаем базовую вибрацию раскрутки по N2 — независимо
             // от того, активен ли сейчас удар воспламенения. Именно поэтому после
@@ -1035,46 +1103,49 @@ impl RumbleEngine {
             // другое одновременно ложно сработать не может (у самолёта либо одно,
             // либо другое реально ненулевое), поэтому max() здесь безопасен и не
             // подвержен той же проблеме маскировки, что и max() по паре двигателей.
-            // PMDG (737/777): N2-кривая (engine_spool_term) читает real_n2
-            // напрямую, БЕЗ отдельной синтетической до-воспламенительной
-            // рампы или интерполяции после воспламенения — реальная
-            // телеметрия PMDG NG3 растёт гладко от 0% с момента включения
-            // стартера (см. engine_start_probe capture, RumbleState выше), так
-            // что engine_spool_term сама по себе уже даёт корректную вибрацию
-            // раскрутки на всём протяжении запуска. Единственное, что здесь
-            // ещё нужно от PMDG-специфичного трекинга — маркер воспламенения
-            // (eng1/2_pmdg_just_ignited ниже) для 500-мс удара, вместо
-            // стандартного фронта GENERAL ENG COMBUSTION.
-            let eng1_pmdg_just_ignited = pmdg_track_start(
-                fv.eng1_n2_percent,
-                fv.eng1_pmdg_starter_ext,
-                &mut s.pmdg_eng1_prev_starter_ext,
-                &mut s.pmdg_eng1_starter_started_at,
-                &mut s.pmdg_eng1_ignition_locked,
-            );
-            let eng2_pmdg_just_ignited = pmdg_track_start(
-                fv.eng2_n2_percent,
-                fv.eng2_pmdg_starter_ext,
-                &mut s.pmdg_eng2_prev_starter_ext,
-                &mut s.pmdg_eng2_starter_started_at,
-                &mut s.pmdg_eng2_ignition_locked,
-            );
-            if eng1_pmdg_just_ignited {
-                s.eng1_kick_started_at = Some(Instant::now());
-            }
-            if eng2_pmdg_just_ignited {
-                s.eng2_kick_started_at = Some(Instant::now());
-            }
-
             let eng1_effective = fv.eng1_n2_percent.max(fv.eng1_pct_max_rpm);
             let eng2_effective = fv.eng2_n2_percent.max(fv.eng2_pct_max_rpm);
             let eng3_effective = fv.eng3_n2_percent.max(fv.eng3_pct_max_rpm);
             let eng4_effective = fv.eng4_n2_percent.max(fv.eng4_pct_max_rpm);
 
-            let eng1_term = engine_spool_term(eng1_effective);
-            let eng2_term = engine_spool_term(eng2_effective);
-            let eng3_term = engine_spool_term(eng3_effective);
-            let eng4_term = engine_spool_term(eng4_effective);
+            // ДО воспламенения — starter_only_amplitude (см. starter-only ramp
+            // выше), НЕ engine_spool_term(N2): реальный N2 в фазе прокрутки
+            // растёт слишком непредсказуемо/медленно, чтобы линейно давать
+            // ощутимую вибрацию с первых секунд (см. комментарий у СТАДИИ 1
+            // выше). ПОСЛЕ воспламенения — обычная N2-кривая, без изменений.
+            // Гейт по s.engN_starter_engaged_at (а не по мгновенному значению
+            // сигнала стартера каждый кадр) — устойчивее к возможному
+            // "дребезгу"/пропускам самого сигнала на отдельных кадрах;
+            // starter_only_amplitude сама возвращает 0.0, если engaged_at
+            // ещё None. .max() со starter_abort_fade_amplitude: ровно один из
+            // двух источников ненулевой в любой момент (engaged_at сбрасывается
+            // в None в момент старта фейда, см. задний фронт выше), так что
+            // max() здесь эквивалентен сложению, но не заставляет думать о
+            // порядке — рампа ИЛИ фейд отмены, никогда оба разом.
+            let eng1_term = if is_combusting_eng1 {
+                engine_spool_term(eng1_effective)
+            } else {
+                starter_only_amplitude(s.eng1_starter_engaged_at)
+                    .max(starter_abort_fade_amplitude(s.eng1_abort_fade_started_at, s.eng1_abort_fade_start_value))
+            };
+            let eng2_term = if is_combusting_eng2 {
+                engine_spool_term(eng2_effective)
+            } else {
+                starter_only_amplitude(s.eng2_starter_engaged_at)
+                    .max(starter_abort_fade_amplitude(s.eng2_abort_fade_started_at, s.eng2_abort_fade_start_value))
+            };
+            let eng3_term = if is_combusting_eng3 {
+                engine_spool_term(eng3_effective)
+            } else {
+                starter_only_amplitude(s.eng3_starter_engaged_at)
+                    .max(starter_abort_fade_amplitude(s.eng3_abort_fade_started_at, s.eng3_abort_fade_start_value))
+            };
+            let eng4_term = if is_combusting_eng4 {
+                engine_spool_term(eng4_effective)
+            } else {
+                starter_only_amplitude(s.eng4_starter_engaged_at)
+                    .max(starter_abort_fade_amplitude(s.eng4_abort_fade_started_at, s.eng4_abort_fade_start_value))
+            };
 
             // ШАГ 2: Проверяем активность 500-мс удара воспламенения для КАЖДОГО
             // двигателя по реальному Instant::now().duration_since(t0) — таймер не
