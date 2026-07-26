@@ -68,7 +68,7 @@ Special thanks to [Rodrigo Troncoso](https://github.com/rtroncoso) for creating 
 
 ## ☕ Support the Project
 
-If Aurora Vibra improved your sim setup, consider supporting further development:
+We'd be happy to receive your donation towards the project's development — adding new features and adapting support for custom aircraft models:
 
 **BTC:** `bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5`
 
