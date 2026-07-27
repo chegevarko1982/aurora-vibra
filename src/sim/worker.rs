@@ -12,6 +12,7 @@ use libloading::Library;
 use parking_lot::Mutex;
 
 use crate::RumbleEngine;
+use crate::sim::elem_idx::ElemIdx;
 use crate::sim::parse::{flight_status, parse_main_elems};
 use crate::{ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
@@ -342,145 +343,11 @@ pub fn sim_worker(
                 )
             };
 
-            let defs = [
-                ("AIRSPEED INDICATED", "Knots"),
-                ("SIM ON GROUND", "Bool"),
-                ("PLANE BANK DEGREES", "Degrees"),
-                ("TRAILING EDGE FLAPS LEFT PERCENT", "Percent"),
-                ("TRAILING EDGE FLAPS RIGHT PERCENT", "Percent"),
-                ("FLAPS HANDLE INDEX", "Number"),
-                ("GEAR HANDLE POSITION", "Bool"),
-                ("STALL WARNING", "Bool"),
-                ("ABSOLUTE TIME", "Seconds"),
-                ("GROUND VELOCITY", "Knots"), // Строку "PAUSED" удалили. Теперь спойлеры железно сидят на 11-м месте (индекс 10)
-                ("SPOILERS HANDLE POSITION", "Percent"),
-                ("GEAR ANIMATION POSITION:0", "Percent"),
-                ("GEAR ANIMATION POSITION:1", "Percent"),
-                ("GEAR ANIMATION POSITION:2", "Percent"),
-                // Телеметрия запуска двигателей (Engine Spool-up & Ignition) —
-                // индексы 14/15/16/17 в буфере elem[] ниже.
-                ("TURB ENG N2:1", "Percent"),
-                ("GENERAL ENG COMBUSTION:1", "Bool"),
-                ("TURB ENG N2:2", "Percent"),
-                ("GENERAL ENG COMBUSTION:2", "Bool"),
-                // Двигатели 3/4 для 4-моторных самолётов (RumbleConfig::four_engine_mode) —
-                // индексы 18/19/20/21 в буфере elem[] ниже.
-                ("TURB ENG N2:3", "Percent"),
-                ("GENERAL ENG COMBUSTION:3", "Bool"),
-                ("TURB ENG N2:4", "Percent"),
-                ("GENERAL ENG COMBUSTION:4", "Bool"),
-                // Универсальная поддержка поршневых двигателей: GENERAL ENG PCT MAX RPM
-                // работает и на турбинах (примерно повторяет N2), и на поршневых
-                // (даёт % от макс. оборотов, в отличие от TURB ENG N2, которое на
-                // поршневых обычно равно 0). Индексы 22/23/24/25 в буфере elem[] ниже.
-                ("GENERAL ENG PCT MAX RPM:1", "Percent"),
-                ("GENERAL ENG PCT MAX RPM:2", "Percent"),
-                ("GENERAL ENG PCT MAX RPM:3", "Percent"),
-                ("GENERAL ENG PCT MAX RPM:4", "Percent"),
-                // Универсальная модель запуска (Starter + Combustion): работает
-                // одинаково на поршневых и турбинных двигателях. Индексы
-                // 26/27/28/29 в буфере elem[] ниже.
-                ("GENERAL ENG STARTER:1", "Bool"),
-                ("GENERAL ENG STARTER:2", "Bool"),
-                ("GENERAL ENG STARTER:3", "Bool"),
-                ("GENERAL ENG STARTER:4", "Bool"),
-                // Поршневые двигатели (Piston Engine Telemetry) — сырые обороты
-                // коленвала и воздушного винта, для UI-инспектора телеметрии.
-                // Индексы 30/31/32/33 в буфере elem[] ниже.
-                ("GENERAL ENG RPM:1", "Rpm"),
-                ("GENERAL ENG RPM:2", "Rpm"),
-                ("GENERAL ENG RPM:3", "Rpm"),
-                ("GENERAL ENG RPM:4", "Rpm"),
-                // Обороты воздушного винта. Индексы 34/35/36/37 в буфере elem[] ниже.
-                ("PROP RPM:1", "Rpm"),
-                ("PROP RPM:2", "Rpm"),
-                ("PROP RPM:3", "Rpm"),
-                ("PROP RPM:4", "Rpm"),
-                // AIRSPEED BARBER POLE — динамическая "красная черта" (Vmo/Mmo,
-                // сим сам двигает её вниз при наборе высоты), порог срабатывания
-                // эффекта Overspeed, заменяет ручной слайдер в UI.
-                // Индекс 38 в буфере elem[] ниже.
-                ("AIRSPEED BARBER POLE", "Knots"),
-                // Предкрылки (Slats) — пока только для отображения в UI
-                // ("Live Aircraft Data"), в логику эффектов не задействованы.
-                // Индексы 39/40 в буфере elem[] ниже.
-                ("LEADING EDGE FLAPS LEFT PERCENT", "Percent"),
-                ("LEADING EDGE FLAPS RIGHT PERCENT", "Percent"),
-                // Раздельная позиция спойлеров по крыльям — нужна, чтобы отличать
-                // честный симметричный выпуск спидбрейков от асимметричного подъёма
-                // панелей при крене (roll spoilers/спойлероны, напр. TFDI MD-11,
-                // где SPOILERS HANDLE POSITION некорректно следует за креном).
-                // Индексы 41/42 в буфере elem[] ниже.
-                ("SPOILERS LEFT POSITION", "Percent"),
-                ("SPOILERS RIGHT POSITION", "Percent"),
-                // TFDI MD-11: собственные L-vars по каждой из 5 секций спойлеров
-                // на крыло (SPOILERS LEFT/RIGHT POSITION выше на этом борте тоже
-                // не всегда надёжны). Используются ТОЛЬКО как дополнительная
-                // проверка симметрии (см. rumble.rs) — на других самолётах эти
-                // L-vars не определены, SimConnect отдаёт по ним 0.0, и проверка
-                // самонейтрализуется (0 против 0 — симметрично). Индексы 43-52.
-                ("L:MD11_EXT_L_SPOILER_1", "Number"),
-                ("L:MD11_EXT_L_SPOILER_2", "Number"),
-                ("L:MD11_EXT_L_SPOILER_3", "Number"),
-                ("L:MD11_EXT_L_SPOILER_4", "Number"),
-                ("L:MD11_EXT_L_SPOILER_5", "Number"),
-                ("L:MD11_EXT_R_SPOILER_1", "Number"),
-                ("L:MD11_EXT_R_SPOILER_2", "Number"),
-                ("L:MD11_EXT_R_SPOILER_3", "Number"),
-                ("L:MD11_EXT_R_SPOILER_4", "Number"),
-                ("L:MD11_EXT_R_SPOILER_5", "Number"),
-                // OVERSPEED WARNING — булев флаг сима "клацера" (overspeed
-                // clacker), для сравнения с нашим порогом AIRSPEED BARBER POLE
-                // в телеметрии (пока только для отображения в UI). Индекс 53.
-                ("OVERSPEED WARNING", "Bool"),
-                // Learjet 35A (Flysimware, FSW_L35A): L:XMLSND75 — тот же
-                // L-var, к которому в sound.xml аддона привязан звук
-                // "overspeed / mach trim" (аварийный клаксон превышения
-                // Vmo/Mmo). Экспериментальный альтернативный триггер эффекта
-                // Overspeed для этого борта (см. profiles.rs/rumble.rs) — на
-                // остальных самолётах L-var не определён, SimConnect отдаёт
-                // 0.0 (самонейтрализуется, тот же паттерн, что у
-                // L:MD11_EXT_*_SPOILER_* выше). Индекс 54.
-                ("L:XMLSND75", "Bool"),
-                // Fenix A320 (FenixSim): L:I_PFD_VMAX — этот аддон не держит
-                // AIRSPEED BARBER POLE синхронной с реальным PFD (см. отчёты
-                // пользователей), зато сам выставляет свой предел overspeed в
-                // этот L-var. Используется вместо AIRSPEED BARBER POLE только
-                // когда aircraft title содержит "Fenix" (см. sim/parse.rs) —
-                // на остальных бортах L-var не определён, SimConnect отдаёт
-                // 0.0 (самонейтрализуется, тот же паттерн, что у L:XMLSND75
-                // выше). Индекс 59.
-                ("L:I_PFD_VMAX", "Knots"),
-                // PMDG 737 (NG3, MSFS): L:EngineStart1b/2b_Ext — true, пока стартер
-                // крутит двигатель до воспламенения (взято из sound.xml самого PMDG).
-                // Подтверждено тестом в симе, что это надёжный сигнал — используется в
-                // rumble.rs как маркер воспламенения (момент, когда real TURB ENG N2
-                // впервые > 0) и для более раннего распознавания борта как джета; сама
-                // N2-кривая раскрутки идёт напрямую по real TURB ENG N2 (см. rumble.rs —
-                // реальный захват телеметрии показал, что N2 у PMDG растёт плавно с
-                // момента включения стартера, а не держится на 0 до воспламенения).
-                // L:EngineStart1c/2c_Ext (отдельный "маркер воспламенения") ПРОВЕРЕН и
-                // ОТКЛОНЁН — не сработал корректно в реальном тесте, поэтому вместо
-                // него как маркер воспламенения используется момент, когда сам
-                // TURB ENG N2 становится > 0 (см. rumble.rs). На остальных самолётах
-                // L:EngineStart1b/2b_Ext не определены, SimConnect отдаёт false
-                // (самонейтрализуется). Индексы 55/56.
-                ("L:EngineStart1b_Ext", "Bool"),
-                ("L:EngineStart2b_Ext", "Bool"),
-                // GENERAL ENG STARTER ACTIVE:1/2 — пока только для телеметрии
-                // (сравнение с L:EngineStart1b/2b_Ext). Индексы 57/58.
-                ("GENERAL ENG STARTER ACTIVE:1", "Bool"),
-                ("GENERAL ENG STARTER ACTIVE:2", "Bool"),
-                // Fenix A320 (FenixSim): L:A320_Gear_Nose — GEAR ANIMATION
-                // POSITION:0/1/2 (11/12/13) на этом борте не отражает реальное
-                // движение стоек, зато сам аддон выставляет позицию в этот
-                // L-var (0 = убрано, 1000 = выпущено). Пока только для
-                // телеметрии/отладки (см. sim/parse.rs, ui.rs), на остальных
-                // самолётах L-var не определён, SimConnect отдаёт 0.0
-                // (самонейтрализуется). Индекс 60.
-                ("L:A320_Gear_Nose", "Number"),
-            ];
-            for (name, unit) in defs {
+            // Registration order (and the corresponding elem[] read order in
+            // sim/parse.rs) lives in ElemIdx::DEFS — see sim/elem_idx.rs for
+            // the full per-variable rationale (which addon needs it, what was
+            // tried and rejected).
+            for &(name, unit) in ElemIdx::DEFS {
                 let hr = add(DEF_MAIN, name, unit);
                 if hr < 0 {
                     logs.push(format!(
@@ -770,54 +637,18 @@ pub fn sim_worker(
                                     continue;
                                 }
 
-                                // 26 элементов: SPOILERS HANDLE POSITION (10),
-                                // GEAR ANIMATION POSITION:0/1/2 (11/12/13) и
-                                // телеметрия запуска двигателей (14/15/16/17):
-                                // TURB ENG N2:1, GENERAL ENG COMBUSTION:1,
-                                // TURB ENG N2:2, GENERAL ENG COMBUSTION:2,
-                                // а также двигатели 3/4 для 4-моторных самолётов
-                                // (18/19/20/21): TURB ENG N2:3, GENERAL ENG COMBUSTION:3,
-                                // TURB ENG N2:4, GENERAL ENG COMBUSTION:4, и наконец
-                                // GENERAL ENG PCT MAX RPM:1/2/3/4 (22/23/24/25) для
-                                // универсальной поддержки поршневых двигателей,
-                                // GENERAL ENG STARTER:1/2/3/4 (26/27/28/29) для
-                                // универсальной модели запуска (Starter + Combustion), и
-                                // наконец сырая телеметрия поршневых двигателей:
-                                // GENERAL ENG RPM:1/2/3/4 (30/31/32/33),
-                                // PROP RPM:1/2/3/4 (34/35/36/37) и, наконец,
-                                // AIRSPEED BARBER POLE (38) — динамический порог
-                                // срабатывания эффекта Overspeed. LEADING EDGE
-                                // FLAPS LEFT/RIGHT PERCENT (39/40) — предкрылки
-                                // (Slats), пока только для UI. SPOILERS LEFT/RIGHT
-                                // POSITION (41/42) — раздельная позиция спойлеров
-                                // по крыльям для фильтра симметрии (см. parse.rs).
-                                // L:MD11_EXT_L/R_SPOILER_1..5 (43-52) — TFDI MD-11,
-                                // дополнительная проверка симметрии по секциям.
-                                // OVERSPEED WARNING (53) — булев флаг "клацера" сима,
-                                // для сравнения в телеметрии с нашим порогом.
-                                // L:XMLSND75 (54) — клаксон "overspeed / mach trim"
-                                // на Learjet 35A (Flysimware), см. profiles.rs.
-                                // PMDG 737 (NG3), см. defs выше: L:EngineStart1b/2b_Ext
-                                // (55/56) — используется в rumble.rs для pre-spool
-                                // разгона; GENERAL ENG STARTER ACTIVE:1/2 (57/58) —
-                                // пока только для телеметрии. L:I_PFD_VMAX (59) —
-                                // Fenix A320, альтернативный источник порога
-                                // Overspeed вместо AIRSPEED BARBER POLE (см.
-                                // sim/parse.rs). L:A320_Gear_Nose (60) — Fenix
-                                // A320, сырая позиция носовой стойки (0..1000),
-                                // пока только для телеметрии (см. sim/parse.rs).
-                                //
-                                // ВНИМАНИЕ: длина elem[] и clamp count.min(..) ниже
-                                // должны покрывать ВСЕ зарегистрированные индексы
-                                // (0..=60, т.е. 61 элемент) — раньше здесь стоял
-                                // count.min(53), из-за чего индекс 53 (OVERSPEED
-                                // WARNING) никогда не копировался из живых данных
-                                // SimConnect и оставался равен 0.0/false.
-                                let mut elem = [0f64; 61];
+                                // Field layout: see ElemIdx in sim/elem_idx.rs — the
+                                // buffer length and clamp below are derived from the
+                                // same enum that drives DEFS registration above, so
+                                // they can't drift out of sync with it again (this
+                                // used to be a hardcoded count.min(53), which meant
+                                // OVERSPEED WARNING and everything after it never got
+                                // copied from live SimConnect data).
+                                let mut elem = [0f64; ElemIdx::COUNT];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(61),
+                                        count.min(ElemIdx::COUNT),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -825,7 +656,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(61),
+                                        count.min(ElemIdx::COUNT),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

@@ -1,3 +1,4 @@
+pub mod elem_idx;
 pub mod parse;
 
 #[cfg(windows)]
