@@ -27,6 +27,24 @@ pub enum Tab {
     Debug,
 }
 
+/// Раздел навигации внутри вкладки Main (левый SidePanel). Чисто UI-состояние
+/// текущей сессии — не персистится вместе с RumbleConfig/настройками.
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum Section {
+    Rumble,
+    Taxi,
+    Engines,
+    Gear,
+    Telemetry,
+}
+
+/// Placeholder device glyph kind — see `UiState::device_icon_button`.
+#[derive(Clone, Copy)]
+enum DeviceIcon {
+    Joystick,
+    Throttle,
+}
+
 fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
     let h = ui.style().spacing.interact_size.y.max(14.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(h, h), egui::Sense::hover());
@@ -117,6 +135,13 @@ pub struct UiState {
     pub show_hid_opened: bool,
 
     pub active_tab: Tab,
+    pub active_section: Section,
+    // Live Monitor по умолчанию свёрнут в узкую полоску с точками —
+    // разворачивается кликом по шеврону в именованный список.
+    pub monitor_collapsed: bool,
+    // В развёрнутом виде монитор по умолчанию показывает только включённые
+    // эффекты; выключенные скрыты за "+N disabled", пока не нажали явно.
+    pub monitor_show_disabled: bool,
     pub hold: Arc<AtomicBool>,
 
     pub rx_ui: Receiver<UiCmd>,
@@ -142,47 +167,57 @@ impl UiState {
         active: bool,
         on_change: &mut bool,
         hint: Option<&str>,
+        device: &mut EffectDeviceTarget,
+        t: &Strings,
     ) {
-        ui.horizontal(|ui| {
-            let cb = ui.checkbox(enabled, "");
-            if cb.changed() {
-                *on_change = true;
-            }
-
-            let name_label = ui.label(RichText::new(name).strong());
-            if let Some(h) = hint {
-                name_label.on_hover_text(h);
-            }
-
-            ui.add_enabled_ui(*enabled, |ui| {
-                // Процент всегда пересчитывается заново из исходного (технического)
-                // значения — никакого накопления погрешности округления между кадрами.
-                let mut pct = if native_max > 0.0 {
-                    (*val / native_max * 100.0).clamp(0.0, 100.0)
-                } else {
-                    0.0
-                };
-                let slider = egui::Slider::new(&mut pct, 0.0..=100.0)
-                    .trailing_fill(true)
-                    .show_value(true)
-                    .suffix("%")
-                    .fixed_decimals(0);
-                let resp = ui.add(slider);
-                if let Some(h) = hint {
-                    resp.clone().on_hover_text(h);
-                }
-                if resp.changed() {
-                    *val = (pct / 100.0) * native_max;
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                let cb = ui.checkbox(enabled, "");
+                if cb.changed() {
                     *on_change = true;
                 }
+
+                let name_label = ui.label(RichText::new(name).strong());
+                if let Some(h) = hint {
+                    name_label.on_hover_text(h);
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (color, filled) = if active && *enabled {
+                        (Color32::WHITE, true)
+                    } else {
+                        (Color32::from_gray(90), false)
+                    };
+                    circle_indicator_colored(ui, color, filled);
+                    Self::device_target_toggle(ui, device, on_change, t);
+                });
             });
 
-            let (color, filled) = if active && *enabled {
-                (Color32::WHITE, true)
-            } else {
-                (Color32::from_gray(90), false)
-            };
-            circle_indicator_colored(ui, color, filled);
+            ui.add_enabled_ui(*enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = (ui.available_width() - 65.0).max(60.0);
+                    // Процент всегда пересчитывается заново из исходного (технического)
+                    // значения — никакого накопления погрешности округления между кадрами.
+                    let mut pct = if native_max > 0.0 {
+                        (*val / native_max * 100.0).clamp(0.0, 100.0)
+                    } else {
+                        0.0
+                    };
+                    let slider = egui::Slider::new(&mut pct, 0.0..=100.0)
+                        .trailing_fill(true)
+                        .show_value(true)
+                        .suffix("%")
+                        .fixed_decimals(0);
+                    let resp = ui.add(slider);
+                    if let Some(h) = hint {
+                        resp.clone().on_hover_text(h);
+                    }
+                    if resp.changed() {
+                        *val = (pct / 100.0) * native_max;
+                        *on_change = true;
+                    }
+                });
+            });
         });
     }
 
@@ -200,44 +235,10 @@ impl UiState {
         on_change: &mut bool,
         override_enabled: &mut bool,
         override_kn: &mut f64,
+        device: &mut EffectDeviceTarget,
         t: &Strings,
     ) {
-        ui.horizontal(|ui| {
-            let cb = ui.checkbox(enabled, "");
-            if cb.changed() {
-                *on_change = true;
-            }
-
-            ui.label(RichText::new(t.overspeed_effect_name).strong());
-
-            let override_hint = t.hover_override;
-            let override_cb = ui.checkbox(override_enabled, t.chk_override).on_hover_text(override_hint);
-            if override_cb.changed() {
-                *on_change = true;
-            }
-            ui.add_enabled_ui(*override_enabled, |ui| {
-                let mut manual_kn = *override_kn as f32;
-                let resp = ui.add(
-                    egui::DragValue::new(&mut manual_kn)
-                        .speed(1.0)
-                        .clamp_range(50.0..=700.0)
-                        .suffix(" kt"),
-                );
-                resp.clone().on_hover_text(override_hint);
-                if resp.changed() {
-                    *override_kn = manual_kn as f64;
-                    *on_change = true;
-                }
-            });
-
-            let limit_text = match threshold_kn {
-                Some(kn) => format!("{} {:.0} kts", t.lbl_limit, kn),
-                None => t.limit_na.to_string(),
-            };
-            ui.add_enabled_ui(*enabled, |ui| {
-                ui.label(RichText::new(limit_text).weak());
-            });
-
+        ui.vertical(|ui| {
             let is_triggering = active && *enabled && threshold_kn.is_some();
             let (color, filled) = if is_triggering {
                 (Color32::from_rgb(220, 60, 60), true)
@@ -246,40 +247,139 @@ impl UiState {
             } else {
                 (Color32::from_gray(90), false)
             };
-            circle_indicator_colored(ui, color, filled);
-            if is_triggering {
-                ui.colored_label(color, t.status_active);
-            }
+
+            ui.horizontal(|ui| {
+                let cb = ui.checkbox(enabled, "");
+                if cb.changed() {
+                    *on_change = true;
+                }
+
+                ui.label(RichText::new(t.overspeed_effect_name).strong());
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    circle_indicator_colored(ui, color, filled);
+                    Self::device_target_toggle(ui, device, on_change, t);
+                });
+            });
+
+            ui.horizontal(|ui| {
+                let limit_text = match threshold_kn {
+                    Some(kn) => format!("{} {:.0} kts", t.lbl_limit, kn),
+                    None => t.limit_na.to_string(),
+                };
+                ui.add_enabled_ui(*enabled, |ui| {
+                    ui.label(RichText::new(limit_text).weak())
+                        .on_hover_text(t.hover_overspeed_limit_barberpole);
+                });
+                if is_triggering {
+                    ui.colored_label(color, t.status_active);
+                }
+            });
+
+            ui.horizontal(|ui| {
+                let override_hint = t.hover_override;
+                let override_cb = ui.checkbox(override_enabled, t.chk_override).on_hover_text(override_hint);
+                if override_cb.changed() {
+                    *on_change = true;
+                }
+                ui.add_enabled_ui(*override_enabled, |ui| {
+                    let mut manual_kn = *override_kn as f32;
+                    let resp = ui.add(
+                        egui::DragValue::new(&mut manual_kn)
+                            .speed(1.0)
+                            .range(50.0..=700.0)
+                            .suffix(" kt"),
+                    );
+                    resp.clone().on_hover_text(override_hint);
+                    if resp.changed() {
+                        *override_kn = manual_kn as f64;
+                        *on_change = true;
+                    }
+                });
+            });
         });
     }
 
-    /// Компактная строка с двумя чекбоксами маршрутизации эффекта на
-    /// устройства: "J" (Combat Joystick R) и "T" (URSA MINOR Throttle).
-    /// Рисуется сразу под соответствующей строкой эффекта (effect_row_percent/_hinted).
-    fn device_target_row(
+    /// Компактный сегментированный переключатель маршрутизации эффекта на
+    /// устройства (Joystick / Throttle), заменивший пару подписанных
+    /// чекбоксов "Device: J T" на отдельной строке — теперь встраивается в
+    /// конец той же ui.horizontal, где рисуется сам слайдер эффекта.
+    fn device_target_toggle(
         ui: &mut egui::Ui,
         target: &mut EffectDeviceTarget,
         on_change: &mut bool,
         t: &Strings,
     ) {
-        ui.horizontal(|ui| {
-            ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-            ui.label(RichText::new(t.device_label).weak().small());
-
-            let cb_j = ui
-                .checkbox(&mut target.enable_joystick, "J")
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.x = 1.0;
+            let j = Self::device_icon_button(ui, target.enable_joystick, DeviceIcon::Joystick)
                 .on_hover_text(t.hover_joystick_hw);
-            if cb_j.changed() {
+            if j.clicked() {
+                target.enable_joystick = !target.enable_joystick;
                 *on_change = true;
             }
-
-            let cb_t = ui
-                .checkbox(&mut target.enable_throttle, "T")
+            let th = Self::device_icon_button(ui, target.enable_throttle, DeviceIcon::Throttle)
                 .on_hover_text(t.hover_throttle_hw);
-            if cb_t.changed() {
+            if th.clicked() {
+                target.enable_throttle = !target.enable_throttle;
                 *on_change = true;
             }
         });
+    }
+
+    /// Рисует иконку устройства (джойстик/РУД) как кнопку с картинкой
+    /// (assets/icon_joystick.png, assets/icon_throttle.png), подсвеченную
+    /// акцентным цветом в выбранном состоянии — та же selected-стилистика,
+    /// что была у selectable_label, но с реальной иконкой вместо эмодзи.
+    fn device_icon_button(ui: &mut egui::Ui, selected: bool, icon: DeviceIcon) -> egui::Response {
+        let source = match icon {
+            DeviceIcon::Joystick => egui::include_image!("../assets/icon_joystick.png"),
+            DeviceIcon::Throttle => egui::include_image!("../assets/icon_throttle.png"),
+        };
+        let tint = if selected {
+            ui.visuals().selection.stroke.color
+        } else {
+            ui.visuals().text_color()
+        };
+        let image = egui::Image::new(source)
+            .tint(tint)
+            .fit_to_exact_size(egui::vec2(16.0, 16.0));
+        ui.add(egui::Button::new(image).selected(selected))
+    }
+
+    /// Обёртка-карточка вокруг одного эффекта: рамка со скруглением,
+    /// подсветка обводки акцентным цветом при active&&enabled, приглушение
+    /// (opacity) содержимого, если эффект выключен.
+    fn effect_card(ui: &mut egui::Ui, enabled: bool, active: bool, add_contents: impl FnOnce(&mut egui::Ui)) {
+        const ACCENT: Color32 = Color32::from_rgb(255, 157, 66);
+        let stroke = if enabled && active {
+            egui::Stroke::new(1.4, ACCENT)
+        } else {
+            // Всегда видимая, но нейтральная граница карточки — раньше здесь
+            // был почти невидимый theme-default bg_stroke, из-за чего соседние
+            // карточки в сетке визуально сливались друг с другом без явной
+            // границы между ними.
+            egui::Stroke::new(1.0, Color32::from_gray(85))
+        };
+        egui::Frame::group(ui.style())
+            .stroke(stroke)
+            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 20))
+            .shadow(egui::Shadow {
+                offset: [0, 2],
+                blur: 6,
+                spread: 0,
+                color: Color32::from_black_alpha(50),
+            })
+            .corner_radius(6u8)
+            .inner_margin(egui::Margin::same(8))
+            .outer_margin(egui::Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if !enabled {
+                    ui.set_opacity(0.55);
+                }
+                add_contents(ui);
+            });
     }
 
     fn taxi_bound_row(
@@ -292,56 +392,68 @@ impl UiState {
         on_change: &mut bool,
         hint: Option<&str>,
     ) {
-        ui.horizontal(|ui| {
-            let cb = ui.checkbox(enabled, "");
-            if cb.changed() {
-                *on_change = true;
-            }
-
-            let name_label = ui.label(RichText::new(name).strong());
-            if let Some(h) = hint {
-                name_label.on_hover_text(h);
-            }
-
-            ui.add_enabled_ui(*enabled, |ui| {
-                let mut tmp = *val as f32;
-                let r = (*range.start() as f32)..=(*range.end() as f32);
-                let resp = ui.add(egui::Slider::new(&mut tmp, r).trailing_fill(true).show_value(true));
-                if let Some(h) = hint {
-                    resp.clone().on_hover_text(h);
-                }
-                if resp.changed()
-                {
-                    *val = tmp as f64;
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                let cb = ui.checkbox(enabled, "");
+                if cb.changed() {
                     *on_change = true;
                 }
+
+                let name_label = ui.label(RichText::new(name).strong());
+                if let Some(h) = hint {
+                    name_label.on_hover_text(h);
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (color, filled) = if active && *enabled {
+                        (Color32::WHITE, true)
+                    } else {
+                        (Color32::from_gray(90), false)
+                    };
+                    circle_indicator_colored(ui, color, filled);
+                });
             });
 
-            let (color, filled) = if active && *enabled {
-                (Color32::WHITE, true)
-            } else {
-                (Color32::from_gray(90), false)
-            };
-            circle_indicator_colored(ui, color, filled);
+            ui.add_enabled_ui(*enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = (ui.available_width() - 65.0).max(60.0);
+                    let mut tmp = *val as f32;
+                    let r = (*range.start() as f32)..=(*range.end() as f32);
+                    let resp = ui.add(egui::Slider::new(&mut tmp, r).trailing_fill(true).show_value(true));
+                    if let Some(h) = hint {
+                        resp.clone().on_hover_text(h);
+                    }
+                    if resp.changed()
+                    {
+                        *val = tmp as f64;
+                        *on_change = true;
+                    }
+                });
+            });
         });
     }
 }
 
 impl eframe::App for UiState {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // egui 0.35: the App trait hands us the root Ui directly (no more
+        // `&Context` parameter) — recover the Context from it for the calls
+        // below that still need it (repaint scheduling, viewport commands).
+        let ctx = ui.ctx().clone();
         {
             const TARGET_FPS: u64 = 30;
             ctx.request_repaint_after(Duration::from_millis(1000 / TARGET_FPS));
         }
 
-        let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = Vec2::new(6.0, 6.0);
-        style.spacing.slider_width = 160.0;
-        ctx.set_style(style);
+        {
+            let style = ui.style_mut();
+            style.spacing.item_spacing = Vec2::new(6.0, 6.0);
+            style.spacing.slider_width = 160.0;
+        }
 
         let t = self.lang.strings();
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
+        egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let st = *self.status.lock();
                 status_badge(ui, &st, t);
@@ -370,7 +482,9 @@ impl eframe::App for UiState {
                 };
                 ui.label(RichText::new(format_aircraft_label(&ac, t)).italics().color(ac_color));
 
+                ui.add_space(16.0);
                 ui.separator();
+                ui.add_space(4.0);
 
                 if ui.button(t.btn_load).clicked() {
                     match crate::settings::load() {
@@ -439,44 +553,40 @@ impl eframe::App for UiState {
                 )
                 .on_hover_text(t.hover_also_default);
 
-                #[cfg(debug_assertions)]
-                {
-                    ui.separator();
-                    ui.selectable_value(&mut self.active_tab, Tab::Main, t.tab_main);
-                    ui.selectable_value(&mut self.active_tab, Tab::Debug, t.tab_debug);
-                }
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(4.0);
 
                 // TODO: кнопка "Check for updates" временно скрыта из тулбара
                 // (функциональность сохранена в updater::spawn_check и в
                 // трей-меню — см. tray.rs), включим обратно позже.
-                ui.separator();
 
-                let holding = self.hold.load(Ordering::Relaxed);
-                if !holding {
-                    let stop_button = egui::Button::new(
-                        RichText::new(t.btn_stop).color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(0x6d, 0x12, 0x1b)); // #6d121b
-                    if ui.add(stop_button).clicked() {
-                        self.hold.store(true, Ordering::Relaxed);
-                        let _ = self.tx_hid.send(HidCmd::SetHold(true));
-                        tray::notify_held(true);
-                    }
-                } else if ui.button(t.btn_resume).clicked() {
-                    self.hold.store(false, Ordering::Relaxed);
-                    let _ = self.tx_hid.send(HidCmd::SetHold(false));
-                    tray::notify_held(false);
-                }
-
-                ui.separator();
-
-                // Резерв на будущее — пока не заполнены.
-                ui.menu_button(t.btn_options, |_ui| {});
-                ui.button("?").on_hover_text(t.hover_help);
+                // Stop/Resume перенесены в левую колонку навигации, под пункт
+                // Telemetry — см. nav_panel ниже.
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let ru_btn = ui.add(egui::SelectableLabel::new(self.lang == Lang::Ru, "RU"));
-                    let en_btn = ui.add(egui::SelectableLabel::new(self.lang == Lang::En, "EN"));
+                    let ru_btn = ui.selectable_label(self.lang == Lang::Ru, "RU");
+                    let en_btn = ui.selectable_label(self.lang == Lang::En, "EN");
+
+                    ui.add_space(8.0);
+                    // Overflow-меню: Options (резерв на будущее), Help и, в debug-сборке,
+                    // переключатель Main/Debug — раньше это были три-четыре отдельные
+                    // кнопки в тулбаре, теперь редко используемые действия собраны в одном месте.
+                    ui.menu_button("...", |ui| {
+                        #[cfg(debug_assertions)]
+                        {
+                            if ui.selectable_label(self.active_tab == Tab::Main, t.tab_main).clicked() {
+                                self.active_tab = Tab::Main;
+                            }
+                            if ui.selectable_label(self.active_tab == Tab::Debug, t.tab_debug).clicked() {
+                                self.active_tab = Tab::Debug;
+                            }
+                            ui.separator();
+                        }
+                        ui.menu_button(t.btn_options, |_ui| {});
+                        ui.label(t.hover_help);
+                    });
+
                     let new_lang = if en_btn.clicked() {
                         Some(Lang::En)
                     } else if ru_btn.clicked() {
@@ -509,7 +619,153 @@ impl eframe::App for UiState {
         let _ = show_debug;
 
         if show_main {
-            egui::CentralPanel::default().show(ctx, |ui| {
+            // Общий снимок "включён/активен" для каждого эффекта — используется и
+            // бейджами счётчика в навигации слева, и списком Live Monitor справа,
+            // чтобы не считать дважды.
+            let mon = self.config.get();
+            // Порядок элементов соответствует новой группировке по разделам
+            // (Aerodynamics / Taxi / Engines / Gears) — см. диапазоны ниже.
+            let rows: [(&str, bool, bool); 11] = [
+                (t.overspeed_effect_name, mon.overspeed_enabled, self.effects.overspeed_active.load(Ordering::Relaxed)),
+                (t.name_stall, mon.stall_enabled, self.effects.stall_active.load(Ordering::Relaxed)),
+                (t.name_spoilers, mon.spoilers_enabled, self.effects.spoilers_active.load(Ordering::Relaxed)),
+                (t.name_flaps, mon.flaps_enabled, self.effects.flaps_bump_active.load(Ordering::Relaxed)),
+                (t.lbl_bank_turb, mon.bank_enabled, self.effects.bank_active.load(Ordering::Relaxed)),
+                (t.name_engine_start, mon.enable_engine_start, self.effects.engine_start_active.load(Ordering::Relaxed)),
+                (t.name_ground_roll, mon.ground_enabled, self.effects.ground_active.load(Ordering::Relaxed) || self.effects.ground_thump_active.load(Ordering::Relaxed)),
+                (t.name_nose_peak, mon.gear_comp_nose_enabled, self.effects.gear_comp_nose_active.load(Ordering::Relaxed)),
+                (t.name_left_peak, mon.gear_comp_left_enabled, self.effects.gear_comp_left_active.load(Ordering::Relaxed)),
+                (t.name_right_peak, mon.gear_comp_right_enabled, self.effects.gear_comp_right_active.load(Ordering::Relaxed)),
+                (t.lbl_gear_transit, mon.gear_transit_enabled, self.effects.gear_transit_active.load(Ordering::Relaxed)),
+            ];
+            let section_active = |range: std::ops::Range<usize>| -> bool {
+                rows[range].iter().any(|(_, enabled, active)| *enabled && *active)
+            };
+            let rumble_active = section_active(0..5);
+            let taxi_active = false; // в Taxi Thump больше нет эффектов из Live Monitor (Flaps переехал в Aerodynamics)
+            let engines_active = section_active(5..6);
+            let gear_active = section_active(6..11);
+
+            egui::Panel::left("nav_panel").resizable(false).exact_size(150.0).show(ui, |ui| {
+                ui.add_space(4.0);
+                let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str, active: bool| -> bool {
+                    let resp = ui.horizontal(|ui| {
+                        let r = ui.selectable_label(selected, label);
+                        if active {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                circle_indicator_colored(ui, Color32::WHITE, true);
+                            });
+                        }
+                        r
+                    }).inner;
+                    resp.clicked()
+                };
+                if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble, rumble_active) {
+                    self.active_section = Section::Rumble;
+                }
+                if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi, taxi_active) {
+                    self.active_section = Section::Taxi;
+                }
+                if nav_item(ui, self.active_section == Section::Engines, t.nav_engines, engines_active) {
+                    self.active_section = Section::Engines;
+                }
+                if nav_item(ui, self.active_section == Section::Gear, t.nav_gear, gear_active) {
+                    self.active_section = Section::Gear;
+                }
+                ui.separator();
+                if ui.selectable_label(self.active_section == Section::Telemetry, t.nav_telemetry).clicked() {
+                    self.active_section = Section::Telemetry;
+                }
+
+                ui.separator();
+                let holding = self.hold.load(Ordering::Relaxed);
+                if !holding {
+                    let stop_button = egui::Button::new(
+                        RichText::new(t.btn_stop).color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0x6d, 0x12, 0x1b)); // #6d121b
+                    if ui.add(stop_button).clicked() {
+                        self.hold.store(true, Ordering::Relaxed);
+                        let _ = self.tx_hid.send(HidCmd::SetHold(true));
+                        tray::notify_held(true);
+                    }
+                } else if ui.button(t.btn_resume).clicked() {
+                    self.hold.store(false, Ordering::Relaxed);
+                    let _ = self.tx_hid.send(HidCmd::SetHold(false));
+                    tray::notify_held(false);
+                }
+            });
+
+            let monitor_width = if self.monitor_collapsed { 32.0 } else { 220.0 };
+            egui::Panel::right("live_monitor_panel").resizable(false).exact_size(monitor_width).show(ui, |ui| {
+                ui.add_space(4.0);
+
+                if self.monitor_collapsed {
+                    // Свёрнутая полоска: шеврон-разворот + столбик точек активности,
+                    // без подписей — минимальная стоимость по пространству.
+                    if ui.button("<").on_hover_text(t.heading_live_monitor).clicked() {
+                        self.monitor_collapsed = false;
+                    }
+                    ui.add_space(4.0);
+                    ui.separator();
+                    for (_, enabled, active) in rows {
+                        let (color, filled) = if enabled && active {
+                            (Color32::WHITE, true)
+                        } else {
+                            (Color32::from_gray(90), false)
+                        };
+                        ui.vertical_centered(|ui| {
+                            circle_indicator_colored(ui, color, filled);
+                        });
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.heading(t.heading_live_monitor);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(">").clicked() {
+                                self.monitor_collapsed = true;
+                            }
+                        });
+                    });
+                    ui.separator();
+
+                    let enabled_rows: Vec<_> = rows.iter().filter(|(_, enabled, _)| *enabled).collect();
+                    let disabled_count = rows.len() - enabled_rows.len();
+
+                    if enabled_rows.is_empty() {
+                        ui.weak(t.lbl_no_active_effects);
+                    }
+                    for (name, enabled, active) in enabled_rows {
+                        ui.horizontal(|ui| {
+                            let (color, filled) = if *enabled && *active {
+                                (Color32::WHITE, true)
+                            } else {
+                                (Color32::from_gray(90), false)
+                            };
+                            circle_indicator_colored(ui, color, filled);
+                            ui.label(RichText::new(*name).small());
+                        });
+                    }
+
+                    if disabled_count > 0 {
+                        ui.add_space(4.0);
+                        let label = i18n::lbl_disabled_count(self.lang, disabled_count);
+                        if ui.selectable_label(self.monitor_show_disabled, RichText::new(label).small().weak()).clicked() {
+                            self.monitor_show_disabled = !self.monitor_show_disabled;
+                        }
+                        if self.monitor_show_disabled {
+                            for (name, _enabled, _active) in rows.iter().filter(|(_, enabled, _)| !*enabled) {
+                                ui.horizontal(|ui| {
+                                    circle_indicator_colored(ui, Color32::from_gray(90), false);
+                                    ui.add_enabled(false, egui::Label::new(RichText::new(*name).small()));
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+
+            egui::CentralPanel::default().show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -565,7 +821,12 @@ impl eframe::App for UiState {
                             });
                         ui.add_space(4.0);
 
-                        ui.heading(t.heading_rumble_effects);
+                        if ui.button(t.btn_reset_defaults).clicked() {
+                            // Только сбрасывает ЖИВОЙ конфиг — на диск ничего не пишет,
+                            // как и любое другое изменение. Нажмите Save (дискета в
+                            // верхней панели), чтобы зафиксировать сброс.
+                            self.config.set(RumbleConfig::default());
+                        }
                         ui.add_space(4.0);
 
                         let mut _changed = false;
@@ -591,456 +852,500 @@ impl eframe::App for UiState {
                         };
 
                         self.config.with_mut(|cfg| {
-                             // Overspeed
-                             let mut overspeed_enabled = cfg.overspeed_enabled;
-                             let mut overspeed_override = cfg.overspeed_override_enabled;
-                             let mut overspeed_manual_kn = cfg.overspeed_manual_kn;
+                            match self.active_section {
+                                Section::Rumble => {
+                                    ui.heading(t.nav_rumble);
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
 
-                             UiState::overspeed_row(
-                                 ui,
-                                 &mut overspeed_enabled,
-                                 overspeed_threshold_kn,
-                                 self.effects.overspeed_active.load(Ordering::Relaxed),
-                                 &mut _changed,
-                                 &mut overspeed_override,
-                                 &mut overspeed_manual_kn,
-                                 t,
-                             );
-                             cfg.overspeed_enabled = overspeed_enabled;
-                             cfg.overspeed_override_enabled = overspeed_override;
-                             cfg.overspeed_manual_kn = overspeed_manual_kn;
-                             UiState::device_target_row(ui, &mut cfg.device_targets.overspeed, &mut _changed, t);
+                                        // Overspeed
+                                        {
+                                            let mut overspeed_enabled = cfg.overspeed_enabled;
+                                            let mut overspeed_override = cfg.overspeed_override_enabled;
+                                            let mut overspeed_manual_kn = cfg.overspeed_manual_kn;
+                                            let active = self.effects.overspeed_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, overspeed_enabled, active, |ui| {
+                                                UiState::overspeed_row(
+                                                    ui,
+                                                    &mut overspeed_enabled,
+                                                    overspeed_threshold_kn,
+                                                    active,
+                                                    &mut _changed,
+                                                    &mut overspeed_override,
+                                                    &mut overspeed_manual_kn,
+                                                    &mut cfg.device_targets.overspeed,
+                                                    t,
+                                                );
 
-                             // Overspeed intensity slider - отображается как 0..100%, технический предел 255
-                             ui.horizontal(|ui| {
-                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                 let intensity_hint = t.hover_overspeed_intensity;
-                                 let lbl = ui.label(RichText::new(t.lbl_intensity).strong());
-                                 lbl.on_hover_text(intensity_hint);
-                                 let mut pct = (cfg.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0);
-                                 let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
-                                     .trailing_fill(true)
-                                     .show_value(true)
-                                     .suffix("%")
-                                     .fixed_decimals(0));
-                                 resp.clone().on_hover_text(intensity_hint);
-                                 if resp.changed() {
-                                     cfg.overspeed_intensity = pct / 100.0 * 255.0;
-                                     _changed = true;
-                                 }
+                                                ui.horizontal(|ui| {
+                                                    let intensity_hint = t.hover_overspeed_intensity;
+                                                    let lbl = ui.label(RichText::new(t.lbl_intensity).strong());
+                                                    lbl.on_hover_text(intensity_hint);
+                                                    ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
+                                                    let mut pct = (cfg.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0);
+                                                    let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
+                                                        .trailing_fill(true)
+                                                        .show_value(true)
+                                                        .suffix("%")
+                                                        .fixed_decimals(0));
+                                                    resp.clone().on_hover_text(intensity_hint);
+                                                    if resp.changed() {
+                                                        cfg.overspeed_intensity = pct / 100.0 * 255.0;
+                                                        _changed = true;
+                                                    }
+                                                });
+                                            });
+                                            cfg.overspeed_enabled = overspeed_enabled;
+                                            cfg.overspeed_override_enabled = overspeed_override;
+                                            cfg.overspeed_manual_kn = overspeed_manual_kn;
+                                        }
 
-                                 let limit_text = match overspeed_threshold_kn {
-                                     Some(kn) => format!("{} {:.0} kts", t.lbl_limit, kn),
-                                     None => t.limit_na.to_string(),
-                                 };
-                                 ui.label(RichText::new(limit_text).weak())
-                                     .on_hover_text(t.hover_overspeed_limit_barberpole);
-                             });
+                                        // Stall
+                                        {
+                                            let mut stall_enabled = cfg.stall_enabled;
+                                            let active = self.effects.stall_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, stall_enabled, active, |ui| {
+                                                UiState::effect_row_percent_hinted(
+                                                    ui,
+                                                    t.name_stall,
+                                                    &mut cfg.stall_ceiling,
+                                                    255.0,
+                                                    &mut stall_enabled,
+                                                    active,
+                                                    &mut _changed,
+                                                    Some(t.hover_stall),
+                                                    &mut cfg.device_targets.stall,
+                                                    t,
+                                                );
+                                            });
+                                            cfg.stall_enabled = stall_enabled;
+                                        }
 
-                            ui.add_space(8.0);
+                                        // Spoilers (+ advanced threshold)
+                                        {
+                                            let mut spoilers_enabled = cfg.spoilers_enabled;
+                                            let active = self.effects.spoilers_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, spoilers_enabled, active, |ui| {
+                                                UiState::effect_row_percent_hinted(
+                                                    ui,
+                                                    t.name_spoilers,
+                                                    &mut cfg.spoilers_intensity,
+                                                    250.0,
+                                                    &mut spoilers_enabled,
+                                                    active,
+                                                    &mut _changed,
+                                                    Some(t.hover_spoilers),
+                                                    &mut cfg.device_targets.spoilers,
+                                                    t,
+                                                );
 
-                            // Ground Roll
-                            let mut ground_enabled = cfg.ground_enabled;
-                            UiState::effect_row_percent_hinted(
-                                ui,
-                                t.name_ground_roll,
-                                &mut cfg.ground_roll,
-                                50.0,
-                                &mut ground_enabled,
-                                ground_active || ground_thump_active,
-                                &mut _changed,
-                                Some(t.hover_ground_roll),
-                            );
-                            cfg.ground_enabled = ground_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.ground_roll, &mut _changed, t);
+                                                ui.horizontal(|ui| {
+                                                    let threshold_hint = t.hover_spoilers_threshold;
+                                                    let lbl = ui.label(RichText::new(t.lbl_threshold_pct).strong());
+                                                    lbl.on_hover_text(threshold_hint);
+                                                    ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
+                                                    let mut threshold = cfg.spoilers_threshold_pct as f32;
+                                                    let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=100.0)
+                                                        .trailing_fill(true)
+                                                        .show_value(true));
+                                                    resp.clone().on_hover_text(threshold_hint);
+                                                    if resp.changed() {
+                                                        cfg.spoilers_threshold_pct = threshold as f64;
+                                                        _changed = true;
+                                                    }
+                                                });
+                                            });
+                                            cfg.spoilers_enabled = spoilers_enabled;
+                                        }
 
-                            ui.add_space(8.0);
+                                        // Flaps
+                                        {
+                                            let mut flaps_enabled = cfg.flaps_enabled;
+                                            let active = self.effects.flaps_bump_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, flaps_enabled, active, |ui| {
+                                                UiState::effect_row_percent_hinted(
+                                                    ui,
+                                                    t.name_flaps,
+                                                    &mut cfg.flaps_peak,
+                                                    255.0,
+                                                    &mut flaps_enabled,
+                                                    active,
+                                                    &mut _changed,
+                                                    Some(t.hover_flaps),
+                                                    &mut cfg.device_targets.flaps,
+                                                    t,
+                                                );
+                                            });
+                                            cfg.flaps_enabled = flaps_enabled;
+                                        }
 
-                            // Taxi thump bounds
-                            ui.label(RichText::new(t.heading_taxi_thump).heading());
-                            ui.add_space(4.0);
+                                        // Bank / Turb (+ threshold)
+                                        {
+                                            let mut bank_enabled = cfg.bank_enabled;
+                                            let active = self.effects.bank_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, bank_enabled, active, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    if ui.checkbox(&mut bank_enabled, "").changed() {
+                                                        _changed = true;
+                                                    }
+                                                    ui.label(RichText::new(t.lbl_bank_turb).strong());
+                                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                        circle_indicator_colored(
+                                                            ui,
+                                                            if active && bank_enabled { Color32::WHITE } else { Color32::from_gray(90) },
+                                                            active && bank_enabled,
+                                                        );
+                                                        Self::device_target_toggle(ui, &mut cfg.device_targets.bank, &mut _changed, t);
+                                                    });
+                                                });
 
-                            {
-                                let mut start = cfg.taxi_start_kn;
-                                let mut end = cfg.taxi_end_kn;
-                                let mut start_enabled = cfg.taxi_start_enabled;
-                                let mut end_enabled = cfg.taxi_end_enabled;
+                                                ui.horizontal(|ui| {
+                                                    let intensity_hint = t.hover_bank_intensity;
+                                                    let lbl = ui.label(RichText::new(t.lbl_intensity).strong());
+                                                    lbl.on_hover_text(intensity_hint);
+                                                    ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
+                                                    let mut pct = (cfg.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0);
+                                                    let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
+                                                        .trailing_fill(true)
+                                                        .show_value(true)
+                                                        .suffix("%")
+                                                        .fixed_decimals(0));
+                                                    resp.clone().on_hover_text(intensity_hint);
+                                                    if resp.changed() {
+                                                        cfg.bank_intensity = pct / 100.0 * 200.0;
+                                                        _changed = true;
+                                                    }
+                                                });
 
-                                UiState::taxi_bound_row(
-                                    ui,
-                                    t.name_taxi_start,
-                                    &mut start,
-                                    &mut start_enabled,
-                                    0.0..=20.0,
-                                    taxi_start_crossed,
-                                    &mut _changed,
-                                    Some(t.hover_taxi_start),
-                                );
-                                cfg.taxi_start_enabled = start_enabled;
-
-                                if start >= end - 0.5 {
-                                    end = (start + 0.5).min(250.0);
+                                                ui.horizontal(|ui| {
+                                                    let threshold_hint = t.hover_bank_threshold;
+                                                    let lbl = ui.label(RichText::new(t.lbl_threshold_deg).strong());
+                                                    lbl.on_hover_text(threshold_hint);
+                                                    ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
+                                                    let mut threshold = cfg.bank_threshold_deg;
+                                                    let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=90.0)
+                                                        .trailing_fill(true)
+                                                        .show_value(true));
+                                                    resp.clone().on_hover_text(threshold_hint);
+                                                    if resp.changed() {
+                                                        cfg.bank_threshold_deg = threshold;
+                                                        _changed = true;
+                                                    }
+                                                });
+                                            });
+                                            cfg.bank_enabled = bank_enabled;
+                                        }
+                                    });
                                 }
 
-                                UiState::taxi_bound_row(
-                                    ui,
-                                    t.name_taxi_end,
-                                    &mut end,
-                                    &mut end_enabled,
-                                    1.0..=250.0, // Изменили верхний порог слайдера до 250
-                                    taxi_end_crossed,
-                                    &mut _changed,
-                                    Some(t.hover_taxi_end),
-                                );
-                                cfg.taxi_end_enabled = end_enabled;
+                                Section::Taxi => {
+                                    ui.heading(t.nav_taxi);
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
 
-                                if end <= start + 0.5 {
-                                    start = (end - 0.5).max(0.0);
+                                        // Taxi Thump Bounds (Start + End + advanced Period curve)
+                                        {
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, true, taxi_start_crossed || taxi_end_crossed, |ui| {
+                                                ui.label(RichText::new(t.heading_taxi_thump).strong());
+
+                                                let mut start = cfg.taxi_start_kn;
+                                                let mut end = cfg.taxi_end_kn;
+                                                let mut start_enabled = cfg.taxi_start_enabled;
+                                                let mut end_enabled = cfg.taxi_end_enabled;
+
+                                                UiState::taxi_bound_row(
+                                                    ui,
+                                                    t.name_taxi_start,
+                                                    &mut start,
+                                                    &mut start_enabled,
+                                                    0.0..=20.0,
+                                                    taxi_start_crossed,
+                                                    &mut _changed,
+                                                    Some(t.hover_taxi_start),
+                                                );
+                                                cfg.taxi_start_enabled = start_enabled;
+
+                                                if start >= end - 0.5 {
+                                                    end = (start + 0.5).min(250.0);
+                                                }
+
+                                                UiState::taxi_bound_row(
+                                                    ui,
+                                                    t.name_taxi_end,
+                                                    &mut end,
+                                                    &mut end_enabled,
+                                                    1.0..=250.0, // Изменили верхний порог слайдера до 250
+                                                    taxi_end_crossed,
+                                                    &mut _changed,
+                                                    Some(t.hover_taxi_end),
+                                                );
+                                                cfg.taxi_end_enabled = end_enabled;
+
+                                                if end <= start + 0.5 {
+                                                    start = (end - 0.5).max(0.0);
+                                                }
+
+                                                cfg.taxi_start_kn = start.clamp(0.0, 249.5);
+                                                cfg.taxi_end_kn = end.clamp(cfg.taxi_start_kn + 0.5, 250.0); // Изменили clamp до 250
+
+                                                // Коэффициент кривизны нарастания частоты ударов.
+                                                // >1.0 = плавнее на старте (пауза между ударами сокращается медленнее),
+                                                // <1.0 = резче, чем чистая физика t=S/V; 1.0 = без коррекции.
+                                                ui.horizontal(|ui| {
+                                                    let lbl = ui.label(RichText::new(t.lbl_period_curve).strong());
+                                                    lbl.on_hover_text(t.hover_period_curve_full);
+                                                    ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
+                                                    let mut curve = cfg.thump_period_curve;
+                                                    let resp = ui.add(egui::Slider::new(&mut curve, 0.3..=5.0)
+                                                        .trailing_fill(true)
+                                                        .show_value(true));
+                                                    resp.clone().on_hover_text(t.hover_period_curve_short);
+                                                    if resp.changed() {
+                                                        cfg.thump_period_curve = curve;
+                                                        _changed = true;
+                                                    }
+                                                });
+                                            });
+                                        }
+
+                                    });
                                 }
 
-                                cfg.taxi_start_kn = start.clamp(0.0, 249.5);
-                                cfg.taxi_end_kn = end.clamp(cfg.taxi_start_kn + 0.5, 250.0); // Изменили clamp до 250
+                                Section::Engines => {
+                                    ui.heading(t.nav_engines);
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
+                                        // Engine Start / Ignition (+ advanced N2 idle, 4-Eng mode, swap hands)
+                                        {
+                                            let mut engine_start_enabled = cfg.enable_engine_start;
+                                            let active = self.effects.engine_start_active.load(Ordering::Relaxed);
+                                            let engine_start_hint = t.hover_engine_start;
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, engine_start_enabled, active, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    let cb = ui.checkbox(&mut engine_start_enabled, "");
+                                                    if cb.changed() {
+                                                        _changed = true;
+                                                    }
+
+                                                    let name_label = ui.label(RichText::new(t.name_engine_start).strong());
+                                                    name_label.on_hover_text(engine_start_hint);
+
+                                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                        circle_indicator_colored(
+                                                            ui,
+                                                            if active && engine_start_enabled { Color32::WHITE } else { Color32::from_gray(90) },
+                                                            active && engine_start_enabled,
+                                                        );
+                                                    });
+                                                });
+
+                                                ui.add_enabled_ui(engine_start_enabled, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        ui.spacing_mut().slider_width = (ui.available_width() - 65.0).max(60.0);
+                                                        let mut pct = (cfg.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0);
+                                                        let slider = egui::Slider::new(&mut pct, 0.0..=100.0)
+                                                            .trailing_fill(true)
+                                                            .show_value(true)
+                                                            .suffix("%")
+                                                            .fixed_decimals(0);
+                                                        let resp = ui.add(slider);
+                                                        resp.clone().on_hover_text(engine_start_hint);
+                                                        if resp.changed() {
+                                                            cfg.engine_start_strength = pct / 100.0 * 255.0;
+                                                            _changed = true;
+                                                        }
+                                                    });
+                                                });
+                                                cfg.enable_engine_start = engine_start_enabled;
+
+                                                ui.horizontal(|ui| {
+                                                    let n2_hint = t.hover_n2_idle;
+                                                    let n2_label = ui.label(RichText::new(t.lbl_n2_idle).strong());
+                                                    n2_label.on_hover_text(n2_hint);
+                                                    let n2_resp = ui.add(
+                                                        egui::DragValue::new(&mut cfg.engine_idle_n2)
+                                                            .speed(1.0)
+                                                            .range(10.0..=100.0),
+                                                    );
+                                                    n2_resp.clone().on_hover_text(n2_hint);
+                                                    if n2_resp.changed() {
+                                                        _changed = true;
+                                                    }
+                                                });
+                                                if ui
+                                                    .checkbox(&mut cfg.four_engine_mode, t.chk_four_eng_mode)
+                                                    .on_hover_text(t.hover_four_eng_mode)
+                                                    .changed()
+                                                {
+                                                    _changed = true;
+                                                }
+                                                if ui
+                                                    .checkbox(&mut cfg.swap_hand_layout, t.chk_swap_hands)
+                                                    .on_hover_text(t.hover_swap_hands)
+                                                    .changed()
+                                                {
+                                                    _changed = true;
+                                                }
+                                            });
+                                        }
+                                    });
+                                }
+
+                                Section::Gear => {
+                                    ui.heading(t.nav_gear);
+                                    ui.add_space(4.0);
+                                    ui.label(RichText::new(t.heading_gear_comp).weak());
+                                    ui.add_space(4.0);
+
+                                    let mut gear_comp_enabled = cfg.gear_comp_enabled;
+                                    ui.horizontal(|ui| {
+                                        if ui.checkbox(&mut gear_comp_enabled, t.chk_enabled).changed() {
+                                            _changed = true;
+                                        }
+                                        ui.add_space(12.0);
+                                        if ui
+                                            .checkbox(&mut cfg.split_touchdown, t.chk_split_touchdown)
+                                            .on_hover_text(t.hover_split_touchdown)
+                                            .changed()
+                                        {
+                                            _changed = true;
+                                        }
+                                    });
+                                    cfg.gear_comp_enabled = gear_comp_enabled;
+                                    ui.add_space(4.0);
+
+                                    let headroom_hint = t.hover_headroom;
+
+                                    ui.vertical(|ui| {
+
+                                        // Ground Roll
+                                        {
+                                            let mut ground_enabled = cfg.ground_enabled;
+                                            let active = ground_active || ground_thump_active;
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, ground_enabled, active, |ui| {
+                                                UiState::effect_row_percent_hinted(
+                                                    ui,
+                                                    t.name_ground_roll,
+                                                    &mut cfg.ground_roll,
+                                                    50.0,
+                                                    &mut ground_enabled,
+                                                    active,
+                                                    &mut _changed,
+                                                    Some(t.hover_ground_roll),
+                                                    &mut cfg.device_targets.ground_roll,
+                                                    t,
+                                                );
+                                            });
+                                            cfg.ground_enabled = ground_enabled;
+                                        }
+
+                                        // Nose / Left / Right Peak — активны только пока Gear Strut Compression включён.
+                                        {
+                                            let mut nose_enabled = cfg.gear_comp_nose_enabled;
+                                            let active = self.effects.gear_comp_nose_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            col.add_enabled_ui(gear_comp_enabled, |ui| {
+                                                UiState::effect_card(ui, nose_enabled, active, |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_nose_peak,
+                                                        &mut cfg.gear_comp_nose_peak,
+                                                        55.0,
+                                                        &mut nose_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(headroom_hint),
+                                                        &mut cfg.device_targets.gear_comp_nose,
+                                                        t,
+                                                    );
+                                                });
+                                            });
+                                            cfg.gear_comp_nose_enabled = nose_enabled;
+                                        }
+
+                                        {
+                                            let mut left_enabled = cfg.gear_comp_left_enabled;
+                                            let active = self.effects.gear_comp_left_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            col.add_enabled_ui(gear_comp_enabled, |ui| {
+                                                UiState::effect_card(ui, left_enabled, active, |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_left_peak,
+                                                        &mut cfg.gear_comp_left_peak,
+                                                        55.0,
+                                                        &mut left_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(headroom_hint),
+                                                        &mut cfg.device_targets.gear_comp_left,
+                                                        t,
+                                                    );
+                                                });
+                                            });
+                                            cfg.gear_comp_left_enabled = left_enabled;
+                                        }
+
+                                        {
+                                            let mut right_enabled = cfg.gear_comp_right_enabled;
+                                            let active = self.effects.gear_comp_right_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            col.add_enabled_ui(gear_comp_enabled, |ui| {
+                                                UiState::effect_card(ui, right_enabled, active, |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_right_peak,
+                                                        &mut cfg.gear_comp_right_peak,
+                                                        55.0,
+                                                        &mut right_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(headroom_hint),
+                                                        &mut cfg.device_targets.gear_comp_right,
+                                                        t,
+                                                    );
+                                                });
+                                            });
+                                            cfg.gear_comp_right_enabled = right_enabled;
+                                        }
+
+                                        // Gear Transit & Doors
+                                        {
+                                            let mut gear_transit_enabled = cfg.gear_transit_enabled;
+                                            let active = self.effects.gear_transit_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, gear_transit_enabled, active, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    if ui.checkbox(&mut gear_transit_enabled, "").changed() {
+                                                        _changed = true;
+                                                    }
+                                                    ui.label(RichText::new(t.lbl_gear_transit).strong());
+                                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                        circle_indicator_colored(
+                                                            ui,
+                                                            if active && gear_transit_enabled { Color32::WHITE } else { Color32::from_gray(90) },
+                                                            active && gear_transit_enabled,
+                                                        );
+                                                        Self::device_target_toggle(ui, &mut cfg.device_targets.gear_transit, &mut _changed, t);
+                                                    });
+                                                });
+                                            });
+                                            cfg.gear_transit_enabled = gear_transit_enabled;
+                                        }
+
+                                    });
+                                }
+
+                                Section::Telemetry => {}
                             }
-
-                            // Коэффициент кривизны нарастания частоты ударов.
-                            // >1.0 = плавнее на старте (пауза между ударами сокращается медленнее),
-                            // <1.0 = резче, чем чистая физика t=S/V; 1.0 = без коррекции.
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                let lbl = ui.label(RichText::new(t.lbl_period_curve).strong());
-                                lbl.on_hover_text(t.hover_period_curve_full);
-                                let mut curve = cfg.thump_period_curve;
-                                let resp = ui.add(egui::Slider::new(&mut curve, 0.3..=5.0)
-                                    .trailing_fill(true)
-                                    .show_value(true));
-                                resp.clone().on_hover_text(
-                                    "1.0 = физика. Больше — медленнее ускоряется ритм ударов на старте."
-                                );
-                                if resp.changed() {
-                                    cfg.thump_period_curve = curve;
-                                    _changed = true;
-                                }
-                            });
-
-                            ui.add_space(8.0);
-
-                            // Flaps effect
-                            let mut flaps_enabled = cfg.flaps_enabled;
-                            UiState::effect_row_percent_hinted(
-                                ui,
-                                t.name_flaps,
-                                &mut cfg.flaps_peak,
-                                255.0,
-                                &mut flaps_enabled,
-                                self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                                &mut _changed,
-                                Some(t.hover_flaps),
-                            );
-                            cfg.flaps_enabled = flaps_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.flaps, &mut _changed, t);
-
-                            // Gear effect — временно скрыт из UI по просьбе (пока не
-                            // используется). cfg.gear_enabled=false по умолчанию
-                            // (см. types.rs), сама логика в rumble.rs не тронута —
-                            // раскомментировать этот блок, чтобы вернуть в UI.
-                            // let mut gear_enabled = cfg.gear_enabled;
-                            // UiState::effect_row_percent_hinted(
-                            //     ui,
-                            //     "Landing Gear (bump)",
-                            //     &mut cfg.gear_peak,
-                            //     255.0,
-                            //     &mut gear_enabled,
-                            //     self.effects.gear_bump_active.load(Ordering::Relaxed),
-                            //     &mut _changed,
-                            //     Some("Толчок при перемещении рычага шасси (вверх/вниз) — не путать с ударом при касании земли (Gear Strut Compression)"),
-                            // );
-                            // cfg.gear_enabled = gear_enabled;
-                            // UiState::device_target_row(ui, &mut cfg.device_targets.gear_bump, &mut _changed);
-
-                            // Stall effect
-                            let mut stall_enabled = cfg.stall_enabled;
-                            UiState::effect_row_percent_hinted(
-                                ui,
-                                t.name_stall,
-                                &mut cfg.stall_ceiling,
-                                255.0,
-                                &mut stall_enabled,
-                                self.effects.stall_active.load(Ordering::Relaxed),
-                                &mut _changed,
-                                Some(t.hover_stall),
-                            );
-                            cfg.stall_enabled = stall_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.stall, &mut _changed, t);
-
-                             // Spoilers effect
-                             let mut spoilers_enabled = cfg.spoilers_enabled;
-                             UiState::effect_row_percent_hinted(
-                                 ui,
-                                 t.name_spoilers,
-                                 &mut cfg.spoilers_intensity,
-                                 250.0,
-                                 &mut spoilers_enabled,
-                                 self.effects.spoilers_active.load(Ordering::Relaxed),
-                                 &mut _changed,
-                                 Some(t.hover_spoilers),
-                             );
-                             cfg.spoilers_enabled = spoilers_enabled;
-                             UiState::device_target_row(ui, &mut cfg.device_targets.spoilers, &mut _changed, t);
-
-                             // Spoilers threshold slider - диапазон 0..100%
-                             ui.horizontal(|ui| {
-                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                 let threshold_hint = t.hover_spoilers_threshold;
-                                 let lbl = ui.label(RichText::new(t.lbl_threshold_pct).strong());
-                                 lbl.on_hover_text(threshold_hint);
-                                 let mut threshold = cfg.spoilers_threshold_pct as f32;
-                                 let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=100.0)
-                                     .trailing_fill(true)
-                                     .show_value(true));
-                                 resp.clone().on_hover_text(threshold_hint);
-                                 if resp.changed() {
-                                     cfg.spoilers_threshold_pct = threshold as f64;
-                                     _changed = true;
-                                 }
-                             });
-
-                             ui.add_space(8.0);
-
-                             // Engine Start / Ignition effect
-                             let mut engine_start_enabled = cfg.enable_engine_start;
-                             let engine_start_hint = t.hover_engine_start;
-                             ui.horizontal(|ui| {
-                                 let cb = ui.checkbox(&mut engine_start_enabled, "");
-                                 if cb.changed() {
-                                     _changed = true;
-                                 }
-
-                                 // Настраиваемый порог N2 Idle — сразу после переключателя
-                                 // включения эффекта, естественным потоком строки (без
-                                 // выравнивания по правому краю).
-                                 ui.add_space(8.0);
-                                 let n2_hint = t.hover_n2_idle;
-                                 let n2_label = ui.label(RichText::new(t.lbl_n2_idle).strong());
-                                 n2_label.on_hover_text(n2_hint);
-                                 let n2_resp = ui.add(
-                                     egui::DragValue::new(&mut cfg.engine_idle_n2)
-                                         .speed(1.0)
-                                         .clamp_range(10.0..=100.0),
-                                 );
-                                 n2_resp.clone().on_hover_text(n2_hint);
-                                 if n2_resp.changed() {
-                                     _changed = true;
-                                 }
-
-                                 ui.add_space(8.0);
-
-                                 let name_label = ui.label(RichText::new(t.name_engine_start).strong());
-                                 name_label.on_hover_text(engine_start_hint);
-
-                                 ui.add_enabled_ui(engine_start_enabled, |ui| {
-                                     let mut pct = (cfg.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0);
-                                     let slider = egui::Slider::new(&mut pct, 0.0..=100.0)
-                                         .trailing_fill(true)
-                                         .show_value(true)
-                                         .suffix("%")
-                                         .fixed_decimals(0);
-                                     let resp = ui.add(slider);
-                                     resp.clone().on_hover_text(engine_start_hint);
-                                     if resp.changed() {
-                                         cfg.engine_start_strength = pct / 100.0 * 255.0;
-                                         _changed = true;
-                                     }
-                                 });
-
-                                 let active = self.effects.engine_start_active.load(Ordering::Relaxed);
-                                 let (color, filled) = if active && engine_start_enabled {
-                                     (Color32::WHITE, true)
-                                 } else {
-                                     (Color32::from_gray(90), false)
-                                 };
-                                 circle_indicator_colored(ui, color, filled);
-                             });
-                             cfg.enable_engine_start = engine_start_enabled;
-
-                             ui.horizontal(|ui| {
-                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                 if ui
-                                     .checkbox(&mut cfg.four_engine_mode, t.chk_four_eng_mode)
-                                     .on_hover_text(t.hover_four_eng_mode)
-                                     .changed()
-                                 {
-                                     _changed = true;
-                                 }
-                             });
-
-                             ui.horizontal(|ui| {
-                                 ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                 if ui
-                                     .checkbox(&mut cfg.swap_hand_layout, t.chk_swap_hands)
-                                     .on_hover_text(t.hover_swap_hands)
-                                     .changed()
-                                 {
-                                     _changed = true;
-                                 }
-                             });
-
-                             ui.add_space(8.0);
-
-                             // Base effect removed per user request
-                             // ui.add_space(8.0);
-
-                            // Gear Strut Compression (Touchdown) effect
-                            ui.label(RichText::new(t.heading_gear_comp).heading());
-                            ui.add_space(4.0);
-
-                            let mut gear_comp_enabled = cfg.gear_comp_enabled;
-                            ui.horizontal(|ui| {
-                                if ui.checkbox(&mut gear_comp_enabled, t.chk_enabled).changed() {
-                                    _changed = true;
-                                }
-
-                                ui.add_space(12.0);
-
-                                if ui
-                                    .checkbox(&mut cfg.split_touchdown, t.chk_split_touchdown)
-                                    .on_hover_text(t.hover_split_touchdown)
-                                    .changed()
-                                {
-                                    _changed = true;
-                                }
-                            });
-                            cfg.gear_comp_enabled = gear_comp_enabled;
-
-                            ui.add_enabled_ui(gear_comp_enabled, |ui| {
-                                let headroom_hint = t.hover_headroom;
-                                // Nose
-                                let mut nose_enabled = cfg.gear_comp_nose_enabled;
-                                UiState::effect_row_percent_hinted(
-                                    ui,
-                                    t.name_nose_peak,
-                                    &mut cfg.gear_comp_nose_peak,
-                                    55.0,
-                                    &mut nose_enabled,
-                                    self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
-                                    &mut _changed,
-                                    Some(headroom_hint),
-                                );
-                                cfg.gear_comp_nose_enabled = nose_enabled;
-                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_nose, &mut _changed, t);
-
-                                // Left
-                                let mut left_enabled = cfg.gear_comp_left_enabled;
-                                UiState::effect_row_percent_hinted(
-                                    ui,
-                                    t.name_left_peak,
-                                    &mut cfg.gear_comp_left_peak,
-                                    55.0,
-                                    &mut left_enabled,
-                                    self.effects.gear_comp_left_active.load(Ordering::Relaxed),
-                                    &mut _changed,
-                                    Some(headroom_hint),
-                                );
-                                cfg.gear_comp_left_enabled = left_enabled;
-                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_left, &mut _changed, t);
-
-                                // Right
-                                let mut right_enabled = cfg.gear_comp_right_enabled;
-                                UiState::effect_row_percent_hinted(
-                                    ui,
-                                    t.name_right_peak,
-                                    &mut cfg.gear_comp_right_peak,
-                                    55.0,
-                                    &mut right_enabled,
-                                    self.effects.gear_comp_right_active.load(Ordering::Relaxed),
-                                    &mut _changed,
-                                    Some(headroom_hint),
-                                );
-                                cfg.gear_comp_right_enabled = right_enabled;
-                                UiState::device_target_row(ui, &mut cfg.device_targets.gear_comp_right, &mut _changed, t);
-                            });
-
-                            ui.add_space(8.0);
-
-                            // Gear Transit & Doors Closed (вибрация во время движения стоек
-                            // + удар при фиксации на замке). Раньше работали без чекбокса.
-                            ui.horizontal(|ui| {
-                                let mut gear_transit_enabled = cfg.gear_transit_enabled;
-                                if ui.checkbox(&mut gear_transit_enabled, "").changed() {
-                                    _changed = true;
-                                }
-                                cfg.gear_transit_enabled = gear_transit_enabled;
-                                ui.label(RichText::new(t.lbl_gear_transit).strong());
-
-                                let active = self.effects.gear_transit_active.load(Ordering::Relaxed);
-                                let (color, filled) = if active && gear_transit_enabled {
-                                    (Color32::WHITE, true)
-                                } else {
-                                    (Color32::from_gray(90), false)
-                                };
-                                circle_indicator_colored(ui, color, filled);
-                            });
-                            UiState::device_target_row(ui, &mut cfg.device_targets.gear_transit, &mut _changed, t);
-
-                            ui.add_space(8.0);
-
-                            // Bank effect - только чекбокс и порог
-                            let mut bank_enabled = cfg.bank_enabled;
-                            ui.horizontal(|ui| {
-                                let cb = ui.checkbox(&mut bank_enabled, "");
-                                if cb.changed() {
-                                    _changed = true;
-                                }
-
-                                ui.label(RichText::new(t.lbl_bank_turb).strong());
-
-                                let active = self.effects.bank_active.load(Ordering::Relaxed);
-                                let (color, filled) = if active && bank_enabled {
-                                    (Color32::WHITE, true)
-                                } else {
-                                    (Color32::from_gray(90), false)
-                                };
-                                circle_indicator_colored(ui, color, filled);
-                            });
-                            cfg.bank_enabled = bank_enabled;
-                            UiState::device_target_row(ui, &mut cfg.device_targets.bank, &mut _changed, t);
-
-                            // Bank intensity slider - отображается как 0..100%, технический предел 200
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                let intensity_hint = t.hover_bank_intensity;
-                                let lbl = ui.label(RichText::new(t.lbl_intensity).strong());
-                                lbl.on_hover_text(intensity_hint);
-                                let mut pct = (cfg.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0);
-                                let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0)
-                                    .trailing_fill(true)
-                                    .show_value(true)
-                                    .suffix("%")
-                                    .fixed_decimals(0));
-                                resp.clone().on_hover_text(intensity_hint);
-                                if resp.changed()
-                                {
-                                    cfg.bank_intensity = pct / 100.0 * 200.0;
-                                    _changed = true;
-                                }
-                            });
-
-                            // Bank threshold slider - диапазон 0..90°
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Label::new("    ").sense(egui::Sense::hover()));
-                                let threshold_hint = t.hover_bank_threshold;
-                                let lbl = ui.label(RichText::new(t.lbl_threshold_deg).strong());
-                                lbl.on_hover_text(threshold_hint);
-                                let mut threshold = cfg.bank_threshold_deg;
-                                let resp = ui.add(egui::Slider::new(&mut threshold, 0.0..=90.0)
-                                    .trailing_fill(true)
-                                    .show_value(true));
-                                resp.clone().on_hover_text(threshold_hint);
-                                if resp.changed()
-                                {
-                                    cfg.bank_threshold_deg = threshold;
-                                    _changed = true;
-                                }
-                            });
 
                             if _changed {
                                 // Конфиг уже обновлен через with_mut
@@ -1048,26 +1353,9 @@ impl eframe::App for UiState {
                         });
 
                         ui.add_space(8.0);
-                        let mut telemetry_expanded = self.config.get().telemetry_expanded;
-                        ui.horizontal(|ui| {
-                            if ui.button(t.btn_reset_defaults).clicked() {
-                                // Только сбрасывает ЖИВОЙ конфиг — на диск ничего не пишет,
-                                // как и любое другое изменение. Нажмите Save (дискета в
-                                // верхней панели), чтобы зафиксировать сброс.
-                                self.config.set(RumbleConfig::default());
-                                telemetry_expanded = true;
-                            }
-
-                            let toggle_label = if telemetry_expanded { t.btn_hide_telemetry } else { t.btn_show_telemetry };
-                            if ui.button(toggle_label).clicked() {
-                                telemetry_expanded = !telemetry_expanded;
-                                self.config.with_mut(|cfg| cfg.telemetry_expanded = telemetry_expanded);
-                            }
-                        });
-
                         ui.separator();
 
-if telemetry_expanded {
+if self.active_section == Section::Telemetry {
 ui.columns(2, |columns| {
     // --- Левая колонка: общая телеметрия борта ---
     let ui = &mut columns[0];
@@ -1315,7 +1603,7 @@ ui.columns(2, |columns| {
 
         #[cfg(debug_assertions)]
         if show_debug {
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading(t.heading_logs);
                     ui.separator();

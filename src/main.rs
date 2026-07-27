@@ -1,4 +1,7 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// GUI-only in both debug and release: logging goes to the log file
+// (see LogBuffer::try_init_file_prefer_exe_dir below) instead of a console,
+// so no console window pops up alongside the app window during development.
+#![windows_subsystem = "windows"]
 
 use aurora_vibra::{
     aircraft_profiles::AircraftProfiles,
@@ -19,8 +22,38 @@ use std::sync::{
 };
 use std::{thread, time::Duration};
 
+/// Returns `true` if another Aurora Vibra instance is already running. In
+/// that case the existing window is restored + focused (reusing the same
+/// "find window by title" logic the tray icon already relies on) and the
+/// caller should exit immediately without touching HID/SimConnect.
+fn acquire_single_instance_lock() -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    let name: Vec<u16> = "Global\\AuroraVibraSingleInstance\0".encode_utf16().collect();
+    // SAFETY: straightforward FFI call with a valid null-terminated wide
+    // string. `HANDLE` has no `Drop` impl (it's a plain wrapper, not RAII),
+    // so we never close it — the mutex stays held for the whole process
+    // lifetime and Windows tears it down automatically on process exit.
+    let already_running = unsafe {
+        let _handle = CreateMutexW(None, false, PCWSTR(name.as_ptr()));
+        GetLastError() == ERROR_ALREADY_EXISTS
+    };
+
+    if already_running {
+        aurora_vibra::tray::bring_main_to_front();
+    }
+
+    already_running
+}
+
 fn main() -> Result<()> {
     if aurora_vibra::updater::early_self_update_hook() {
+        return Ok(());
+    }
+
+    if acquire_single_instance_lock() {
         return Ok(());
     }
 
@@ -159,6 +192,9 @@ fn main() -> Result<()> {
         show_hid_opened: true,
 
         active_tab: Tab::Main,
+        active_section: aurora_vibra::ui::Section::Rumble,
+        monitor_collapsed: true,
+        monitor_show_disabled: false,
         hold,
         lang,
 
@@ -172,13 +208,14 @@ fn main() -> Result<()> {
         "Aurora Vibra v4.0.1",
         native_options,
         Box::new(move |cc| {
+            egui_extras::install_image_loaders(&cc.egui_ctx);
             let ctx = cc.egui_ctx.clone();
             aurora_vibra::tray::spawn_tray_with_ctx(
                 tx_ui_for_tray.clone(),
                 ctx.clone(),
                 env!("CARGO_PKG_VERSION"),
             );
-            Box::new(app)
+            Ok(Box::new(app))
         }),
     );
 

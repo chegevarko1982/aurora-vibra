@@ -208,6 +208,15 @@ pub struct Strings {
     pub upd_title_launch_failed: &'static str,
     pub upd_title_admin_required: &'static str,
     pub upd_body_admin_required: &'static str,
+
+    // --- Navigation / Layout (v4 redesign) ---
+    pub nav_rumble: &'static str,
+    pub nav_taxi: &'static str,
+    pub nav_engines: &'static str,
+    pub nav_gear: &'static str,
+    pub nav_telemetry: &'static str,
+    pub heading_live_monitor: &'static str,
+    pub lbl_no_active_effects: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -357,6 +366,14 @@ pub const EN: Strings = Strings {
     upd_title_launch_failed: "Launch failed",
     upd_title_admin_required: "Administrator permission required",
     upd_body_admin_required: "The app is installed in a protected folder (e.g., Program Files).\nTo update, click Yes on the elevation prompt, or move the app to a writable folder (e.g., Documents) and try again.",
+
+    nav_rumble: "Aerodynamics",
+    nav_taxi: "Taxi Thump",
+    nav_engines: "Engines Start/Stop",
+    nav_gear: "Gears",
+    nav_telemetry: "Telemetry",
+    heading_live_monitor: "Live Monitor",
+    lbl_no_active_effects: "No effects active",
 };
 
 pub const RU: Strings = Strings {
@@ -506,6 +523,14 @@ pub const RU: Strings = Strings {
     upd_title_launch_failed: "Не удалось запустить",
     upd_title_admin_required: "Требуются права администратора",
     upd_body_admin_required: "Программа установлена в защищённую папку (например, Program Files).\nЧтобы обновить, нажмите «Да» в запросе повышения прав, либо перенесите программу в папку с доступом на запись (например, Документы) и попробуйте снова.",
+
+    nav_rumble: "Аэродинамика",
+    nav_taxi: "Стыки ВПП",
+    nav_engines: "Двигатели: Запуск/Останов",
+    nav_gear: "Стойки шасси",
+    nav_telemetry: "Телеметрия",
+    heading_live_monitor: "Монитор активности",
+    lbl_no_active_effects: "Нет активных эффектов",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {
@@ -525,6 +550,13 @@ pub fn upd_body_update_available(lang: Lang, current: &str, latest: &str, name: 
             "Доступна новая версия.\n\nТекущая: {}\nПоследняя: {}\n\nРелиз: {}\n\nУстановить сейчас? Приложение перезапустится.",
             current, latest, name
         ),
+    }
+}
+
+pub fn lbl_disabled_count(lang: Lang, n: usize) -> String {
+    match lang {
+        Lang::En => format!("+{n} disabled"),
+        Lang::Ru => format!("+{n} выключено"),
     }
 }
 

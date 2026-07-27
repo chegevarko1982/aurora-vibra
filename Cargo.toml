@@ -1,7 +1,7 @@
 [package]
 name = "aurora_vibra"
 version = "4.0.1"
-edition = "2021"
+edition = "2024"
 build = "src/build.rs"
 default-run = "aurora-vibra"  # Оставляем основное приложение
 
@@ -25,9 +25,14 @@ chrono = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # GUI
-eframe = { version = "0.27", default-features = true }
-egui = "0.27"
-egui_extras = "0.27"
+# default-features pulls in the "wgpu" renderer, whose DX12 backend (wgpu-hal)
+# depends on windows-core 0.62.x — conflicting with our own `windows = "0.56"`
+# pin used throughout hid/sim/tray (two incompatible copies of the same trait
+# in the dependency graph). We don't use accesskit/persistence, so stick to
+# the glow (OpenGL) renderer instead, sidestepping the conflict entirely.
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.35"
+egui_extras = { version = "0.35", features = ["image"] }
 
 # HID
 hidapi = "2.6"
@@ -54,7 +59,8 @@ windows = { version = "0.56", features = [
   "Win32_Security",
   "Win32_System_LibraryLoader",
   "Win32_Storage_FileSystem",
-  "Win32_Devices_HumanInterfaceDevice"
+  "Win32_Devices_HumanInterfaceDevice",
+  "Win32_System_Threading"
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

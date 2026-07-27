@@ -53,7 +53,10 @@ struct TrayState {
 static TRAY_STATE: OnceLock<Mutex<Box<TrayState>>> = OnceLock::new();
 
 /// Restore + focus main window by its title, then notify egui to focus too.
-fn bring_main_to_front() {
+/// `pub` so `main.rs` can reuse it for single-instance handoff (see
+/// `main::acquire_single_instance_lock`) — same "find window by title, show +
+/// foreground" logic the tray icon already used, no need for a second copy.
+pub fn bring_main_to_front() {
     unsafe {
         let title_w = wide(MAIN_WINDOW_TITLE);
         let main_hwnd = FindWindowW(None, PCWSTR(title_w.as_ptr()));
