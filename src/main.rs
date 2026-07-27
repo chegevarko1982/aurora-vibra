@@ -65,6 +65,7 @@ fn main() -> Result<()> {
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
+    let force_quit = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(aurora_vibra::SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
     let logs = LogBuffer::default();
@@ -87,6 +88,8 @@ fn main() -> Result<()> {
 
     let lang = settings_file.lang;
     aurora_vibra::i18n::set(lang);
+    let close_to_tray = settings_file.close_to_tray;
+    aurora_vibra::settings::set_close_to_tray(close_to_tray);
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
     let aircraft_profiles = Arc::new(Mutex::new(AircraftProfiles {
@@ -196,6 +199,8 @@ fn main() -> Result<()> {
         monitor_collapsed: true,
         monitor_show_disabled: false,
         hold,
+        close_to_tray,
+        force_quit: force_quit.clone(),
         lang,
 
         rx_ui,
@@ -214,6 +219,7 @@ fn main() -> Result<()> {
                 tx_ui_for_tray.clone(),
                 ctx.clone(),
                 env!("CARGO_PKG_VERSION"),
+                force_quit.clone(),
             );
             Ok(Box::new(app))
         }),

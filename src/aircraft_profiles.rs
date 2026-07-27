@@ -112,5 +112,6 @@ pub fn save_active(
         default: ap.default.clone(),
         profiles: ap.profiles.clone(),
         lang: crate::i18n::get(),
+        close_to_tray: settings::close_to_tray(),
     })
 }

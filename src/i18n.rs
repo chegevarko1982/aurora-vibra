@@ -71,6 +71,8 @@ pub struct Strings {
     pub btn_resume: &'static str,
     pub btn_options: &'static str,
     pub hover_help: &'static str,
+    pub chk_close_to_tray: &'static str,
+    pub hover_close_to_tray: &'static str,
 
     // --- Aircraft Profiles ---
     pub heading_aircraft_profiles: &'static str,
@@ -197,6 +199,8 @@ pub struct Strings {
     pub tray_resume: &'static str,
     pub tray_check_updates: &'static str,
     pub tray_quit: &'static str,
+    pub tray_status_active: &'static str,
+    pub tray_status_stopped: &'static str,
 
     // --- Updater dialogs ---
     pub upd_title_up_to_date: &'static str,
@@ -236,6 +240,8 @@ pub const EN: Strings = Strings {
     btn_resume: "▶ Resume",
     btn_options: "Options",
     hover_help: "Help",
+    chk_close_to_tray: "Close to tray",
+    hover_close_to_tray: "When enabled, closing the window with the X button hides it to the system tray instead of quitting — the app keeps running in the background. Right-click the tray icon to Stop or Exit.",
 
     heading_aircraft_profiles: "Aircraft Profiles",
     empty_profiles_hint: "No named profiles yet — use the button next to the aircraft name above to create the first one.",
@@ -355,7 +361,9 @@ pub const EN: Strings = Strings {
     tray_stop: "Stop",
     tray_resume: "Resume",
     tray_check_updates: "Check for updates…",
-    tray_quit: "Quit",
+    tray_quit: "Exit",
+    tray_status_active: "● Active",
+    tray_status_stopped: "○ Stopped",
 
     upd_title_up_to_date: "Up to date",
     upd_title_update_available: "Update available",
@@ -393,6 +401,8 @@ pub const RU: Strings = Strings {
     btn_resume: "▶ Продолжить",
     btn_options: "Опции",
     hover_help: "Help",
+    chk_close_to_tray: "Сворачивать в трей",
+    hover_close_to_tray: "Если включено, закрытие окна крестиком прячет его в системный трей вместо выхода — приложение продолжает работать в фоне. Правый клик по иконке в трее — Stop или Exit.",
 
     heading_aircraft_profiles: "Профили самолётов",
     empty_profiles_hint: "Именных профилей ещё нет — используйте кнопку рядом с названием самолёта наверху, чтобы создать первый.",
@@ -513,6 +523,8 @@ pub const RU: Strings = Strings {
     tray_resume: "Продолжить",
     tray_check_updates: "Проверить обновления…",
     tray_quit: "Выход",
+    tray_status_active: "● Активно",
+    tray_status_stopped: "○ Остановлено",
 
     upd_title_up_to_date: "Обновлений нет",
     upd_title_update_available: "Доступно обновление",

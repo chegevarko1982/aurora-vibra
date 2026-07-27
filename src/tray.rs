@@ -4,7 +4,8 @@ use std::ffi::OsStr;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::addr_of_mut;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crossbeam_channel::Sender;
 use eframe::egui;
@@ -22,6 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, LoadCursorW, PostQuitMessage,
     RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, MENU_ITEM_FLAGS,
+    MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
     MSG, SHOW_WINDOW_CMD, SW_RESTORE, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TRACK_POPUP_MENU_FLAGS, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
     WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
@@ -29,6 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::{i18n, updater, UiCmd};
 
+const ID_TRAY_STATUS: u32 = 1001; // grayed-out, non-clickable — just shows Active/Stopped
 const ID_TRAY_STOP_OR_RESUME: u32 = 1002;
 const ID_TRAY_CHECK_UPDATES: u32 = 1003;
 const ID_TRAY_QUIT: u32 = 1004;
@@ -47,7 +50,11 @@ struct TrayState {
     version_str: &'static str,
     nid: NOTIFYICONDATAW,
     hwnd: HWND,
-    is_held: bool, // drives Stop/Resume label
+    is_held: bool, // drives Stop/Resume label + Active/Stopped status
+    // Set right before a real Exit so UiState's close-to-tray interception
+    // (which would otherwise cancel the close and just hide the window)
+    // lets this one through — see ui.rs's close_requested handling.
+    force_quit: Arc<AtomicBool>,
 }
 
 static TRAY_STATE: OnceLock<Mutex<Box<TrayState>>> = OnceLock::new();
@@ -109,11 +116,21 @@ unsafe extern "system" fn wnd_proc(
                 };
 
                 let t = i18n::get().strings();
+                let status_text = if st.is_held { t.tray_status_stopped } else { t.tray_status_active };
+                let status_w = wide(status_text);
                 let stop_resume = if st.is_held { t.tray_resume } else { t.tray_stop };
                 let stop_resume_w = wide(stop_resume);
                 let check_updates_w = wide(t.tray_check_updates);
                 let quit_w = wide(t.tray_quit);
 
+                // Active/Stopped — grayed-out status line, not clickable.
+                let _ = AppendMenuW(
+                    hmenu,
+                    MF_STRING | MF_GRAYED | MF_DISABLED,
+                    ID_TRAY_STATUS as usize,
+                    PCWSTR(status_w.as_ptr()),
+                );
+                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
                 let _ = AppendMenuW(
                     hmenu,
                     MENU_ITEM_FLAGS(0),
@@ -126,6 +143,7 @@ unsafe extern "system" fn wnd_proc(
                     ID_TRAY_CHECK_UPDATES as usize,
                     PCWSTR(check_updates_w.as_ptr()),
                 );
+                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
                 let _ = AppendMenuW(
                     hmenu,
                     MENU_ITEM_FLAGS(0),
@@ -175,6 +193,11 @@ unsafe extern "system" fn wnd_proc(
                             updater::spawn_check(st.hwnd, st.version_str);
                         }
                         ID_TRAY_QUIT => {
+                            // Must be set BEFORE Close so UiState's close-to-tray
+                            // interception (checked on the next close_requested)
+                            // lets this one through instead of just hiding again.
+                            st.force_quit.store(true, Ordering::Relaxed);
+
                             // 1) Remove tray icon
                             let mut nid = st.nid;
                             let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
@@ -231,7 +254,12 @@ fn load_app_icon(hinst: HINSTANCE) -> windows::Win32::UI::WindowsAndMessaging::H
     }
 }
 
-pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version: &'static str) {
+pub fn spawn_tray_with_ctx(
+    tx_ui: Sender<UiCmd>,
+    ctx: egui::Context,
+    app_version: &'static str,
+    force_quit: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || unsafe {
         let hinst = HINSTANCE(GetModuleHandleW(None).unwrap().0);
 
@@ -285,6 +313,7 @@ pub fn spawn_tray_with_ctx(tx_ui: Sender<UiCmd>, ctx: egui::Context, app_version
             nid,
             hwnd,
             is_held: false,
+            force_quit,
         });
         let _ = TRAY_STATE.set(Mutex::new(state));
 

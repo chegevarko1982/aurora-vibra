@@ -144,6 +144,13 @@ pub struct UiState {
     pub monitor_show_disabled: bool,
     pub hold: Arc<AtomicBool>,
 
+    // "Close to tray" (Options menu): при close_requested окно прячется
+    // (ViewportCommand::Visible(false)) вместо реального завершения процесса —
+    // если только это не настоящий Exit из трея (force_quit), который должен
+    // этот перехват обойти. См. UiState::ui() и tray.rs.
+    pub close_to_tray: bool,
+    pub force_quit: Arc<AtomicBool>,
+
     pub rx_ui: Receiver<UiCmd>,
     pub tx_ui: Sender<UiCmd>,
 
@@ -151,6 +158,20 @@ pub struct UiState {
 }
 
 impl UiState {
+    /// Сохраняет глобальные (не привязанные к самолёту) настройки — язык и
+    /// close-to-tray — вместе с текущим набором профилей. Вызывается при
+    /// изменении любого из этих двух переключателей.
+    fn save_global_settings(&self) {
+        crate::settings::set_close_to_tray(self.close_to_tray);
+        let ap = self.aircraft_profiles.lock();
+        let _ = crate::settings::save(&crate::settings::SettingsFile {
+            default: ap.default.clone(),
+            profiles: ap.profiles.clone(),
+            lang: self.lang,
+            close_to_tray: self.close_to_tray,
+        });
+    }
+
     /// Строка эффекта, где сила/амплитуда вибрации отображается и настраивается
     /// пользователем всегда в диапазоне 0..100%, независимо от технического
     /// предела эффекта в движке (255, 50, 55, 200...).
@@ -445,6 +466,19 @@ impl eframe::App for UiState {
             ctx.request_repaint_after(Duration::from_millis(1000 / TARGET_FPS));
         }
 
+        // Close to tray: перехватываем закрытие окна крестиком, если включено
+        // в Options — вместо реального выхода просто прячем окно, процесс и
+        // фоновые потоки (HID/SimConnect/трей) продолжают работать. Exit из
+        // трея выставляет force_quit=true заранее, так что этот перехват его
+        // не трогает и закрытие проходит по-настоящему.
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.close_to_tray
+            && !self.force_quit.load(Ordering::Relaxed)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
         {
             let style = ui.style_mut();
             style.spacing.item_spacing = Vec2::new(6.0, 6.0);
@@ -583,7 +617,15 @@ impl eframe::App for UiState {
                             }
                             ui.separator();
                         }
-                        ui.menu_button(t.btn_options, |_ui| {});
+                        ui.menu_button(t.btn_options, |ui| {
+                            if ui
+                                .checkbox(&mut self.close_to_tray, t.chk_close_to_tray)
+                                .on_hover_text(t.hover_close_to_tray)
+                                .changed()
+                            {
+                                self.save_global_settings();
+                            }
+                        });
                         ui.label(t.hover_help);
                     });
 
@@ -599,12 +641,7 @@ impl eframe::App for UiState {
                             self.lang = new_lang;
                             i18n::set(new_lang);
                             tray::refresh_tooltip();
-                            let ap = self.aircraft_profiles.lock();
-                            let _ = crate::settings::save(&crate::settings::SettingsFile {
-                                default: ap.default.clone(),
-                                profiles: ap.profiles.clone(),
-                                lang: new_lang,
-                            });
+                            self.save_global_settings();
                         }
                     }
                 });

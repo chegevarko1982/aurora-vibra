@@ -1,8 +1,23 @@
 use crate::{aircraft_profiles::AircraftProfile, i18n::Lang, RumbleConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const FILE_NAME: &str = "AuroraVibra.settings.json";
+
+// Мirrors `i18n::{get, set}`'s global-atomic pattern: `close_to_tray` needs to
+// be readable from aircraft_profiles::save_active (the Save button's code
+// path), which doesn't otherwise have access to UiState's copy of the flag —
+// without this, every profile Save would silently reset it back to false.
+static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
+
+pub fn close_to_tray() -> bool {
+    CLOSE_TO_TRAY.load(Ordering::Relaxed)
+}
+
+pub fn set_close_to_tray(v: bool) {
+    CLOSE_TO_TRAY.store(v, Ordering::Relaxed);
+}
 
 /// Формат файла на диске: единый default-конфиг (для любого борта без
 /// именного профиля) плюс список именных профилей по самолётам (см.
@@ -17,6 +32,10 @@ pub struct SettingsFile {
     // без этого поля десериализуются с Lang::default() (En) благодаря
     // #[serde(default)] на всей структуре.
     pub lang: Lang,
+    // "Close to tray": при закрытии окна крестиком приложение не завершается,
+    // а прячется в трей (см. UiState::close_to_tray / tray.rs). По умолчанию
+    // выключено — старые файлы без этого поля десериализуются в false.
+    pub close_to_tray: bool,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
@@ -84,6 +103,7 @@ pub fn load() -> Option<SettingsFile> {
                     default: cfg,
                     profiles: Vec::new(),
                     lang: Lang::default(),
+                    close_to_tray: false,
                 });
             }
         }
