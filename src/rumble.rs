@@ -19,9 +19,9 @@ pub struct RumbleState {
     gear_comp_nose_t0: f64,
     gear_comp_left_t0: f64,
     gear_comp_right_t0: f64,
-    gear_comp_nose_dyn_peak: f64,
-    gear_comp_left_dyn_peak: f64,
-    gear_comp_right_dyn_peak: f64,
+    gear_comp_nose_severity_frac: f64,
+    gear_comp_left_severity_frac: f64,
+    gear_comp_right_severity_frac: f64,
     // Gear Transit tracking
     prev_gear_nose: f64,
     prev_gear_left: f64,
@@ -179,6 +179,13 @@ fn starter_only_amplitude(engaged_at: Option<Instant>) -> f64 {
 // RumbleState выше. Подтверждена на живом железе (test_hold fadejerk).
 const STARTER_ABORT_FADE_SECS: f64 = 4.0;
 
+// Жёсткий потолок для cfg.stall_ceiling — Stall задуман как лёгкое
+// предупреждение (лёгкая дрожь под рукой), а не как силовой эффект наравне
+// с Touchdown/Overspeed. Ограничивает и слайдер в ui.rs (native_max), и сам
+// расчёт здесь — на случай, если в сохранённых настройках лежит старое
+// значение (прежний дефолт был 160.0).
+const STALL_CEILING_HARD_CAP: f64 = 10.0;
+
 /// Линейный спад от start_value к 0.0 за STARTER_ABORT_FADE_SECS с момента
 /// отключения стартера БЕЗ воспламенения. None → 0.0 (фейда сейчас нет).
 fn starter_abort_fade_amplitude(started_at: Option<Instant>, start_value: f64) -> f64 {
@@ -189,6 +196,71 @@ fn starter_abort_fade_amplitude(started_at: Option<Instant>, start_value: f64) -
         }
         None => 0.0,
     }
+}
+
+// Attack-Hold-Decay огибающая удара обжатия стойки (Touchdown). Пик ВСЕГДА
+// 255 — гарантирует раскрутку ротора ERM при любой посадке (мягкий 200 vs
+// жёсткий 255 — разница всего 21%, ERM физически не показывает такую
+// грануляцию за десятки миллисекунд, см. test_throttle_stutter_gui.rs).
+// Жёсткость посадки вместо этого растягивает HOLD/DECAY: 230мс (мягкая) ..
+// 550мс (жёсткая) — диапазон ×2.4, заметно лучше кодирует жёсткость, чем
+// диапазон амплитуды (200..255, ×1.27). Подтверждено на живом железе
+// (src/bin/test_touchdown.rs).
+struct BumpSpec {
+    attack_s: f64,
+    hold_base_s: f64,
+    hold_extra_s: f64,
+    decay_base_s: f64,
+    decay_extra_s: f64,
+    decay_exp: i32,
+}
+
+const BUMP_MAIN: BumpSpec = BumpSpec {
+    attack_s: 0.10,
+    hold_base_s: 0.0,
+    hold_extra_s: 0.20,
+    decay_base_s: 0.13,
+    decay_extra_s: 0.12,
+    decay_exp: 2,
+};
+// Носовая стойка НАРОЧНО той же формы, что и основная (не короче) — по
+// хардтесту: нос касается, когда самолёт уже полностью на земле, физически
+// это эффект "всех трёх стоек разом" (см. маршрутизацию на все три мотора
+// ниже), а не отдельное более слабое касание — должен ощущаться как самый
+// сильный момент посадки, а не самый слабый.
+const BUMP_NOSE: BumpSpec = BUMP_MAIN;
+
+/// severity_frac = headroom_frac (слайдер gear_comp_*_peak / 55) * intensity_frac
+/// (жёсткость посадки из comp_rate) — см. вызов в детекции ниже.
+/// 0.0 = минимальная гарантированная длительность (attack+decay_base),
+/// 1.0 = максимальная (attack+hold_extra+decay_base+decay_extra).
+fn bump_envelope(elapsed_s: f64, severity_frac: f64, spec: &BumpSpec) -> f64 {
+    if elapsed_s < 0.0 {
+        return 0.0;
+    }
+    let severity_frac = severity_frac.clamp(0.0, 1.0);
+    let flat = spec.attack_s + spec.hold_base_s + spec.hold_extra_s * severity_frac;
+    let decay = spec.decay_base_s + spec.decay_extra_s * severity_frac;
+    if elapsed_s < flat {
+        255.0
+    } else if elapsed_s < flat + decay {
+        let p = (elapsed_s - flat) / decay;
+        255.0 * (1.0 - p).powi(spec.decay_exp)
+    } else {
+        0.0
+    }
+}
+
+/// Полная длительность удара (attack+hold+decay) для данного severity_frac —
+/// ширина окна активности в маршрутизации ниже и продление
+/// touchdown_settle_until до конца реального импульса.
+fn bump_duration(severity_frac: f64, spec: &BumpSpec) -> f64 {
+    let severity_frac = severity_frac.clamp(0.0, 1.0);
+    spec.attack_s
+        + spec.hold_base_s
+        + spec.hold_extra_s * severity_frac
+        + spec.decay_base_s
+        + spec.decay_extra_s * severity_frac
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,35 +426,22 @@ impl RumbleEngine {
 
         // Gear Strut Compression / Touchdown Detection
         const GEAR_COMP_TOUCHDOWN_THRESHOLD: f64 = 50.1;
-        // Длительность резкого импульса обжатия. Основные стойки (лево/право)
-        // держат чуть более длинный импульс (0.22с ≈ 4-5 отсчётов на 20 Гц HID-
-        // канале, см. hid/worker.rs SEND_INTERVAL) — так удар ощущается как
-        // чёткий "тук", а не как щелчок из 2-3 отсчётов. Носовая стойка
-        // намеренно короче и с более резким спадом (см. GEAR_COMP_NOSE_DECAY_EXP
-        // ниже) — так три стойки при близких по времени касаниях (нос почти
-        // сразу за основными на "трёхточечной" посадке) ощущаются как РАЗНЫЕ
-        // удары, а не как один смазанный импульс.
-        const GEAR_COMP_BUMP_DURATION_MAIN: f64 = 0.22;
-        const GEAR_COMP_BUMP_DURATION_NOSE: f64 = 0.12;
-        const GEAR_COMP_NOSE_DECAY_EXP: i32 = 5; // круче и короче, чем основные стойки (powi(3))
 
         // ═══════════════════════════════════════════════════════════════════
         // РЕМАРКА ДЛЯ РУЧНОЙ НАСТРОЙКИ (диапазоны силы эффектов):
         //
-        // • Сжатие стоек шасси (touchdown bump). Слайдер gear_comp_*_peak в UI
-        //   имеет диапазон 0..55 — это НЕ сырая сила, а "запас сверху" над
-        //   обязательным полом в 200. Слайдер=0 → всегда строго 200 (мягкий
-        //   предел мотора при любой посадке). Слайдер=55 → от 200 (мягкая
-        //   посадка) до 255 (жёсткая, severity на максимуме). Итоговая сила
-        //   физически не может выйти за пределы [200..255].
+        // • Сжатие стоек шасси (touchdown bump). Пик ВСЕГДА 255 (см. BumpSpec/
+        //   bump_envelope выше) — жёсткость посадки кодируется ДЛИТЕЛЬНОСТЬЮ
+        //   hold/decay, не амплитудой. Слайдер gear_comp_*_peak в UI (0..55,
+        //   GEAR_COMP_HEADROOM_MAX) масштабирует именно диапазон длительности:
+        //   0 → длительность всегда минимальная (230мс) независимо от жёсткости
+        //   посадки, 55 → полный диапазон 230..550мс.
         //
         // • Удар о стыки плит (ground_roll). Слайдер в UI — 0..50, это и есть
         //   итоговый потолок силы (amplitude_curve лишь масштабирует от 0 до
         //   этого значения). Должен оставаться мягким фоновым эффектом и НЕ
-        //   соперничать по ощущению с ударом сжатия стоек (200-255).
+        //   соперничать по ощущению с ударом сжатия стоек (всегда 255).
         // ═══════════════════════════════════════════════════════════════════
-        const GEAR_COMP_PEAK_MIN: f64 = 200.0;
-        const GEAR_COMP_PEAK_MAX: f64 = 255.0;
         const GEAR_COMP_HEADROOM_MAX: f64 = 55.0; // слайдер gear_comp_*_peak: 0..55
         const GROUND_THUMP_PEAK_MIN: f64 = 0.0;
         const GROUND_THUMP_PEAK_MAX: f64 = 50.0;
@@ -407,12 +466,12 @@ impl RumbleEngine {
                 let comp_rate = (fv.gear_comp_nose - s.prev_gear_comp_nose) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
                 let intensity_frac = ((severity - 0.3) / (2.5 - 0.3)).clamp(0.0, 1.0);
-                let headroom = (cfg.gear_comp_nose_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX);
-                let raw_peak = GEAR_COMP_PEAK_MIN + headroom * intensity_frac;
-                s.gear_comp_nose_dyn_peak = raw_peak.clamp(GEAR_COMP_PEAK_MIN, GEAR_COMP_PEAK_MAX);
-                s.touchdown_settle_until = s
-                    .touchdown_settle_until
-                    .max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_NOSE);
+                let headroom_frac = ((cfg.gear_comp_nose_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX))
+                    / GEAR_COMP_HEADROOM_MAX;
+                s.gear_comp_nose_severity_frac = headroom_frac * intensity_frac;
+                s.touchdown_settle_until = s.touchdown_settle_until.max(
+                    fv.sim_time_s + bump_duration(s.gear_comp_nose_severity_frac, &BUMP_NOSE),
+                );
                 s.nose_touched_since_air = true;
             }
             s.prev_gear_comp_nose = fv.gear_comp_nose;
@@ -427,12 +486,12 @@ impl RumbleEngine {
                 let comp_rate = (fv.gear_comp_left - s.prev_gear_comp_left) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
                 let intensity_frac = ((severity - 0.3) / (2.5 - 0.3)).clamp(0.0, 1.0);
-                let headroom = (cfg.gear_comp_left_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX);
-                let raw_peak = GEAR_COMP_PEAK_MIN + headroom * intensity_frac;
-                s.gear_comp_left_dyn_peak = raw_peak.clamp(GEAR_COMP_PEAK_MIN, GEAR_COMP_PEAK_MAX);
-                s.touchdown_settle_until = s
-                    .touchdown_settle_until
-                    .max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_MAIN);
+                let headroom_frac = ((cfg.gear_comp_left_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX))
+                    / GEAR_COMP_HEADROOM_MAX;
+                s.gear_comp_left_severity_frac = headroom_frac * intensity_frac;
+                s.touchdown_settle_until = s.touchdown_settle_until.max(
+                    fv.sim_time_s + bump_duration(s.gear_comp_left_severity_frac, &BUMP_MAIN),
+                );
                 s.left_touched_since_air = true;
             }
             s.prev_gear_comp_left = fv.gear_comp_left;
@@ -447,12 +506,12 @@ impl RumbleEngine {
                 let comp_rate = (fv.gear_comp_right - s.prev_gear_comp_right) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
                 let intensity_frac = ((severity - 0.3) / (2.5 - 0.3)).clamp(0.0, 1.0);
-                let headroom = (cfg.gear_comp_right_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX);
-                let raw_peak = GEAR_COMP_PEAK_MIN + headroom * intensity_frac;
-                s.gear_comp_right_dyn_peak = raw_peak.clamp(GEAR_COMP_PEAK_MIN, GEAR_COMP_PEAK_MAX);
-                s.touchdown_settle_until = s
-                    .touchdown_settle_until
-                    .max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_MAIN);
+                let headroom_frac = ((cfg.gear_comp_right_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX))
+                    / GEAR_COMP_HEADROOM_MAX;
+                s.gear_comp_right_severity_frac = headroom_frac * intensity_frac;
+                s.touchdown_settle_until = s.touchdown_settle_until.max(
+                    fv.sim_time_s + bump_duration(s.gear_comp_right_severity_frac, &BUMP_MAIN),
+                );
                 s.right_touched_since_air = true;
             }
             s.prev_gear_comp_right = fv.gear_comp_right;
@@ -471,7 +530,7 @@ impl RumbleEngine {
         // стоек ещё не коснулась — весь этот фон приглушён (fade=0), чтобы удар
         // обжатия стойки (touchdown_override_j/t_left/t_right — отдельный
         // абсолютный оверрайд, см. блок ниже) не смешивался и не тонул в сумме
-        // остальных эффектов. Открывается плавно за 0.75с ПОСЛЕ того, как
+        // остальных эффектов. Открывается плавно за 1с ПОСЛЕ того, как
         // отгремела ПОСЛЕДНЯЯ из сработавших стоек (нос/лево/право касаются не
         // одновременно на "трёхточечной" посадке — нос ещё 1-3с висит в воздухе
         // после обжатия основных стоек), либо — предохранитель на случай борта
@@ -490,8 +549,9 @@ impl RumbleEngine {
         let touchdown_timeout_elapsed =
             fv.sim_time_s - s.touchdown_time_s >= TOUCHDOWN_SETTLE_TIMEOUT_S;
         let touchdown_fade_anchor = s.touchdown_settle_until.max(s.touchdown_time_s);
+        const TOUCHDOWN_FADE_IN_SECS: f64 = 1.0;
         let touchdown_fade_in = if all_struts_settled || touchdown_timeout_elapsed {
-            ((fv.sim_time_s - touchdown_fade_anchor) / 0.75).clamp(0.0, 1.0)
+            ((fv.sim_time_s - touchdown_fade_anchor) / TOUCHDOWN_FADE_IN_SECS).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -783,7 +843,7 @@ impl RumbleEngine {
         }
 
         if cfg.stall_enabled && fv.stalled {
-            let ceiling = cfg.stall_ceiling as f64;
+            let ceiling = (cfg.stall_ceiling as f64).min(STALL_CEILING_HARD_CAP);
             if dt_.stall.enable_joystick {
                 transients_j = transients_j.max(ceiling);
             }
@@ -809,103 +869,74 @@ impl RumbleEngine {
         }
 
         if cfg.gear_comp_enabled {
-            // SPLIT-режим (3 стойки): оба мотора РУД физически находятся в ОДНОЙ
-            // руке (это один блок throttle_left+throttle_right под одной ладонью),
-            // а джойстик — в другой. Поэтому две ОСНОВНЫЕ стойки — которые почти
-            // всегда касаются практически одновременно (посадка на два колеса
-            // сразу) — разводятся по РАЗНЫМ рукам (РУД vs джойстик), иначе они
-            // сливаются в один "блок" ощущений в одной ладони — та же проблема
-            // смазывания, что и с Ground Roll, только между собой. cfg.swap_hand_layout
-            // определяет, какая сторона (лево/право) достаётся какой руке — та же
-            // семантика, что уже используется для двигателей.
-            // Носовая стойка касается заметно ПОЗЖЕ основных (самолёт доопускает
-            // нос уже после обжатия главных стоек), поэтому безопасно делит руку
-            // РУД со "своей" основной стойкой — на свободный второй мотор — и
-            // дополнительно отличается по ощущению более резкой/короткой формой
-            // импульса (GEAR_COMP_NOSE_DECAY_EXP), так что даже при редком
-            // наложении по времени это не сольётся в одно и то же ощущение.
+            // Фиксированная раскладка (заменяет прежний split_touchdown и per-
+            // strut чекбоксы dt_.gear_comp_* — маршрутизация больше не
+            // настраивается вручную, см. обсуждение в плане Touchdown):
+            // левая основная -> РУД целиком (оба мотора физически под одной
+            // ладонью), правая основная -> джойстик (другая рука) — та же
+            // семантика swap_hand_layout, что уже используется для двигателей.
+            // Носовая стойка касается, когда самолёт уже полностью на земле —
+            // физически это эффект "всех трёх стоек разом" (подтверждено
+            // хардтестом на живом железе), поэтому идёт на ВСЕ ТРИ канала
+            // сразу, независимо от раскладки основных.
+            //
+            // Фолбэк на одно устройство: если подключено только ОДНО из двух
+            // (см. cfg.joystick_hw_connected/throttle_hw_connected — тот же
+            // живой снимок из UI, что и для Engine Start выше), обе основные
+            // стойки сворачиваются на него целиком, а не теряют половину
+            // ощущения на несуществующем устройстве.
             let left_gear_on_throttle = !cfg.swap_hand_layout;
+            let only_joystick = cfg.joystick_hw_connected && !cfg.throttle_hw_connected;
+            let only_throttle = cfg.throttle_hw_connected && !cfg.joystick_hw_connected;
 
+            let nose_dur = bump_duration(s.gear_comp_nose_severity_frac, &BUMP_NOSE);
             let nose_active = cfg.gear_comp_nose_enabled
                 && fv.sim_time_s >= s.gear_comp_nose_t0
-                && fv.sim_time_s <= s.gear_comp_nose_t0 + GEAR_COMP_BUMP_DURATION_NOSE;
+                && fv.sim_time_s <= s.gear_comp_nose_t0 + nose_dur;
             if nose_active {
-                let p = ((fv.sim_time_s - s.gear_comp_nose_t0) / GEAR_COMP_BUMP_DURATION_NOSE)
-                    .clamp(0.0, 1.0);
-                let term = s.gear_comp_nose_dyn_peak * (1.0 - p).powi(GEAR_COMP_NOSE_DECAY_EXP);
-                if cfg.split_touchdown {
-                    // Нос всегда идёт на РУД (единственное устройство с запасным
-                    // мотором) — на тот мотор, который в ЭТОМ кадре НЕ занят
-                    // "своей" основной стойкой (см. left_gear_on_throttle выше).
-                    if left_gear_on_throttle {
-                        touchdown_override_t_right = touchdown_override_t_right.max(term);
-                    } else {
-                        touchdown_override_t_left = touchdown_override_t_left.max(term);
-                    }
-                } else {
-                    if dt_.gear_comp_nose.enable_joystick {
-                        touchdown_override_j = touchdown_override_j.max(term);
-                    }
-                    if dt_.gear_comp_nose.enable_throttle {
-                        touchdown_override_t_left = touchdown_override_t_left.max(term);
-                        touchdown_override_t_right = touchdown_override_t_right.max(term);
-                    }
-                }
+                let elapsed = fv.sim_time_s - s.gear_comp_nose_t0;
+                let term = bump_envelope(elapsed, s.gear_comp_nose_severity_frac, &BUMP_NOSE);
+                touchdown_override_j = touchdown_override_j.max(term);
+                touchdown_override_t_left = touchdown_override_t_left.max(term);
+                touchdown_override_t_right = touchdown_override_t_right.max(term);
             }
             effects.gear_comp_nose_active = nose_active;
 
+            let left_dur = bump_duration(s.gear_comp_left_severity_frac, &BUMP_MAIN);
             let left_active = cfg.gear_comp_left_enabled
                 && fv.sim_time_s >= s.gear_comp_left_t0
-                && fv.sim_time_s <= s.gear_comp_left_t0 + GEAR_COMP_BUMP_DURATION_MAIN;
+                && fv.sim_time_s <= s.gear_comp_left_t0 + left_dur;
             if left_active {
-                let p = ((fv.sim_time_s - s.gear_comp_left_t0) / GEAR_COMP_BUMP_DURATION_MAIN)
-                    .clamp(0.0, 1.0);
-                let term = s.gear_comp_left_dyn_peak * (1.0 - p).powi(3);
-                if cfg.split_touchdown {
-                    // SPLIT: левая основная стойка — эксклюзивно на РУД (мотор
-                    // throttle_left), кроме случая swap_hand_layout — тогда на
-                    // джойстик. Независимо от чекбоксов dt_.gear_comp_left.
-                    if left_gear_on_throttle {
-                        touchdown_override_t_left = touchdown_override_t_left.max(term);
-                    } else {
-                        touchdown_override_j = touchdown_override_j.max(term);
-                    }
+                let elapsed = fv.sim_time_s - s.gear_comp_left_t0;
+                let term = bump_envelope(elapsed, s.gear_comp_left_severity_frac, &BUMP_MAIN);
+                if only_joystick {
+                    touchdown_override_j = touchdown_override_j.max(term);
+                } else if only_throttle || left_gear_on_throttle {
+                    touchdown_override_t_left = touchdown_override_t_left.max(term);
+                    touchdown_override_t_right = touchdown_override_t_right.max(term);
                 } else {
-                    if dt_.gear_comp_left.enable_joystick {
-                        touchdown_override_j = touchdown_override_j.max(term);
-                    }
-                    if dt_.gear_comp_left.enable_throttle {
-                        touchdown_override_t_left = touchdown_override_t_left.max(term);
-                        touchdown_override_t_right = touchdown_override_t_right.max(term);
-                    }
+                    touchdown_override_j = touchdown_override_j.max(term);
                 }
             }
             effects.gear_comp_left_active = left_active;
 
+            let right_dur = bump_duration(s.gear_comp_right_severity_frac, &BUMP_MAIN);
             let right_active = cfg.gear_comp_right_enabled
                 && fv.sim_time_s >= s.gear_comp_right_t0
-                && fv.sim_time_s <= s.gear_comp_right_t0 + GEAR_COMP_BUMP_DURATION_MAIN;
+                && fv.sim_time_s <= s.gear_comp_right_t0 + right_dur;
             if right_active {
-                let p = ((fv.sim_time_s - s.gear_comp_right_t0) / GEAR_COMP_BUMP_DURATION_MAIN)
-                    .clamp(0.0, 1.0);
-                let term = s.gear_comp_right_dyn_peak * (1.0 - p).powi(3);
-                if cfg.split_touchdown {
-                    // SPLIT: правая основная стойка — всегда на РУКУ, противоположную
-                    // левой стойке выше (гарантирует, что лево/право никогда не
-                    // окажутся в одной ладони одновременно).
-                    if left_gear_on_throttle {
-                        touchdown_override_j = touchdown_override_j.max(term);
-                    } else {
-                        touchdown_override_t_right = touchdown_override_t_right.max(term);
-                    }
+                let elapsed = fv.sim_time_s - s.gear_comp_right_t0;
+                let term = bump_envelope(elapsed, s.gear_comp_right_severity_frac, &BUMP_MAIN);
+                if only_joystick {
+                    touchdown_override_j = touchdown_override_j.max(term);
+                } else if only_throttle {
+                    touchdown_override_t_left = touchdown_override_t_left.max(term);
+                    touchdown_override_t_right = touchdown_override_t_right.max(term);
+                } else if left_gear_on_throttle {
+                    touchdown_override_j = touchdown_override_j.max(term);
                 } else {
-                    if dt_.gear_comp_right.enable_joystick {
-                        touchdown_override_j = touchdown_override_j.max(term);
-                    }
-                    if dt_.gear_comp_right.enable_throttle {
-                        touchdown_override_t_left = touchdown_override_t_left.max(term);
-                        touchdown_override_t_right = touchdown_override_t_right.max(term);
-                    }
+                    touchdown_override_t_left = touchdown_override_t_left.max(term);
+                    touchdown_override_t_right = touchdown_override_t_right.max(term);
                 }
             }
             effects.gear_comp_right_active = right_active;
@@ -1740,7 +1771,7 @@ impl RumbleEngine {
         total_t_right *= touchdown_fade_in;
 
         if cfg.stall_enabled && fv.stalled {
-            let ceiling = cfg.stall_ceiling as f64;
+            let ceiling = (cfg.stall_ceiling as f64).min(STALL_CEILING_HARD_CAP);
             if dt_.stall.enable_joystick {
                 total_j = total_j.max(ceiling);
             }
@@ -1771,15 +1802,15 @@ impl RumbleEngine {
             }
         }
 
-        // 3. АБСОЛЮТНЫЙ ОВЕРРАЙД: удар обжатия стоек шасси (touchdown), 0.12-0.22с.
-        // Выполняется ПОСЛЕ clamp — гарантированно пробивает Ground Roll и любой
-        // другой суммированный эффект в момент касания, вместо того чтобы тонуть
-        // в их сумме (как было раньше, когда термин подмешивался в transients).
-        // .max() на каждый канал по отдельности: нос/лево/право уже разведены
-        // по трём разным моторам через touchdown_override_j/t_left/t_right
-        // (см. блок детекции обжатия стоек выше), поэтому .max() здесь — просто
-        // защита на случай, если несколько стоек делят один канал (split_touchdown
-        // выключен, чекбоксы устройств пересекаются).
+        // 3. АБСОЛЮТНЫЙ ОВЕРРАЙД: удар обжатия стоек шасси (touchdown), 0.23-0.55с
+        // (attack-hold-decay, см. BumpSpec/bump_envelope выше). Выполняется ПОСЛЕ
+        // clamp — гарантированно пробивает Ground Roll и любой другой
+        // суммированный эффект в момент касания, вместо того чтобы тонуть в их
+        // сумме (как было раньше, когда термин подмешивался в transients).
+        // .max() на каждый канал по отдельности: нос идёт на все три канала
+        // сразу, левая/правая — по фиксированной раскладке рук (см. блок
+        // детекции обжатия стоек выше), .max() здесь просто защита на случай,
+        // если нос и основная стойка делят канал одновременно.
         if touchdown_override_j > 0.0 {
             final_joystick = final_joystick.max(touchdown_override_j);
         }

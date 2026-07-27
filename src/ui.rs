@@ -1283,7 +1283,7 @@ impl eframe::App for UiState {
                                                         ui,
                                                         t.name_stall,
                                                         &mut cfg.stall_ceiling,
-                                                        255.0,
+                                                        10.0, // жёсткий потолок — см. STALL_CEILING_HARD_CAP в rumble.rs
                                                         &mut stall_enabled,
                                                         active,
                                                         &mut _changed,

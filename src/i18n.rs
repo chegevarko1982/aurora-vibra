@@ -303,7 +303,7 @@ pub const EN: Strings = Strings {
 
     heading_gear_comp: "Gear Strut Compression (Touchdown)",
     chk_enabled: "Enabled",
-    hover_headroom: "Sets the ceiling, not the strength: every touchdown is guaranteed a 200/255 jolt no matter what. 0% keeps the ceiling at 200 too (every landing feels the same). 100% raises the ceiling to 255 — a hard landing can reach it, but a soft one still lands near 200 either way",
+    hover_headroom: "Sets how much landing hardness affects the impact's duration, not its strength: every touchdown always hits at full 255. 0% keeps the duration fixed and minimal (~230ms) no matter how hard you land. 100% lets a hard landing stretch the hit up to ~550ms, while a soft one still stays around 230ms",
     name_nose_peak: "Nose Peak",
     name_left_peak: "Left Peak",
     name_right_peak: "Right Peak",
@@ -465,7 +465,7 @@ pub const RU: Strings = Strings {
 
     heading_gear_comp: "Сжатие стоек шасси (касание)",
     chk_enabled: "Включено",
-    hover_headroom: "Задаёт потолок, а не саму силу: любая посадка гарантированно бьёт на 200/255. 0% держит потолок тоже на 200 (все посадки ощущаются одинаково). 100% поднимает потолок до 255 — жёсткая посадка может его достичь, но мягкая всё равно останется около 200",
+    hover_headroom: "Задаёт, насколько жёсткость посадки влияет на ДЛИТЕЛЬНОСТЬ удара, а не на его силу: любая посадка всегда бьёт на полных 255. 0% держит длительность фиксированной и минимальной (~230мс) независимо от жёсткости. 100% позволяет жёсткой посадке растянуть удар до ~550мс, а мягкая всё равно останется около 230мс",
     name_nose_peak: "Носовая стойка",
     name_left_peak: "Левая стойка",
     name_right_peak: "Правая стойка",

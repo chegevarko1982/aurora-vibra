@@ -350,7 +350,7 @@ impl Default for RumbleConfig {
             ground_roll: 7.5,  // 15% от техн. предела 50
             flaps_peak: 153.0, // ~0.6 duty cycle — прежняя фиксированная сила эффекта
             gear_peak: 110.0,
-            stall_ceiling: 160.0,
+            stall_ceiling: 10.0, // жёсткий потолок STALL_CEILING_HARD_CAP в rumble.rs — см. там
             max_output: 255,
             smoothing_alpha: 0.18,
             ias_deadband_kn: 1.0,
@@ -385,7 +385,7 @@ impl Default for RumbleConfig {
 
             gear_comp_enabled: true,
             gear_comp_nose_enabled: true,
-            gear_comp_nose_peak: 55.0, // 100% в UI: запас 0..55 над полом 200 → факт. 200..255
+            gear_comp_nose_peak: 55.0, // 100% в UI: полный диапазон длительности 230..550мс по жёсткости посадки (см. rumble.rs)
             gear_comp_left_enabled: true,
             gear_comp_left_peak: 55.0,
             gear_comp_right_enabled: true,
