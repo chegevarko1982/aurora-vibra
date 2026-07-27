@@ -4,22 +4,19 @@
 #![windows_subsystem = "windows"]
 
 use aurora_vibra::{
+    ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
     aircraft_profiles::AircraftProfiles,
     hid::hid_worker,
     log::LogBuffer,
     profiles::ProfileState,
     sim::sim_worker,
     ui::{Tab, UiState},
-    ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
 };
 
 use anyhow::Result;
 use crossbeam_channel::unbounded;
 use parking_lot::Mutex;
-use std::sync::{
-    atomic::{AtomicBool},
-    Arc,
-};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::{thread, time::Duration};
 
 /// Returns `true` if another Aurora Vibra instance is already running. In
@@ -27,11 +24,13 @@ use std::{thread, time::Duration};
 /// "find window by title" logic the tray icon already relies on) and the
 /// caller should exit immediately without touching HID/SimConnect.
 fn acquire_single_instance_lock() -> bool {
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
+    use windows::core::PCWSTR;
 
-    let name: Vec<u16> = "Global\\AuroraVibraSingleInstance\0".encode_utf16().collect();
+    let name: Vec<u16> = "Global\\AuroraVibraSingleInstance\0"
+        .encode_utf16()
+        .collect();
     // SAFETY: straightforward FFI call with a valid null-terminated wide
     // string. `HANDLE` has no `Drop` impl (it's a plain wrapper, not RAII),
     // so we never close it — the mutex stays held for the whole process
@@ -225,7 +224,11 @@ fn main() -> Result<()> {
         }),
     );
 
-    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
+    let _ = tx_hid.send(HidCmd::SendIntensity {
+        joystick: 0,
+        throttle_left: 0,
+        throttle_right: 0,
+    });
     thread::sleep(Duration::from_millis(60));
 
     run.map_err(|e| anyhow::anyhow!("eframe failed: {e}"))

@@ -166,7 +166,8 @@ const STARTER_ONLY_AMPLITUDE_CAP: f64 = 10.0;
 /// (стартер ещё не включался в этом заходе — self-neutralizing).
 fn starter_only_amplitude(engaged_at: Option<Instant>) -> f64 {
     match engaged_at {
-        Some(t0) => (t0.elapsed().as_secs_f64() / STARTER_ONLY_RAMP_SECS * STARTER_ONLY_AMPLITUDE_CAP)
+        Some(t0) => (t0.elapsed().as_secs_f64() / STARTER_ONLY_RAMP_SECS
+            * STARTER_ONLY_AMPLITUDE_CAP)
             .min(STARTER_ONLY_AMPLITUDE_CAP),
         None => 0.0,
     }
@@ -245,22 +246,33 @@ impl RumbleEngine {
         hold: bool,
     ) -> RumbleOutput {
         let gs = fv.ground_speed_kt;
-        let start = if cfg.taxi_start_enabled { cfg.taxi_start_kn.min(cfg.taxi_end_kn - 0.1) } else { 0.0 };
-        let end = if cfg.taxi_end_enabled { cfg.taxi_end_kn.max(start + 0.1) } else { 9999.0 };
+        let start = if cfg.taxi_start_enabled {
+            cfg.taxi_start_kn.min(cfg.taxi_end_kn - 0.1)
+        } else {
+            0.0
+        };
+        let end = if cfg.taxi_end_enabled {
+            cfg.taxi_end_kn.max(start + 0.1)
+        } else {
+            9999.0
+        };
 
         // Минимальный порог скорости 1.0 узел для предотвращения вибрации в статике при отключенных чекбоксах
         let start_active = start.max(1.0);
 
         let in_thump_band = cfg.ground_enabled && fv.on_ground && gs >= start_active && gs < end;
-        let at_or_above_end = cfg.ground_enabled && cfg.taxi_end_enabled && fv.on_ground && gs >= end;
+        let at_or_above_end =
+            cfg.ground_enabled && cfg.taxi_end_enabled && fv.on_ground && gs >= end;
         let at_or_above_start = cfg.taxi_start_enabled && fv.on_ground && gs >= start;
 
         // Порог Overspeed приходит динамически из SimConnect (AIRSPEED BARBER
-        // POLE — Vmo/Mmo, сим сам двигает её вниз при наборе высоты). Некоторые
-        // сложные аддоны (напр. TFDI MADDOG) не синхронизируют эту переменную
-        // с реальным прибором в кабине — для них есть ручной override.
-        // 0.0 означает "порог неизвестен" — в этом случае эффект не должен
-        // срабатывать (иначе сработает от IAS >= 0).
+        // POLE — Vmo/Mmo, сим сам двигает её вниз при наборе высоты; на Fenix
+        // A320 — L:I_PFD_VMAX, см. sim/parse.rs). Некоторые сложные аддоны
+        // (напр. TFDI MADDOG) не синхронизируют эту переменную с реальным
+        // прибором в кабине — для них есть ручной override. sim/parse.rs уже
+        // подставляет дефолт 350.0, если источник ещё не пришёл от
+        // SimConnect, так что fv.overspeed_barber_pole_kn практически всегда
+        // > 0.0 — проверка ниже остаётся на случай overspeed_manual_kn == 0.
         let overspeed_threshold_kn = if cfg.overspeed_override_enabled {
             cfg.overspeed_manual_kn
         } else {
@@ -289,8 +301,8 @@ impl RumbleEngine {
         let md11_l = fv.spoilers_md11_left_avg;
         let md11_r = fv.spoilers_md11_right_avg;
         let md11_denom = md11_l.max(md11_r);
-        let md11_panels_symmetric =
-            md11_denom < 1e-6 || (md11_l - md11_r).abs() / md11_denom <= MD11_PANEL_SYMMETRY_TOLERANCE_RATIO;
+        let md11_panels_symmetric = md11_denom < 1e-6
+            || (md11_l - md11_r).abs() / md11_denom <= MD11_PANEL_SYMMETRY_TOLERANCE_RATIO;
 
         let spoilers_active = cfg.spoilers_enabled
             && fv.spoilers_pct > cfg.spoilers_threshold_pct
@@ -385,7 +397,11 @@ impl RumbleEngine {
             // даже стоя на месте (шум телеметрии/дробные остатки), а на
             // кокпит-дисплее округляется до "0" — 0.5 узла отсекает этот шум,
             // не мешая реальному касанию (там GS всегда заметно выше).
-            if cfg.gear_comp_nose_enabled && gs > 0.5 && fv.gear_comp_nose >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_nose < GEAR_COMP_TOUCHDOWN_THRESHOLD {
+            if cfg.gear_comp_nose_enabled
+                && gs > 0.5
+                && fv.gear_comp_nose >= GEAR_COMP_TOUCHDOWN_THRESHOLD
+                && s.prev_gear_comp_nose < GEAR_COMP_TOUCHDOWN_THRESHOLD
+            {
                 s.gear_comp_nose_t0 = fv.sim_time_s;
                 let comp_rate = (fv.gear_comp_nose - s.prev_gear_comp_nose) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
@@ -393,13 +409,19 @@ impl RumbleEngine {
                 let headroom = (cfg.gear_comp_nose_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX);
                 let raw_peak = GEAR_COMP_PEAK_MIN + headroom * intensity_frac;
                 s.gear_comp_nose_dyn_peak = raw_peak.clamp(GEAR_COMP_PEAK_MIN, GEAR_COMP_PEAK_MAX);
-                s.touchdown_settle_until = s.touchdown_settle_until.max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_NOSE);
+                s.touchdown_settle_until = s
+                    .touchdown_settle_until
+                    .max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_NOSE);
                 s.nose_touched_since_air = true;
             }
             s.prev_gear_comp_nose = fv.gear_comp_nose;
 
             // Left Gear
-            if cfg.gear_comp_left_enabled && gs > 0.5 && fv.gear_comp_left >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_left < GEAR_COMP_TOUCHDOWN_THRESHOLD {
+            if cfg.gear_comp_left_enabled
+                && gs > 0.5
+                && fv.gear_comp_left >= GEAR_COMP_TOUCHDOWN_THRESHOLD
+                && s.prev_gear_comp_left < GEAR_COMP_TOUCHDOWN_THRESHOLD
+            {
                 s.gear_comp_left_t0 = fv.sim_time_s;
                 let comp_rate = (fv.gear_comp_left - s.prev_gear_comp_left) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
@@ -407,13 +429,19 @@ impl RumbleEngine {
                 let headroom = (cfg.gear_comp_left_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX);
                 let raw_peak = GEAR_COMP_PEAK_MIN + headroom * intensity_frac;
                 s.gear_comp_left_dyn_peak = raw_peak.clamp(GEAR_COMP_PEAK_MIN, GEAR_COMP_PEAK_MAX);
-                s.touchdown_settle_until = s.touchdown_settle_until.max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_MAIN);
+                s.touchdown_settle_until = s
+                    .touchdown_settle_until
+                    .max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_MAIN);
                 s.left_touched_since_air = true;
             }
             s.prev_gear_comp_left = fv.gear_comp_left;
 
             // Right Gear
-            if cfg.gear_comp_right_enabled && gs > 0.5 && fv.gear_comp_right >= GEAR_COMP_TOUCHDOWN_THRESHOLD && s.prev_gear_comp_right < GEAR_COMP_TOUCHDOWN_THRESHOLD {
+            if cfg.gear_comp_right_enabled
+                && gs > 0.5
+                && fv.gear_comp_right >= GEAR_COMP_TOUCHDOWN_THRESHOLD
+                && s.prev_gear_comp_right < GEAR_COMP_TOUCHDOWN_THRESHOLD
+            {
                 s.gear_comp_right_t0 = fv.sim_time_s;
                 let comp_rate = (fv.gear_comp_right - s.prev_gear_comp_right) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
@@ -421,7 +449,9 @@ impl RumbleEngine {
                 let headroom = (cfg.gear_comp_right_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX);
                 let raw_peak = GEAR_COMP_PEAK_MIN + headroom * intensity_frac;
                 s.gear_comp_right_dyn_peak = raw_peak.clamp(GEAR_COMP_PEAK_MIN, GEAR_COMP_PEAK_MAX);
-                s.touchdown_settle_until = s.touchdown_settle_until.max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_MAIN);
+                s.touchdown_settle_until = s
+                    .touchdown_settle_until
+                    .max(fv.sim_time_s + GEAR_COMP_BUMP_DURATION_MAIN);
                 s.right_touched_since_air = true;
             }
             s.prev_gear_comp_right = fv.gear_comp_right;
@@ -562,7 +592,6 @@ impl RumbleEngine {
         // Время — fv.sim_time_s (НЕ Instant::now()), чтобы корректно работать
         // на паузе симулятора и при ускорении времени (time acceleration).
         if cfg.ground_enabled && fv.on_ground && gs >= start_active {
-
             // ═══════════════════════════════════════════════════════════════════
             //  ПАРАМЕТРЫ ЭФФЕКТА «СТУК О СТЫКИ ПЛИТ» — правь здесь при тестах
             // ═══════════════════════════════════════════════════════════════════
@@ -587,8 +616,8 @@ impl RumbleEngine {
 
             // 2б. "Чистый" физический период по формуле t = S / V, зажатый в безопасные
             // для HID-канала границы [thump_min_period_s .. thump_max_period_s].
-            let physical_period_s = (slab_length_m / speed_mps)
-                .clamp(cfg.thump_min_period_s, cfg.thump_max_period_s);
+            let physical_period_s =
+                (slab_length_m / speed_mps).clamp(cfg.thump_min_period_s, cfg.thump_max_period_s);
 
             // 2в. КОЭФФИЦИЕНT КРИВИЗНЫ (cfg.thump_period_curve): управляет тем, КАК БЫСТРО
             // период сокращается (паузы между ударами укорачиваются) по мере роста скорости.
@@ -641,7 +670,7 @@ impl RumbleEngine {
                 // (nose_touched_since_air и т.д.), либо — предохранитель на случай
                 // борта без рабочей телеметрии по носовой стойке — не более
                 // GROUND_ROLL_WAIT_TIMEOUT_S с момента первого касания земли.
-                const GROUND_ROLL_WAIT_TIMEOUT_S: f64 = 3.0;
+                const GROUND_ROLL_WAIT_TIMEOUT_S: f64 = 10.0;
                 let all_struts_settled = !cfg.gear_comp_enabled
                     || ((!cfg.gear_comp_nose_enabled || s.nose_touched_since_air)
                         && (!cfg.gear_comp_left_enabled || s.left_touched_since_air)
@@ -659,8 +688,12 @@ impl RumbleEngine {
 
                 let raw_term = (thump_amplitude * amplitude_curve * touchdown_fade_in)
                     .clamp(GROUND_THUMP_PEAK_MIN, GROUND_THUMP_PEAK_MAX);
-                if dt_.ground_roll.enable_joystick { ground_term_j = raw_term; }
-                if dt_.ground_roll.enable_throttle { ground_term_t = raw_term; }
+                if dt_.ground_roll.enable_joystick {
+                    ground_term_j = raw_term;
+                }
+                if dt_.ground_roll.enable_throttle {
+                    ground_term_t = raw_term;
+                }
             }
         } else {
             // Эффект неактивен (в воздухе/стоит/выключен) — сбрасываем фазу,
@@ -703,10 +736,17 @@ impl RumbleEngine {
                 };
                 let ratio = 0.1 + 0.9 * growth;
                 let intensity = ratio * (cfg.overspeed_intensity as f64);
-                let oscillation = (2.0 * std::f64::consts::PI * (5.0 + growth * 15.0) * fv.sim_time_s).sin() * 0.5 + 0.5;
+                let oscillation =
+                    (2.0 * std::f64::consts::PI * (5.0 + growth * 15.0) * fv.sim_time_s).sin()
+                        * 0.5
+                        + 0.5;
                 let term = intensity * (0.7 + 0.3 * oscillation);
-                if dt_.overspeed.enable_joystick { air_term_j += term; }
-                if dt_.overspeed.enable_throttle { air_term_t += term; }
+                if dt_.overspeed.enable_joystick {
+                    air_term_j += term;
+                }
+                if dt_.overspeed.enable_throttle {
+                    air_term_t += term;
+                }
                 effects.overspeed_active = true;
             }
         }
@@ -714,11 +754,16 @@ impl RumbleEngine {
         if cfg.bank_enabled && !fv.on_ground {
             let bank_abs = fv.bank_deg.abs();
             if bank_abs > bank_threshold_deg {
-                let raw_norm = ((bank_abs - bank_threshold_deg) / (90.0 - bank_threshold_deg)).clamp(0.0, 1.0);
+                let raw_norm =
+                    ((bank_abs - bank_threshold_deg) / (90.0 - bank_threshold_deg)).clamp(0.0, 1.0);
                 if (fv.sim_time_s % 0.15) < (0.15 * raw_norm) {
                     let term = cfg.bank_intensity as f64;
-                    if dt_.bank.enable_joystick { bank_term_j = term; }
-                    if dt_.bank.enable_throttle { bank_term_t = term; }
+                    if dt_.bank.enable_joystick {
+                        bank_term_j = term;
+                    }
+                    if dt_.bank.enable_throttle {
+                        bank_term_t = term;
+                    }
                 }
             }
         }
@@ -730,23 +775,36 @@ impl RumbleEngine {
             let speed_factor = (fv.airspeed_indicated / 300.0).clamp(0.0, 1.2);
             let oscillation = (2.0 * std::f64::consts::PI * 25.0 * fv.sim_time_s).sin() * 0.4 + 0.6;
             let term = base_spoilers_intensity * speed_factor * oscillation;
-            if dt_.spoilers.enable_joystick { spoilers_term_j = term; }
-            if dt_.spoilers.enable_throttle { spoilers_term_t = term; }
+            if dt_.spoilers.enable_joystick {
+                spoilers_term_j = term;
+            }
+            if dt_.spoilers.enable_throttle {
+                spoilers_term_t = term;
+            }
         }
 
         if cfg.stall_enabled && fv.stalled {
             let ceiling = cfg.stall_ceiling as f64;
-            if dt_.stall.enable_joystick { transients_j = transients_j.max(ceiling); }
-            if dt_.stall.enable_throttle { transients_t = transients_t.max(ceiling); }
+            if dt_.stall.enable_joystick {
+                transients_j = transients_j.max(ceiling);
+            }
+            if dt_.stall.enable_throttle {
+                transients_t = transients_t.max(ceiling);
+            }
         }
 
         if cfg.gear_enabled {
-            let gear_active = fv.sim_time_s >= s.gear_t0 && fv.sim_time_s <= s.gear_t1 && s.gear_peak > 0.0;
+            let gear_active =
+                fv.sim_time_s >= s.gear_t0 && fv.sim_time_s <= s.gear_t1 && s.gear_peak > 0.0;
             if gear_active {
                 let p = ((fv.sim_time_s - s.gear_t0) / (s.gear_t1 - s.gear_t0)).clamp(0.0, 1.0);
                 let term = s.gear_peak * (std::f64::consts::PI * p).sin();
-                if dt_.gear_bump.enable_joystick { transients_j += term; }
-                if dt_.gear_bump.enable_throttle { transients_t += term; }
+                if dt_.gear_bump.enable_joystick {
+                    transients_j += term;
+                }
+                if dt_.gear_bump.enable_throttle {
+                    transients_t += term;
+                }
             }
             effects.gear_bump_active = gear_active;
         }
@@ -769,9 +827,12 @@ impl RumbleEngine {
             // наложении по времени это не сольётся в одно и то же ощущение.
             let left_gear_on_throttle = !cfg.swap_hand_layout;
 
-            let nose_active = cfg.gear_comp_nose_enabled && fv.sim_time_s >= s.gear_comp_nose_t0 && fv.sim_time_s <= s.gear_comp_nose_t0 + GEAR_COMP_BUMP_DURATION_NOSE;
+            let nose_active = cfg.gear_comp_nose_enabled
+                && fv.sim_time_s >= s.gear_comp_nose_t0
+                && fv.sim_time_s <= s.gear_comp_nose_t0 + GEAR_COMP_BUMP_DURATION_NOSE;
             if nose_active {
-                let p = ((fv.sim_time_s - s.gear_comp_nose_t0) / GEAR_COMP_BUMP_DURATION_NOSE).clamp(0.0, 1.0);
+                let p = ((fv.sim_time_s - s.gear_comp_nose_t0) / GEAR_COMP_BUMP_DURATION_NOSE)
+                    .clamp(0.0, 1.0);
                 let term = s.gear_comp_nose_dyn_peak * (1.0 - p).powi(GEAR_COMP_NOSE_DECAY_EXP);
                 if cfg.split_touchdown {
                     // Нос всегда идёт на РУД (единственное устройство с запасным
@@ -783,7 +844,9 @@ impl RumbleEngine {
                         touchdown_override_t_left = touchdown_override_t_left.max(term);
                     }
                 } else {
-                    if dt_.gear_comp_nose.enable_joystick { touchdown_override_j = touchdown_override_j.max(term); }
+                    if dt_.gear_comp_nose.enable_joystick {
+                        touchdown_override_j = touchdown_override_j.max(term);
+                    }
                     if dt_.gear_comp_nose.enable_throttle {
                         touchdown_override_t_left = touchdown_override_t_left.max(term);
                         touchdown_override_t_right = touchdown_override_t_right.max(term);
@@ -792,9 +855,12 @@ impl RumbleEngine {
             }
             effects.gear_comp_nose_active = nose_active;
 
-            let left_active = cfg.gear_comp_left_enabled && fv.sim_time_s >= s.gear_comp_left_t0 && fv.sim_time_s <= s.gear_comp_left_t0 + GEAR_COMP_BUMP_DURATION_MAIN;
+            let left_active = cfg.gear_comp_left_enabled
+                && fv.sim_time_s >= s.gear_comp_left_t0
+                && fv.sim_time_s <= s.gear_comp_left_t0 + GEAR_COMP_BUMP_DURATION_MAIN;
             if left_active {
-                let p = ((fv.sim_time_s - s.gear_comp_left_t0) / GEAR_COMP_BUMP_DURATION_MAIN).clamp(0.0, 1.0);
+                let p = ((fv.sim_time_s - s.gear_comp_left_t0) / GEAR_COMP_BUMP_DURATION_MAIN)
+                    .clamp(0.0, 1.0);
                 let term = s.gear_comp_left_dyn_peak * (1.0 - p).powi(3);
                 if cfg.split_touchdown {
                     // SPLIT: левая основная стойка — эксклюзивно на РУД (мотор
@@ -806,7 +872,9 @@ impl RumbleEngine {
                         touchdown_override_j = touchdown_override_j.max(term);
                     }
                 } else {
-                    if dt_.gear_comp_left.enable_joystick { touchdown_override_j = touchdown_override_j.max(term); }
+                    if dt_.gear_comp_left.enable_joystick {
+                        touchdown_override_j = touchdown_override_j.max(term);
+                    }
                     if dt_.gear_comp_left.enable_throttle {
                         touchdown_override_t_left = touchdown_override_t_left.max(term);
                         touchdown_override_t_right = touchdown_override_t_right.max(term);
@@ -815,9 +883,12 @@ impl RumbleEngine {
             }
             effects.gear_comp_left_active = left_active;
 
-            let right_active = cfg.gear_comp_right_enabled && fv.sim_time_s >= s.gear_comp_right_t0 && fv.sim_time_s <= s.gear_comp_right_t0 + GEAR_COMP_BUMP_DURATION_MAIN;
+            let right_active = cfg.gear_comp_right_enabled
+                && fv.sim_time_s >= s.gear_comp_right_t0
+                && fv.sim_time_s <= s.gear_comp_right_t0 + GEAR_COMP_BUMP_DURATION_MAIN;
             if right_active {
-                let p = ((fv.sim_time_s - s.gear_comp_right_t0) / GEAR_COMP_BUMP_DURATION_MAIN).clamp(0.0, 1.0);
+                let p = ((fv.sim_time_s - s.gear_comp_right_t0) / GEAR_COMP_BUMP_DURATION_MAIN)
+                    .clamp(0.0, 1.0);
                 let term = s.gear_comp_right_dyn_peak * (1.0 - p).powi(3);
                 if cfg.split_touchdown {
                     // SPLIT: правая основная стойка — всегда на РУКУ, противоположную
@@ -829,7 +900,9 @@ impl RumbleEngine {
                         touchdown_override_t_right = touchdown_override_t_right.max(term);
                     }
                 } else {
-                    if dt_.gear_comp_right.enable_joystick { touchdown_override_j = touchdown_override_j.max(term); }
+                    if dt_.gear_comp_right.enable_joystick {
+                        touchdown_override_j = touchdown_override_j.max(term);
+                    }
                     if dt_.gear_comp_right.enable_throttle {
                         touchdown_override_t_left = touchdown_override_t_left.max(term);
                         touchdown_override_t_right = touchdown_override_t_right.max(term);
@@ -856,8 +929,8 @@ impl RumbleEngine {
         if cfg.gear_transit_enabled && gs < 0.1 {
             // Использует переменные анимации шасси из FlightVars
             let moving_count = gear_is_moving(fv.gear_comp_nose, s.prev_gear_nose) as i32
-                             + gear_is_moving(fv.gear_comp_left, s.prev_gear_left) as i32
-                             + gear_is_moving(fv.gear_comp_right, s.prev_gear_right) as i32;
+                + gear_is_moving(fv.gear_comp_left, s.prev_gear_left) as i32
+                + gear_is_moving(fv.gear_comp_right, s.prev_gear_right) as i32;
 
             if moving_count > 0 {
                 let multiplier = match moving_count {
@@ -873,19 +946,28 @@ impl RumbleEngine {
                 let beat_index = (current_beat.floor() as i64) % 3;
 
                 if beat_index == 0 {
-                    if beat_phase < 0.35 { gear_transit_term += 40.0 * multiplier; }
+                    if beat_phase < 0.35 {
+                        gear_transit_term += 40.0 * multiplier;
+                    }
                 } else {
-                    if beat_phase < 0.15 { gear_transit_term += 15.0 * multiplier; }
+                    if beat_phase < 0.15 {
+                        gear_transit_term += 15.0 * multiplier;
+                    }
                 }
             }
 
             // Детекция финала уборки (все стойки в 0.0)
-            let all_up_now = fv.gear_comp_nose <= 0.0 && fv.gear_comp_left <= 0.0 && fv.gear_comp_right <= 0.0;
-            let not_all_up_prev = s.prev_gear_nose > 0.0 || s.prev_gear_left > 0.0 || s.prev_gear_right > 0.0;
+            let all_up_now =
+                fv.gear_comp_nose <= 0.0 && fv.gear_comp_left <= 0.0 && fv.gear_comp_right <= 0.0;
+            let not_all_up_prev =
+                s.prev_gear_nose > 0.0 || s.prev_gear_left > 0.0 || s.prev_gear_right > 0.0;
 
             // Детекция финала выпуска (все стойки в 50.0)
-            let all_down_now = fv.gear_comp_nose >= 49.9 && fv.gear_comp_left >= 49.9 && fv.gear_comp_right >= 49.9;
-            let not_all_down_prev = s.prev_gear_nose < 49.9 || s.prev_gear_left < 49.9 || s.prev_gear_right < 49.9;
+            let all_down_now = fv.gear_comp_nose >= 49.9
+                && fv.gear_comp_left >= 49.9
+                && fv.gear_comp_right >= 49.9;
+            let not_all_down_prev =
+                s.prev_gear_nose < 49.9 || s.prev_gear_left < 49.9 || s.prev_gear_right < 49.9;
 
             // Если сработал любой триггер (последняя стойка встала на замок)
             if (all_up_now && not_all_up_prev) || (all_down_now && not_all_down_prev) {
@@ -908,8 +990,12 @@ impl RumbleEngine {
         s.prev_gear_left = fv.gear_comp_left;
         s.prev_gear_right = fv.gear_comp_right;
 
-        if dt_.gear_transit.enable_joystick { transients_j += gear_transit_term; }
-        if dt_.gear_transit.enable_throttle { transients_t += gear_transit_term; }
+        if dt_.gear_transit.enable_joystick {
+            transients_j += gear_transit_term;
+        }
+        if dt_.gear_transit.enable_throttle {
+            transients_t += gear_transit_term;
+        }
         // ----------------------------------------------
 
         // =========================================================================
@@ -982,7 +1068,8 @@ impl RumbleEngine {
             // двигатель трясёт всю кабину, а не только свой борт.
             // Порог Idle N2 теперь настраивается пользователем (config.engine_idle_n2),
             // поскольку разные самолёты выходят на Idle при разных значениях N2.
-            let engine_spool_n2_max: f64 = (cfg.engine_idle_n2 as f64).max(ENGINE_SPOOL_DEADZONE_N2 + 0.001);
+            let engine_spool_n2_max: f64 =
+                (cfg.engine_idle_n2 as f64).max(ENGINE_SPOOL_DEADZONE_N2 + 0.001);
             let engine_spool_peak_n2: f64 = engine_spool_n2_max / 3.0;
             const ENGINE_SPOOL_DEADZONE_N2: f64 = 1.0; // N2 < 1.0 — двигатель считается выключенным (PWM = 0)
             // Минимум по ШИМ (0..255) в кривой N2 (используется ТОЛЬКО ПОСЛЕ
@@ -1170,10 +1257,12 @@ impl RumbleEngine {
                     let decay_progress = ((n2_percent - engine_spool_peak_n2)
                         / (engine_spool_n2_max - engine_spool_peak_n2))
                         .clamp(0.0, 1.0);
-                    let amplitude_factor = (1.0 - decay_progress).powf(DECAY_EXPONENT).clamp(0.0, 1.0);
+                    let amplitude_factor =
+                        (1.0 - decay_progress).powf(DECAY_EXPONENT).clamp(0.0, 1.0);
                     // Без .max(ENGINE_SPOOL_MIN_AMPLITUDE) здесь: амплитуда должна
                     // дойти РОВНО до 0.0 у engine_idle_n2, а не застрять на полу.
-                    (amplitude_factor * engine_spool_max_amplitude).clamp(0.0, engine_spool_max_amplitude)
+                    (amplitude_factor * engine_spool_max_amplitude)
+                        .clamp(0.0, engine_spool_max_amplitude)
                 }
             };
 
@@ -1235,8 +1324,10 @@ impl RumbleEngine {
                 engine_spool_term(eng1_effective)
             } else {
                 s.eng1_has_ignited = false;
-                starter_only_amplitude(s.eng1_starter_engaged_at)
-                    .max(starter_abort_fade_amplitude(s.eng1_abort_fade_started_at, s.eng1_abort_fade_start_value))
+                starter_only_amplitude(s.eng1_starter_engaged_at).max(starter_abort_fade_amplitude(
+                    s.eng1_abort_fade_started_at,
+                    s.eng1_abort_fade_start_value,
+                ))
             };
             let eng2_term = if is_combusting_eng2 {
                 engine_spool_term(eng2_effective)
@@ -1244,8 +1335,10 @@ impl RumbleEngine {
                 engine_spool_term(eng2_effective)
             } else {
                 s.eng2_has_ignited = false;
-                starter_only_amplitude(s.eng2_starter_engaged_at)
-                    .max(starter_abort_fade_amplitude(s.eng2_abort_fade_started_at, s.eng2_abort_fade_start_value))
+                starter_only_amplitude(s.eng2_starter_engaged_at).max(starter_abort_fade_amplitude(
+                    s.eng2_abort_fade_started_at,
+                    s.eng2_abort_fade_start_value,
+                ))
             };
             let eng3_term = if is_combusting_eng3 {
                 engine_spool_term(eng3_effective)
@@ -1253,8 +1346,10 @@ impl RumbleEngine {
                 engine_spool_term(eng3_effective)
             } else {
                 s.eng3_has_ignited = false;
-                starter_only_amplitude(s.eng3_starter_engaged_at)
-                    .max(starter_abort_fade_amplitude(s.eng3_abort_fade_started_at, s.eng3_abort_fade_start_value))
+                starter_only_amplitude(s.eng3_starter_engaged_at).max(starter_abort_fade_amplitude(
+                    s.eng3_abort_fade_started_at,
+                    s.eng3_abort_fade_start_value,
+                ))
             };
             let eng4_term = if is_combusting_eng4 {
                 engine_spool_term(eng4_effective)
@@ -1262,8 +1357,10 @@ impl RumbleEngine {
                 engine_spool_term(eng4_effective)
             } else {
                 s.eng4_has_ignited = false;
-                starter_only_amplitude(s.eng4_starter_engaged_at)
-                    .max(starter_abort_fade_amplitude(s.eng4_abort_fade_started_at, s.eng4_abort_fade_start_value))
+                starter_only_amplitude(s.eng4_starter_engaged_at).max(starter_abort_fade_amplitude(
+                    s.eng4_abort_fade_started_at,
+                    s.eng4_abort_fade_start_value,
+                ))
             };
 
             // ШАГ 2: Проверяем активность 500-мс удара воспламенения для КАЖДОГО
@@ -1290,7 +1387,10 @@ impl RumbleEngine {
             // двигателя своей группы независимо (не только от первого
             // воспламенившегося), см. поля prev_engN_combusting в RumbleState.
             let (left_kick_active, right_kick_active) = if cfg.four_engine_mode {
-                (eng1_kick_active || eng2_kick_active, eng3_kick_active || eng4_kick_active)
+                (
+                    eng1_kick_active || eng2_kick_active,
+                    eng3_kick_active || eng4_kick_active,
+                )
             } else {
                 (eng1_kick_active, eng2_kick_active)
             };
@@ -1313,10 +1413,14 @@ impl RumbleEngine {
             // раскручивающаяся по инерции турбина ощущается по всей кабине,
             // как и работающий двигатель, а не только на своей стороне.
             let eng_combusting = [
-                is_combusting_eng1 || (s.eng1_has_ignited && eng1_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
-                is_combusting_eng2 || (s.eng2_has_ignited && eng2_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
-                is_combusting_eng3 || (s.eng3_has_ignited && eng3_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
-                is_combusting_eng4 || (s.eng4_has_ignited && eng4_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng1
+                    || (s.eng1_has_ignited && eng1_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng2
+                    || (s.eng2_has_ignited && eng2_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng3
+                    || (s.eng3_has_ignited && eng3_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng4
+                    || (s.eng4_has_ignited && eng4_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
             ];
             let eng_term = [eng1_term, eng2_term, eng3_term, eng4_term];
             let side_terms = |indices: &[usize]| -> (f64, f64) {
@@ -1341,12 +1445,26 @@ impl RumbleEngine {
             // Eng2/right) считается "рукой РУД", а какая "рукой джойстика" —
             // см. комментарий у поля в RumbleConfig. По умолчанию (false)
             // сохраняется исходное поведение: Eng1 → РУД, Eng2 → джойстик.
-            let (throttle_combusting_term, throttle_starting_term, joystick_combusting_term, joystick_starting_term) =
-                if cfg.swap_hand_layout {
-                    (right_combusting_term, right_starting_term, left_combusting_term, left_starting_term)
-                } else {
-                    (left_combusting_term, left_starting_term, right_combusting_term, right_starting_term)
-                };
+            let (
+                throttle_combusting_term,
+                throttle_starting_term,
+                joystick_combusting_term,
+                joystick_starting_term,
+            ) = if cfg.swap_hand_layout {
+                (
+                    right_combusting_term,
+                    right_starting_term,
+                    left_combusting_term,
+                    left_starting_term,
+                )
+            } else {
+                (
+                    left_combusting_term,
+                    left_starting_term,
+                    right_combusting_term,
+                    right_starting_term,
+                )
+            };
 
             if cfg.enable_engine_start {
                 // Сторона "руки РУД": уже горящие двигатели трясут оба канала,
@@ -1395,7 +1513,9 @@ impl RumbleEngine {
             combustion_kick_strength = 255.0;
 
             effects.engine_start_active = cfg.enable_engine_start
-                && (throttle_eng_vib.abs() > 0.5 || joystick_eng_vib.abs() > 0.5 || combustion_kick_active);
+                && (throttle_eng_vib.abs() > 0.5
+                    || joystick_eng_vib.abs() > 0.5
+                    || combustion_kick_active);
 
             // Подмешиваем базовую раскрутку в соответствующие каналы через transients
             // (чтобы не гаситься экспоненциальным сглаживанием air_term ниже). Пока
@@ -1418,7 +1538,12 @@ impl RumbleEngine {
             const PISTON_KICK_MAX_S: f64 = 5.0; // потолок затухания удара воспламенения
             const PISTON_CRANK_FREQ_HZ: f64 = 3.0; // ~180 "тактов" стартера в минуту
 
-            let starters = [fv.eng1_starter, fv.eng2_starter, fv.eng3_starter, fv.eng4_starter];
+            let starters = [
+                fv.eng1_starter,
+                fv.eng2_starter,
+                fv.eng3_starter,
+                fv.eng4_starter,
+            ];
             let combusting = [
                 fv.eng1_combustion > 0.5,
                 fv.eng2_combustion > 0.5,
@@ -1457,10 +1582,12 @@ impl RumbleEngine {
                 // до строгого нуля за PISTON_KICK_MAX_S секунд — "fading out
                 // completely", а не мгновенный обрыв, как у джет-модели.
                 if is_combusting {
-                    let progress = (s.piston_combustion_timer[i] / PISTON_KICK_MAX_S).clamp(0.0, 1.0);
+                    let progress =
+                        (s.piston_combustion_timer[i] / PISTON_KICK_MAX_S).clamp(0.0, 1.0);
                     let eased = progress * progress * (3.0 - 2.0 * progress);
                     let decay_factor = (1.0 - eased).clamp(0.0, 1.0);
-                    kick_term[i] = decay_factor * (cfg.engine_start_strength as f64).clamp(0.0, 255.0);
+                    kick_term[i] =
+                        decay_factor * (cfg.engine_start_strength as f64).clamp(0.0, 255.0);
                 }
 
                 // СТАРТЕР-ФАЗА: стартер крутит, воспламенения ещё не было —
@@ -1475,7 +1602,8 @@ impl RumbleEngine {
                     } else {
                         (1.0 - (phase - 0.25) / 0.75).max(0.0)
                     };
-                    starter_term[i] = pulse_shape * (cfg.engine_start_strength as f64).clamp(0.0, 255.0);
+                    starter_term[i] =
+                        pulse_shape * (cfg.engine_start_strength as f64).clamp(0.0, 255.0);
                 }
             }
             // Игнорируемые в 2-моторном режиме Eng3/Eng4 не должны копить состояние
@@ -1487,14 +1615,22 @@ impl RumbleEngine {
             }
 
             // Left → ТОЛЬКО Left Throttle. Right → Right Throttle И Joystick.
-            let left_starter_term = left_engines.iter().fold(0.0f64, |m, &i| m.max(starter_term[i]));
-            let right_starter_term = right_engines.iter().fold(0.0f64, |m, &i| m.max(starter_term[i]));
+            let left_starter_term = left_engines
+                .iter()
+                .fold(0.0f64, |m, &i| m.max(starter_term[i]));
+            let right_starter_term = right_engines
+                .iter()
+                .fold(0.0f64, |m, &i| m.max(starter_term[i]));
 
             // Удар воспламенения — глобальный эффект: срабатывает, если ХОТЬ ОДИН
             // из активных (в текущем режиме) двигателей ещё не полностью затух
             // (kick_term > 0), и одновременно перекрывает ОБА борта.
-            let left_kick_term = left_engines.iter().fold(0.0f64, |m, &i| m.max(kick_term[i]));
-            let right_kick_term = right_engines.iter().fold(0.0f64, |m, &i| m.max(kick_term[i]));
+            let left_kick_term = left_engines
+                .iter()
+                .fold(0.0f64, |m, &i| m.max(kick_term[i]));
+            let right_kick_term = right_engines
+                .iter()
+                .fold(0.0f64, |m, &i| m.max(kick_term[i]));
             combustion_kick_strength = left_kick_term.max(right_kick_term);
             combustion_kick_active = combustion_kick_strength > 0.01;
 
@@ -1531,7 +1667,9 @@ impl RumbleEngine {
         // РУД (throttle) разветвляется на левый/правый канал: обе копии стартуют
         // от общего transients_t, накопленного выше, а затем в каждую подмешивается
         // только "свой" flaps_term_t_left/right (чередование каждые 500 мс).
-        if dt_.flaps.enable_joystick { transients_j += flaps_term_j; }
+        if dt_.flaps.enable_joystick {
+            transients_j += flaps_term_j;
+        }
 
         let mut transients_t_left = transients_t;
         let mut transients_t_right = transients_t;
@@ -1556,16 +1694,31 @@ impl RumbleEngine {
         } else {
             transients_t_left += throttle_eng_vib_left;
             transients_t_right += throttle_eng_vib_right;
-            transients_j += if cfg.swap_hand_layout { throttle_eng_vib_left } else { throttle_eng_vib_right };
+            transients_j += if cfg.swap_hand_layout {
+                throttle_eng_vib_left
+            } else {
+                throttle_eng_vib_right
+            };
         }
 
-        let mut total_j = s.bg_smoothed + ground_term_j + transients_j + bank_term_j + spoilers_term_j;
-        let mut total_t_left = s.bg_smoothed_throttle + ground_term_t + transients_t_left + bank_term_t + spoilers_term_t;
-        let mut total_t_right = s.bg_smoothed_throttle + ground_term_t + transients_t_right + bank_term_t + spoilers_term_t;
+        let mut total_j =
+            s.bg_smoothed + ground_term_j + transients_j + bank_term_j + spoilers_term_j;
+        let mut total_t_left = s.bg_smoothed_throttle
+            + ground_term_t
+            + transients_t_left
+            + bank_term_t
+            + spoilers_term_t;
+        let mut total_t_right = s.bg_smoothed_throttle
+            + ground_term_t
+            + transients_t_right
+            + bank_term_t
+            + spoilers_term_t;
 
         if cfg.stall_enabled && fv.stalled {
             let ceiling = cfg.stall_ceiling as f64;
-            if dt_.stall.enable_joystick { total_j = total_j.max(ceiling); }
+            if dt_.stall.enable_joystick {
+                total_j = total_j.max(ceiling);
+            }
             if dt_.stall.enable_throttle {
                 total_t_left = total_t_left.max(ceiling);
                 total_t_right = total_t_right.max(ceiling);
@@ -1584,7 +1737,9 @@ impl RumbleEngine {
             let p = (fv.sim_time_s - s.gear_doors_closed_t0) / 1.0;
             // Удар силой 255 с квадратичным затуханием
             let slam = 255.0 * (1.0 - p).powi(2);
-            if dt_.gear_transit.enable_joystick { final_joystick = final_joystick.max(slam); }
+            if dt_.gear_transit.enable_joystick {
+                final_joystick = final_joystick.max(slam);
+            }
             if dt_.gear_transit.enable_throttle {
                 final_throttle_left = final_throttle_left.max(slam);
                 final_throttle_right = final_throttle_right.max(slam);
@@ -1600,9 +1755,15 @@ impl RumbleEngine {
         // (см. блок детекции обжатия стоек выше), поэтому .max() здесь — просто
         // защита на случай, если несколько стоек делят один канал (split_touchdown
         // выключен, чекбоксы устройств пересекаются).
-        if touchdown_override_j > 0.0 { final_joystick = final_joystick.max(touchdown_override_j); }
-        if touchdown_override_t_left > 0.0 { final_throttle_left = final_throttle_left.max(touchdown_override_t_left); }
-        if touchdown_override_t_right > 0.0 { final_throttle_right = final_throttle_right.max(touchdown_override_t_right); }
+        if touchdown_override_j > 0.0 {
+            final_joystick = final_joystick.max(touchdown_override_j);
+        }
+        if touchdown_override_t_left > 0.0 {
+            final_throttle_left = final_throttle_left.max(touchdown_override_t_left);
+        }
+        if touchdown_override_t_right > 0.0 {
+            final_throttle_right = final_throttle_right.max(touchdown_override_t_right);
+        }
 
         // 4. АБСОЛЮТНЫЙ ОВЕРРАЙД: импульс воспламенения.
         // Глобальный эффект — если воспламенился ЛЮБОЙ из активных в текущем

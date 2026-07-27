@@ -11,25 +11,25 @@ use crossbeam_channel::Sender;
 use eframe::egui;
 use eframe::egui::ViewportCommand;
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, LoadCursorW, PostQuitMessage,
-    RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, MENU_ITEM_FLAGS,
-    MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-    MSG, SHOW_WINDOW_CMD, SW_RESTORE, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TRACK_POPUP_MENU_FLAGS, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
-    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPED,
+    AppendMenuW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos,
+    GetMessageW, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, LoadCursorW, MENU_ITEM_FLAGS,
+    MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage, RegisterClassW,
+    SHOW_WINDOW_CMD, SW_RESTORE, SetForegroundWindow, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage,
+    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER,
+    WNDCLASSW, WS_OVERLAPPED,
 };
+use windows::core::PCWSTR;
 
-use crate::{i18n, updater, UiCmd};
+use crate::{UiCmd, i18n, updater};
 
 const ID_TRAY_STATUS: u32 = 1001; // grayed-out, non-clickable — just shows Active/Stopped
 const ID_TRAY_STOP_OR_RESUME: u32 = 1002;
@@ -87,154 +87,164 @@ unsafe extern "system" fn wnd_proc(
     _wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
-        WM_TRAYICON => {
-            let mouse_msg = lparam.0 as u32;
+    unsafe {
+        match msg {
+            WM_TRAYICON => {
+                let mouse_msg = lparam.0 as u32;
 
-            // Left click / double click: bring main window to front
-            if mouse_msg == WM_LBUTTONUP || mouse_msg == WM_LBUTTONDBLCLK {
-                bring_main_to_front();
-                return LRESULT(0);
-            }
-
-            // Right click: popup menu (Stop/Resume, Check updates, Quit)
-            if mouse_msg == WM_RBUTTONUP || mouse_msg == WM_CONTEXTMENU {
-                let guard = match TRAY_STATE.get() {
-                    Some(g) => g.lock().unwrap(),
-                    None => return LRESULT(0),
-                };
-                let st = &*guard;
-
-                let mut pt = POINT::default();
-                if GetCursorPos(&mut pt).is_err() {
+                // Left click / double click: bring main window to front
+                if mouse_msg == WM_LBUTTONUP || mouse_msg == WM_LBUTTONDBLCLK {
+                    bring_main_to_front();
                     return LRESULT(0);
                 }
 
-                let hmenu = match CreatePopupMenu() {
-                    Ok(h) => h,
-                    Err(_) => return LRESULT(0),
-                };
+                // Right click: popup menu (Stop/Resume, Check updates, Quit)
+                if mouse_msg == WM_RBUTTONUP || mouse_msg == WM_CONTEXTMENU {
+                    let guard = match TRAY_STATE.get() {
+                        Some(g) => g.lock().unwrap(),
+                        None => return LRESULT(0),
+                    };
+                    let st = &*guard;
 
-                let t = i18n::get().strings();
-                let status_text = if st.is_held { t.tray_status_stopped } else { t.tray_status_active };
-                let status_w = wide(status_text);
-                let stop_resume = if st.is_held { t.tray_resume } else { t.tray_stop };
-                let stop_resume_w = wide(stop_resume);
-                let check_updates_w = wide(t.tray_check_updates);
-                let quit_w = wide(t.tray_quit);
-
-                // Active/Stopped — grayed-out status line, not clickable.
-                let _ = AppendMenuW(
-                    hmenu,
-                    MF_STRING | MF_GRAYED | MF_DISABLED,
-                    ID_TRAY_STATUS as usize,
-                    PCWSTR(status_w.as_ptr()),
-                );
-                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
-                let _ = AppendMenuW(
-                    hmenu,
-                    MENU_ITEM_FLAGS(0),
-                    ID_TRAY_STOP_OR_RESUME as usize,
-                    PCWSTR(stop_resume_w.as_ptr()),
-                );
-                let _ = AppendMenuW(
-                    hmenu,
-                    MENU_ITEM_FLAGS(0),
-                    ID_TRAY_CHECK_UPDATES as usize,
-                    PCWSTR(check_updates_w.as_ptr()),
-                );
-                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
-                let _ = AppendMenuW(
-                    hmenu,
-                    MENU_ITEM_FLAGS(0),
-                    ID_TRAY_QUIT as usize,
-                    PCWSTR(quit_w.as_ptr()),
-                );
-
-                // Make sure the menu tracks correctly (z-order quirks)
-                let _ = SetForegroundWindow(hwnd);
-
-                // Build flags and call TrackPopupMenu (BOOL return encodes cmd id when TPM_RETURNCMD is set)
-                let flags: TRACK_POPUP_MENU_FLAGS =
-                    TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
-
-                let sel = TrackPopupMenu(
-                    hmenu,
-                    flags,
-                    pt.x,
-                    pt.y,
-                    0,
-                    hwnd,
-                    None::<*const RECT>, // correct type
-                );
-
-                // Always destroy popup
-                let _ = DestroyMenu(hmenu);
-
-                // Extract selected command id
-                let cmd_id: u32 = sel.0 as u32;
-
-                drop(guard); // release before acting
-
-                if cmd_id != 0 {
-                    // Reacquire, but DO NOT call notify_held() while holding this lock.
-                    let mut st = TRAY_STATE.get().unwrap().lock().unwrap();
-                    match cmd_id {
-                        ID_TRAY_STOP_OR_RESUME => {
-                            if st.is_held {
-                                let _ = st.tx_ui.send(UiCmd::Resume);
-                                st.is_held = false; // update directly; avoid deadlock
-                            } else {
-                                let _ = st.tx_ui.send(UiCmd::Stop);
-                                st.is_held = true; // update directly; avoid deadlock
-                            }
-                        }
-                        ID_TRAY_CHECK_UPDATES => {
-                            updater::spawn_check(st.hwnd, st.version_str);
-                        }
-                        ID_TRAY_QUIT => {
-                            // Must be set BEFORE Close so UiState's close-to-tray
-                            // interception (checked on the next close_requested)
-                            // lets this one through instead of just hiding again.
-                            st.force_quit.store(true, Ordering::Relaxed);
-
-                            // 1) Remove tray icon
-                            let mut nid = st.nid;
-                            let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
-
-                            // 2) Ask egui to close the main window
-                            st.ctx.send_viewport_cmd(ViewportCommand::Close);
-
-                            // 3) Destroy the tray window
-                            let _ = DestroyWindow(hwnd);
-
-                            // 4) Exit the tray thread loop cleanly
-                            PostQuitMessage(0);
-                        }
-                        _ => {}
+                    let mut pt = POINT::default();
+                    if GetCursorPos(&mut pt).is_err() {
+                        return LRESULT(0);
                     }
+
+                    let hmenu = match CreatePopupMenu() {
+                        Ok(h) => h,
+                        Err(_) => return LRESULT(0),
+                    };
+
+                    let t = i18n::get().strings();
+                    let status_text = if st.is_held {
+                        t.tray_status_stopped
+                    } else {
+                        t.tray_status_active
+                    };
+                    let status_w = wide(status_text);
+                    let stop_resume = if st.is_held {
+                        t.tray_resume
+                    } else {
+                        t.tray_stop
+                    };
+                    let stop_resume_w = wide(stop_resume);
+                    let check_updates_w = wide(t.tray_check_updates);
+                    let quit_w = wide(t.tray_quit);
+
+                    // Active/Stopped — grayed-out status line, not clickable.
+                    let _ = AppendMenuW(
+                        hmenu,
+                        MF_STRING | MF_GRAYED | MF_DISABLED,
+                        ID_TRAY_STATUS as usize,
+                        PCWSTR(status_w.as_ptr()),
+                    );
+                    let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+                    let _ = AppendMenuW(
+                        hmenu,
+                        MENU_ITEM_FLAGS(0),
+                        ID_TRAY_STOP_OR_RESUME as usize,
+                        PCWSTR(stop_resume_w.as_ptr()),
+                    );
+                    let _ = AppendMenuW(
+                        hmenu,
+                        MENU_ITEM_FLAGS(0),
+                        ID_TRAY_CHECK_UPDATES as usize,
+                        PCWSTR(check_updates_w.as_ptr()),
+                    );
+                    let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+                    let _ = AppendMenuW(
+                        hmenu,
+                        MENU_ITEM_FLAGS(0),
+                        ID_TRAY_QUIT as usize,
+                        PCWSTR(quit_w.as_ptr()),
+                    );
+
+                    // Make sure the menu tracks correctly (z-order quirks)
+                    let _ = SetForegroundWindow(hwnd);
+
+                    // Build flags and call TrackPopupMenu (BOOL return encodes cmd id when TPM_RETURNCMD is set)
+                    let flags: TRACK_POPUP_MENU_FLAGS =
+                        TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
+
+                    let sel = TrackPopupMenu(
+                        hmenu,
+                        flags,
+                        pt.x,
+                        pt.y,
+                        0,
+                        hwnd,
+                        None::<*const RECT>, // correct type
+                    );
+
+                    // Always destroy popup
+                    let _ = DestroyMenu(hmenu);
+
+                    // Extract selected command id
+                    let cmd_id: u32 = sel.0 as u32;
+
+                    drop(guard); // release before acting
+
+                    if cmd_id != 0 {
+                        // Reacquire, but DO NOT call notify_held() while holding this lock.
+                        let mut st = TRAY_STATE.get().unwrap().lock().unwrap();
+                        match cmd_id {
+                            ID_TRAY_STOP_OR_RESUME => {
+                                if st.is_held {
+                                    let _ = st.tx_ui.send(UiCmd::Resume);
+                                    st.is_held = false; // update directly; avoid deadlock
+                                } else {
+                                    let _ = st.tx_ui.send(UiCmd::Stop);
+                                    st.is_held = true; // update directly; avoid deadlock
+                                }
+                            }
+                            ID_TRAY_CHECK_UPDATES => {
+                                updater::spawn_check(st.hwnd, st.version_str);
+                            }
+                            ID_TRAY_QUIT => {
+                                // Must be set BEFORE Close so UiState's close-to-tray
+                                // interception (checked on the next close_requested)
+                                // lets this one through instead of just hiding again.
+                                st.force_quit.store(true, Ordering::Relaxed);
+
+                                // 1) Remove tray icon
+                                let mut nid = st.nid;
+                                let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+
+                                // 2) Ask egui to close the main window
+                                st.ctx.send_viewport_cmd(ViewportCommand::Close);
+
+                                // 3) Destroy the tray window
+                                let _ = DestroyWindow(hwnd);
+
+                                // 4) Exit the tray thread loop cleanly
+                                PostQuitMessage(0);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    return LRESULT(0);
                 }
 
-                return LRESULT(0);
+                LRESULT(0)
             }
 
-            LRESULT(0)
-        }
-
-        WM_DESTROY => {
-            if let Some(lock) = TRAY_STATE.get() {
-                let st = lock.lock().unwrap();
-                let mut nid = st.nid;
-                let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+            WM_DESTROY => {
+                if let Some(lock) = TRAY_STATE.get() {
+                    let st = lock.lock().unwrap();
+                    let mut nid = st.nid;
+                    let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+                }
+                // Ensure the tray thread exits its message loop
+                PostQuitMessage(0);
+                LRESULT(0)
             }
-            // Ensure the tray thread exits its message loop
-            PostQuitMessage(0);
-            LRESULT(0)
+
+            WM_COMMAND => LRESULT(0),
+
+            _ => DefWindowProcW(hwnd, msg, WPARAM(0), lparam),
         }
-
-        WM_COMMAND => LRESULT(0),
-
-        _ => DefWindowProcW(hwnd, msg, WPARAM(0), lparam),
     }
 }
 

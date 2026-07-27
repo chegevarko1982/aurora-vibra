@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::{profiles::ProfileState, settings, ConfigShared, LogBuffer, RumbleConfig};
+use crate::{ConfigShared, LogBuffer, RumbleConfig, profiles::ProfileState, settings};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AircraftProfile {
@@ -45,9 +45,20 @@ pub struct AircraftProfiles {
 }
 
 /// Подбирает конфиг для нового самолёта (именной профиль по подстроке, иначе
-/// default), применяет его к ЖИВОМУ ConfigShared и заново прогоняет встроенный
-/// оверлей (profiles.rs) поверх — используется и при смене борта, и при
-/// ручной перезагрузке с диска (кнопка Load), поэтому вынесено в общую функцию.
+/// default), применяет его к ЖИВОМУ ConfigShared — используется и при смене
+/// борта, и при ручной перезагрузке с диска (кнопка Load), поэтому вынесено в
+/// общую функцию.
+///
+/// Встроенный оверлей (profiles.rs, MADDOG/LEARJET/Fenix CFM/IAE и т.п.)
+/// накатывается поверх ТОЛЬКО когда для борта нет именного сохранённого
+/// профиля (new_match.is_none(), т.е. используется общий ap.default). Если
+/// именной профиль есть — он уже содержит финальные значения для этого борта
+/// (см. ui.rs::Save: для именного профиля конфиг пишется БЕЗ sanitize_for_save,
+/// т.е. как есть, включая захардкоженные оверрайды или ручные правки
+/// пользователя поверх них) — повторно накатывать встроенный оверлей нельзя,
+/// иначе явно сохранённое пользователем значение (например Engine Idle N2%
+/// для конкретной ливреи Fenix) тут же затрётся обратно захардкоженным
+/// дефолтом из profiles.rs.
 pub fn apply_for_aircraft(
     ap: &mut AircraftProfiles,
     config: &ConfigShared,
@@ -55,7 +66,8 @@ pub fn apply_for_aircraft(
     title: &str,
     logs: &LogBuffer,
 ) {
-    let new_match = find_matching_index(&ap.profiles, title).map(|i| ap.profiles[i].match_substring.clone());
+    let new_match =
+        find_matching_index(&ap.profiles, title).map(|i| ap.profiles[i].match_substring.clone());
     let new_cfg = match &new_match {
         Some(m) => ap
             .profiles
@@ -69,44 +81,65 @@ pub fn apply_for_aircraft(
     config.set(new_cfg);
     if new_match != ap.active_match {
         logs.push(match &new_match {
-            Some(m) => format!("Aircraft profile: loaded saved profile '{}' for '{}'", m, title),
-            None => format!("Aircraft profile: no saved profile for '{}', loaded default", title),
+            Some(m) => format!(
+                "Aircraft profile: loaded saved profile '{}' for '{}'",
+                m, title
+            ),
+            None => format!(
+                "Aircraft profile: no saved profile for '{}', loaded default",
+                title
+            ),
         });
     }
-    ap.active_match = new_match;
-    // base=None заставляет on_aircraft_changed заново снять "базовые" значения
-    // с только что загруженного конфига, прежде чем (при необходимости) снова
-    // наложить встроенные оверрайды MADDOG/LEARJET.
+    ap.active_match = new_match.clone();
+    // base=None заставляет on_aircraft_changed (если вызван) заново снять
+    // "базовые" значения с только что загруженного конфига, а не повторно
+    // использовать базу от предыдущего борта.
     profile_state.force_recheck();
-    profile_state.on_aircraft_changed(config, title, logs);
+    if new_match.is_none() {
+        profile_state.on_aircraft_changed(config, title, logs);
+    }
     ap.loaded_rev = config.current_rev();
 }
 
-/// Сохраняет ЖИВОЙ (уже очищенный от built-in оверрайдов, см.
-/// ProfileState::sanitize_for_save) конфиг в активный на данный момент профиль
-/// (именной или default) и пишет весь набор профилей на диск.
+/// Сохраняет живой конфиг в активный на данный момент профиль (именной или
+/// default) и пишет весь набор профилей на диск.
 ///
-/// `also_default` — чекбокс в UI: если включён, конфиг ДОПОЛНИТЕЛЬНО
-/// записывается и в default (даже когда активен именной профиль текущего
-/// борта), т.е. станет применяться ко всем самолётам без своего профиля.
-/// Если именного профиля сейчас нет, конфиг и так уходит в default —
+/// `named_cfg` и `default_cfg` намеренно РАЗНЫЕ снимки одного и того же живого
+/// конфига:
+/// - `named_cfg` — конфиг КАК ЕСТЬ (см. ui.rs::Save), без sanitize_for_save.
+///   Именной профиль привязан к конкретному борту (match_substring), поэтому
+///   значения встроенного оверлея (MADDOG/LEARJET/Fenix CFM/IAE) или ручные
+///   правки пользователя поверх них законно становятся частью ЭТОГО профиля —
+///   именно так пользовательское значение Engine Idle N2%, к примеру,
+///   переживает Save/Load для этого борта (см. apply_for_aircraft).
+/// - `default_cfg` — очищенный ProfileState::sanitize_for_save снимок.
+///   default общий для ВСЕХ самолётов без своего именного профиля, поэтому
+///   значения, зашитые под конкретный борт, здесь по-прежнему обязаны
+///   откатываться к базовым — иначе они утекли бы в дефолт для всех
+///   остальных самолётов после первого же вылета на, скажем, MADDOG.
+///
+/// `also_default` — чекбокс в UI: если включён, `default_cfg` ДОПОЛНИТЕЛЬНО
+/// записывается в default (даже когда активен именной профиль текущего
+/// борта). Если именного профиля сейчас нет, конфиг и так уходит в default —
 /// параметр в этом случае не даёт дублирующего эффекта.
 pub fn save_active(
     shared: &Mutex<AircraftProfiles>,
-    sanitized_cfg: RumbleConfig,
+    named_cfg: RumbleConfig,
+    default_cfg: RumbleConfig,
     also_default: bool,
 ) -> std::io::Result<PathBuf> {
     let mut ap = shared.lock();
     match ap.active_match.clone() {
         Some(m) => {
             if let Some(p) = ap.profiles.iter_mut().find(|p| p.match_substring == m) {
-                p.config = sanitized_cfg.clone();
+                p.config = named_cfg;
             }
             if also_default {
-                ap.default = sanitized_cfg;
+                ap.default = default_cfg;
             }
         }
-        None => ap.default = sanitized_cfg,
+        None => ap.default = default_cfg,
     }
     settings::save(&settings::SettingsFile {
         default: ap.default.clone(),
@@ -114,4 +147,73 @@ pub fn save_active(
         lang: crate::i18n::get(),
         close_to_tray: settings::close_to_tray(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LogBuffer;
+
+    #[test]
+    fn no_named_profile_gets_built_in_override_from_shared_default() {
+        // Борт есть в profiles.rs (Fenix CFM), но именного сохранённого
+        // профиля для него нет — конфиг берётся из ap.default, и встроенный
+        // оверлей (engine_idle_n2 = 65.0) обязан накатиться поверх.
+        let mut ap = AircraftProfiles::default();
+        let config = ConfigShared::new();
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+
+        apply_for_aircraft(&mut ap, &config, &mut state, "Fenix A320 CFM56", &logs);
+
+        assert_eq!(config.get().engine_idle_n2, 65.0);
+        assert!(ap.active_match.is_none());
+    }
+
+    #[test]
+    fn named_profile_wins_over_built_in_override() {
+        // Пользователь ранее сохранил именной профиль для этого конкретного
+        // борта с engine_idle_n2 = 68.0 (не совпадает ни с дефолтным 60.0, ни
+        // с захардкоженным Fenix CFM оверрайдом 65.0). При следующей загрузке
+        // этого борта должно применяться ИМЕННО сохранённое значение — а не
+        // повторно накатываемый встроенный оверлей.
+        let mut ap = AircraftProfiles::default();
+        let mut custom_cfg = RumbleConfig::default();
+        custom_cfg.engine_idle_n2 = 68.0;
+        ap.profiles.push(AircraftProfile {
+            match_substring: "Fenix A320 CFM56".to_string(),
+            config: custom_cfg,
+        });
+        let config = ConfigShared::new();
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+
+        apply_for_aircraft(&mut ap, &config, &mut state, "Fenix A320 CFM56", &logs);
+
+        assert_eq!(config.get().engine_idle_n2, 68.0);
+        assert_eq!(ap.active_match.as_deref(), Some("Fenix A320 CFM56"));
+    }
+
+    #[test]
+    fn switching_from_named_profile_to_unmatched_aircraft_uses_default_plus_override() {
+        let mut ap = AircraftProfiles::default();
+        let mut custom_cfg = RumbleConfig::default();
+        custom_cfg.engine_idle_n2 = 68.0;
+        ap.profiles.push(AircraftProfile {
+            match_substring: "Fenix A320 CFM56".to_string(),
+            config: custom_cfg,
+        });
+        let config = ConfigShared::new();
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+
+        apply_for_aircraft(&mut ap, &config, &mut state, "Fenix A320 CFM56", &logs);
+        assert_eq!(config.get().engine_idle_n2, 68.0);
+
+        // Смена на борт с другим встроенным оверлеем (Fenix IAE) без своего
+        // именного профиля — должен применяться ЕГО оверлей (70.0), а не
+        // застрявшее значение от предыдущего борта.
+        apply_for_aircraft(&mut ap, &config, &mut state, "Fenix A320 IAE V2500", &logs);
+        assert_eq!(config.get().engine_idle_n2, 70.0);
+    }
 }

@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     fs,
-    fs::{copy, create_dir_all, read_dir, File},
+    fs::{File, copy, create_dir_all, read_dir},
     io::{self, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -9,16 +9,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use zip::ZipArchive;
 
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, IDOK, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, SW_SHOWNORMAL,
+    IDOK, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MessageBoxW, SW_SHOWNORMAL,
 };
+use windows::core::{PCWSTR, w};
 
 const LATEST_API: &str = "https://api.github.com/repos/chegevarko1982/aurora-vibra/releases/latest";
 const UA: &str = "AuroraVibra-Updater (+https://github.com/chegevarko1982/aurora-vibra)";
@@ -47,7 +47,11 @@ pub fn early_self_update_hook() -> bool {
                 elevated,
             ) {
                 // Last-chance message box (no parent HWND here)
-                msgbox_raw(crate::i18n::get().strings().upd_title_update_failed, &format!("{e:#}"), true);
+                msgbox_raw(
+                    crate::i18n::get().strings().upd_title_update_failed,
+                    &format!("{e:#}"),
+                    true,
+                );
             }
             return true;
         }
@@ -61,7 +65,12 @@ pub fn spawn_check(hwnd_parent: HWND, current_version: &str) {
     thread::spawn(move || {
         if let Err(e) = check_install_and_restart(hwnd_parent, &current) {
             let t = crate::i18n::get().strings();
-            msgbox(hwnd_parent, t.upd_title_update_check_failed, &format!("{e:#}"), true);
+            msgbox(
+                hwnd_parent,
+                t.upd_title_update_check_failed,
+                &format!("{e:#}"),
+                true,
+            );
         }
     });
 }

@@ -1,4 +1,4 @@
-use aurora_vibra::hid::protocol::{build_simapp_vibe_frame, WW_PID_URSA_MINOR_AIRBUS_L};
+use aurora_vibra::hid::protocol::{WW_PID_URSA_MINOR_AIRBUS_L, build_simapp_vibe_frame};
 use aurora_vibra::rumble::RumbleEngine;
 use aurora_vibra::sim::parse::{flight_status, parse_main_elems};
 use aurora_vibra::{FlightVars, RumbleConfig, SimStatus};
@@ -29,7 +29,7 @@ fn pipeline_ground_taxi_to_takeoff() {
     let mut engine = RumbleEngine::new();
 
     let taxi_elems = elems_from_flight(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.05, 5.0, 0.0);
-    let taxi_fv = parse_main_elems(&taxi_elems, false, cfg.ias_deadband_kn);
+    let taxi_fv = parse_main_elems(&taxi_elems, false, cfg.ias_deadband_kn, "");
     assert_eq!(flight_status(&taxi_fv), SimStatus::Connected);
 
     let taxi_out = engine.step(&taxi_fv, &cfg, 1, false);
@@ -52,7 +52,7 @@ fn pipeline_ground_taxi_to_takeoff() {
     // a plain in-flight state with no other effect condition met (bank below
     // threshold, no spoilers/stall/overspeed) must be silent.
     let takeoff_elems = elems_from_flight(120.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
-    let takeoff_fv = parse_main_elems(&takeoff_elems, false, cfg.ias_deadband_kn);
+    let takeoff_fv = parse_main_elems(&takeoff_elems, false, cfg.ias_deadband_kn, "");
     assert_eq!(flight_status(&takeoff_fv), SimStatus::InFlight);
 
     let takeoff_out = engine.step(&takeoff_fv, &cfg, 1, false);
@@ -65,15 +65,16 @@ fn pipeline_flap_change_during_flight() {
     let mut engine = RumbleEngine::new();
 
     let cruise = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0);
-    let cruise_fv = parse_main_elems(&cruise, false, cfg.ias_deadband_kn);
+    let cruise_fv = parse_main_elems(&cruise, false, cfg.ias_deadband_kn, "");
     let _ = engine.step(&cruise_fv, &cfg, 1, false);
 
     let flaps = elems_from_flight(150.0, 0.0, 0.0, 50.0, 50.0, 2.0, 0.0, 0.0, 10.1, 0.0, 0.0);
-    let flaps_fv = parse_main_elems(&flaps, false, cfg.ias_deadband_kn);
+    let flaps_fv = parse_main_elems(&flaps, false, cfg.ias_deadband_kn, "");
     let out = engine.step(&flaps_fv, &cfg, 1, false);
 
     assert!(out.effects.flaps_bump_active);
-    let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.joystick_intensity);
+    let frame =
+        build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.joystick_intensity);
     assert_eq!(frame[2], 0xBF);
     assert_eq!(frame[8], out.joystick_intensity);
 }
@@ -92,11 +93,11 @@ fn pipeline_flaps_pct_subpercent_jitter_does_not_sustain_hum_forever() {
     let mut engine = RumbleEngine::new();
 
     let closed = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-    let closed_fv = parse_main_elems(&closed, false, cfg.ias_deadband_kn);
+    let closed_fv = parse_main_elems(&closed, false, cfg.ias_deadband_kn, "");
     let _ = engine.step(&closed_fv, &cfg, 1, false);
 
     let jump = elems_from_flight(150.0, 0.0, 0.0, 27.0, 27.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0);
-    let jump_fv = parse_main_elems(&jump, false, cfg.ias_deadband_kn);
+    let jump_fv = parse_main_elems(&jump, false, cfg.ias_deadband_kn, "");
     let out = engine.step(&jump_fv, &cfg, 1, false);
     assert!(out.effects.flaps_bump_active);
 
@@ -111,7 +112,7 @@ fn pipeline_flaps_pct_subpercent_jitter_does_not_sustain_hum_forever() {
         let elems = elems_from_flight(
             150.0, 0.0, 0.0, noisy_pct, noisy_pct, 0.0, 0.0, 0.0, sim_time, 0.0, 0.0,
         );
-        let fv = parse_main_elems(&elems, false, cfg.ias_deadband_kn);
+        let fv = parse_main_elems(&elems, false, cfg.ias_deadband_kn, "");
         let out = engine.step(&fv, &cfg, 1, false);
         still_active = out.effects.flaps_bump_active;
         sim_time += 0.05;
@@ -195,7 +196,7 @@ fn pipeline_stall_ceiling() {
     let mut engine = RumbleEngine::new();
 
     let stall_elems = elems_from_flight(80.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0);
-    let stall_fv = parse_main_elems(&stall_elems, false, cfg.ias_deadband_kn);
+    let stall_fv = parse_main_elems(&stall_elems, false, cfg.ias_deadband_kn, "");
     let out = engine.step(&stall_fv, &cfg, 1, false);
 
     assert!(out.effects.stall_active);
@@ -279,7 +280,7 @@ fn pipeline_pause_zeros_output() {
     // this test flaky depending on the exact sim_time_s sampled.
     let fv = FlightVars {
         airspeed_indicated: 250.0,
-        design_speed_vc_kn: 100.0,
+        overspeed_barber_pole_kn: 100.0,
         on_ground: false,
         sim_time_s: 1.0,
         ..Default::default()
@@ -301,11 +302,11 @@ fn pipeline_gear_retraction_bump() {
     let mut engine = RumbleEngine::new();
 
     let gear_down = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0);
-    let down_fv = parse_main_elems(&gear_down, false, cfg.ias_deadband_kn);
+    let down_fv = parse_main_elems(&gear_down, false, cfg.ias_deadband_kn, "");
     let _ = engine.step(&down_fv, &cfg, 1, false);
 
     let gear_up = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.05, 0.0, 0.0);
-    let up_fv = parse_main_elems(&gear_up, false, cfg.ias_deadband_kn);
+    let up_fv = parse_main_elems(&gear_up, false, cfg.ias_deadband_kn, "");
     let out = engine.step(&up_fv, &cfg, 1, false);
 
     assert!(out.effects.gear_bump_active);
@@ -319,7 +320,7 @@ fn pipeline_scripted_timeline_via_support() {
     let mut intensities = Vec::new();
 
     for (elems, paused_events) in timeline {
-        let fv = parse_main_elems(&elems, paused_events, cfg.ias_deadband_kn);
+        let fv = parse_main_elems(&elems, paused_events, cfg.ias_deadband_kn, "");
         let out = engine.step(&fv, &cfg, 1, false);
         intensities.push(out.joystick_intensity);
     }
@@ -338,17 +339,18 @@ fn pipeline_frame_encoding_matches_intensity_at_each_step() {
     ];
 
     for elems in steps {
-        let fv = parse_main_elems(&elems, false, cfg.ias_deadband_kn);
+        let fv = parse_main_elems(&elems, false, cfg.ias_deadband_kn, "");
         let out = engine.step(&fv, &cfg, 1, false);
-        let frame = build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.joystick_intensity);
+        let frame =
+            build_simapp_vibe_frame(WW_PID_URSA_MINOR_AIRBUS_L, 0x02, 14, out.joystick_intensity);
         assert_eq!(frame[8], out.joystick_intensity);
     }
 }
 
 #[test]
 fn config_shared_rev_triggers_smoothing_reset() {
-    use std::sync::Arc;
     use aurora_vibra::ConfigShared;
+    use std::sync::Arc;
 
     let shared = Arc::new(ConfigShared::new());
     let cfg1 = shared.get();
@@ -361,7 +363,7 @@ fn config_shared_rev_triggers_smoothing_reset() {
     let mut engine = RumbleEngine::new();
     let fv = FlightVars {
         airspeed_indicated: 250.0,
-        design_speed_vc_kn: 100.0,
+        overspeed_barber_pole_kn: 100.0,
         on_ground: false,
         sim_time_s: 1.0,
         ..Default::default()

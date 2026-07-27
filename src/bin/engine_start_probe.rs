@@ -7,7 +7,7 @@
 // Columns: t_s,eng{1,2}_n1,eng{1,2}_n2,eng{1,2}_combustion,eng{1,2}_starter,
 // eng{1,2}_starter_active,eng{1,2}_pmdg_start_ext
 
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{CString, c_char, c_void};
 use std::fs::File;
 use std::io::Write as _;
 use std::thread;
@@ -298,8 +298,18 @@ eng2_n1,eng2_n2,eng2_combustion,eng2_starter,eng2_starter_active,eng2_pmdg_start
                     if last_print.elapsed() >= Duration::from_millis(500) {
                         println!(
                             "t={t:6.1}s | E1 N1={:5.1} N2={:5.1} comb={:.0} start={:.0}/{:.0} pmdg={:.0} | E2 N1={:5.1} N2={:5.1} comb={:.0} start={:.0}/{:.0} pmdg={:.0}",
-                            e[0], e[1], e[2], e[3], e[4], e[5],
-                            e[6], e[7], e[8], e[9], e[10], e[11]
+                            e[0],
+                            e[1],
+                            e[2],
+                            e[3],
+                            e[4],
+                            e[5],
+                            e[6],
+                            e[7],
+                            e[8],
+                            e[9],
+                            e[10],
+                            e[11]
                         );
                         last_print = Instant::now();
                     }

@@ -13,10 +13,22 @@ pub struct AircraftOverrides {
     pub overspeed_lear_horn_enabled: Option<bool>,
 }
 
-const BUILT_IN_PROFILES: &[(&str, AircraftOverrides)] = &[
-    (
-        "MADDOG",
-        AircraftOverrides {
+/// Один встроенный профиль: совпадает, только если title (регистронезависимо)
+/// содержит ВСЕ подстроки из match_all (AND, а не "любая из"). Для большинства
+/// профилей это один-единственный маркер (MADDOG, LEARJET); Fenix CFM/IAE
+/// требуют совпадения ДВУХ подстрок сразу — "FENIX" и обозначения двигателя —
+/// поэтому им нужен список, а не одна строка.
+struct BuiltInProfile {
+    name: &'static str,
+    match_all: &'static [&'static str],
+    overrides: AircraftOverrides,
+}
+
+const BUILT_IN_PROFILES: &[BuiltInProfile] = &[
+    BuiltInProfile {
+        name: "MADDOG",
+        match_all: &["MADDOG"],
+        overrides: AircraftOverrides {
             // В убранном положении спойлеров телеметрия держит ложные ~10%
             // вместо фактических 0% — порог берём с запасом (12%) на шум
             // телеметрии, чтобы эффект не срабатывал на самом деле убранных
@@ -33,10 +45,11 @@ const BUILT_IN_PROFILES: &[(&str, AircraftOverrides)] = &[
             flaps_track_slats: Some(true),
             overspeed_lear_horn_enabled: None,
         },
-    ),
-    (
-        "LEARJET",
-        AircraftOverrides {
+    },
+    BuiltInProfile {
+        name: "LEARJET",
+        match_all: &["LEARJET"],
+        overrides: AircraftOverrides {
             spoilers_threshold_pct: None,
             engine_idle_n2: None,
             flaps_track_slats: None,
@@ -48,16 +61,41 @@ const BUILT_IN_PROFILES: &[(&str, AircraftOverrides)] = &[
             // определён и был бы бессмысленным сигналом.
             overspeed_lear_horn_enabled: Some(true),
         },
-    ),
+    },
+    BuiltInProfile {
+        name: "FENIX CFM",
+        match_all: &["FENIX", "CFM"],
+        overrides: AircraftOverrides {
+            spoilers_threshold_pct: None,
+            // Fenix A320 CFM56: выходит на Idle при N2 ≈ 65%, а не при
+            // дефолтных 60% (по сравнению с IAE-вариантом ниже — другой
+            // двигатель, другая idle N2).
+            engine_idle_n2: Some(65.0),
+            flaps_track_slats: None,
+            overspeed_lear_horn_enabled: None,
+        },
+    },
+    BuiltInProfile {
+        name: "FENIX IAE",
+        match_all: &["FENIX", "IAE"],
+        overrides: AircraftOverrides {
+            spoilers_threshold_pct: None,
+            // Fenix A320 IAE V2500: выходит на Idle при N2 ≈ 70%.
+            engine_idle_n2: Some(70.0),
+            flaps_track_slats: None,
+            overspeed_lear_horn_enabled: None,
+        },
+    },
 ];
 
-/// Ищет встроенный профиль по подстроке (регистронезависимо) в aircraft title.
+/// Ищет встроенный профиль по AND-набору подстрок (регистронезависимо) в
+/// aircraft title (см. BuiltInProfile::match_all).
 fn find_built_in(title: &str) -> Option<(&'static str, &'static AircraftOverrides)> {
     let upper = title.to_uppercase();
     BUILT_IN_PROFILES
         .iter()
-        .find(|(name, _)| upper.contains(name))
-        .map(|(name, overrides)| (*name, overrides))
+        .find(|p| p.match_all.iter().all(|s| upper.contains(s)))
+        .map(|p| (p.name, &p.overrides))
 }
 
 /// true, если для этого борта (по подстроке в title) есть встроенный профиль
@@ -76,14 +114,43 @@ pub fn has_built_in_profile(title: &str) -> bool {
 // только у PMDG (других payware 737/777 нет).
 const PMDG_TITLE_MARKERS: &[&str] = &[
     "PMDG",
-    "737-600", "737-700", "737-800", "737-900",
-    "7376", "7377", "7378", "7379",
-    "B736", "B737", "B738", "B739",
-    "B737-6", "B737-7", "B737-8", "B737-9",
-    "777-200", "777-300", "777F",
-    "777-200ER", "777-200LR", "777-300ER",
-    "B772", "B773", "B77W", "B77F", "B77L",
+    "737-600",
+    "737-700",
+    "737-800",
+    "737-900",
+    "7376",
+    "7377",
+    "7378",
+    "7379",
+    "B736",
+    "B737",
+    "B738",
+    "B739",
+    "B737-6",
+    "B737-7",
+    "B737-8",
+    "B737-9",
+    "777-200",
+    "777-300",
+    "777F",
+    "777-200ER",
+    "777-200LR",
+    "777-300ER",
+    "B772",
+    "B773",
+    "B77W",
+    "B77F",
+    "B77L",
 ];
+
+// КОНВЕНЦИЯ: is_pmdg_aircraft/is_fenix_aircraft ниже, как и
+// has_built_in_profile выше, — детекторы бортов с особой логикой чтения
+// SimConnect-переменных (свой L-var/simvar вместо стандартного,
+// самонейтрализующийся 0.0/false на прочих бортах). Каждый такой детектор
+// ОБЯЗАН быть подключён в src/ui.rs через || в has_custom_telemetry — это
+// то, что красит название борта в голубой (см. комментарий-КОНВЕНЦИЮ там же).
+// Добавляя новый борт с подобной логикой — заводить для него такую же
+// функцию здесь и не забыть дописать её в has_custom_telemetry в ui.rs.
 
 /// true, если aircraft title (регистронезависимо) соответствует одному из
 /// маркеров PMDG. В отличие от has_built_in_profile, НЕ завязано на таблицу
@@ -93,7 +160,19 @@ const PMDG_TITLE_MARKERS: &[&str] = &[
 /// она нужна только для UI-индикатора "у этого борта не дефолтная логика".
 pub fn is_pmdg_aircraft(title: &str) -> bool {
     let upper = title.to_uppercase();
-    PMDG_TITLE_MARKERS.iter().any(|marker| upper.contains(marker))
+    PMDG_TITLE_MARKERS
+        .iter()
+        .any(|marker| upper.contains(marker))
+}
+
+/// true, если aircraft title (регистронезависимо) содержит "Fenix" (Fenix
+/// A320). Как и is_pmdg_aircraft, НЕ завязано на AircraftOverrides — сама
+/// кастомная логика (чтение L:I_PFD_VMAX вместо AIRSPEED BARBER POLE для
+/// порога Overspeed, см. sim/parse.rs) работает через самонейтрализующийся
+/// L-var и решается по этой же проверке; здесь она нужна и для того же
+/// UI-индикатора "у этого борта не дефолтная логика", что и is_pmdg_aircraft.
+pub fn is_fenix_aircraft(title: &str) -> bool {
+    title.to_uppercase().contains("FENIX")
 }
 
 fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
@@ -197,9 +276,84 @@ impl ProfileState {
                         cfg.flaps_track_slats = flaps_track_slats;
                         cfg.overspeed_lear_horn_enabled = overspeed_lear_horn_enabled;
                     });
-                    logs.push("Aircraft profile: left known aircraft, restored base config".to_string());
+                    logs.push(
+                        "Aircraft profile: left known aircraft, restored base config".to_string(),
+                    );
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LogBuffer;
+
+    #[test]
+    fn fenix_cfm_sets_idle_n2_to_65() {
+        let config = ConfigShared::new();
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+        state.on_aircraft_changed(&config, "Fenix A320 CFM56", &logs);
+        assert_eq!(config.get().engine_idle_n2, 65.0);
+    }
+
+    #[test]
+    fn fenix_iae_sets_idle_n2_to_70() {
+        let config = ConfigShared::new();
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+        state.on_aircraft_changed(&config, "Fenix A320 IAE V2500", &logs);
+        assert_eq!(config.get().engine_idle_n2, 70.0);
+    }
+
+    #[test]
+    fn fenix_without_engine_marker_does_not_match_either_profile() {
+        // Заголовок содержит "FENIX", но не содержит ни "CFM", ни "IAE" —
+        // AND-совпадение не должно сработать ни для одного из двух профилей,
+        // engine_idle_n2 остаётся дефолтным значением RumbleConfig.
+        let config = ConfigShared::new();
+        let default_idle = config.get().engine_idle_n2;
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+        state.on_aircraft_changed(&config, "Fenix A320", &logs);
+        assert_eq!(config.get().engine_idle_n2, default_idle);
+    }
+
+    #[test]
+    fn user_override_after_profile_applied_is_not_immediately_reverted() {
+        // on_aircraft_changed вызывается только на СМЕНУ борта (см. sim/worker.rs),
+        // а не каждый тик — поэтому если пользователь вручную поменял N2 Idle%
+        // в UI, пока борт не сменился, это значение должно остаться в силе.
+        let config = ConfigShared::new();
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+        state.on_aircraft_changed(&config, "Fenix A320 CFM56", &logs);
+        assert_eq!(config.get().engine_idle_n2, 65.0);
+
+        config.with_mut(|cfg| cfg.engine_idle_n2 = 63.0);
+        assert_eq!(config.get().engine_idle_n2, 63.0);
+    }
+
+    #[test]
+    fn leaving_fenix_restores_base_idle_n2() {
+        let config = ConfigShared::new();
+        let default_idle = config.get().engine_idle_n2;
+        let mut state = ProfileState::new();
+        let logs = LogBuffer::default();
+        state.on_aircraft_changed(&config, "Fenix A320 IAE V2500", &logs);
+        assert_eq!(config.get().engine_idle_n2, 70.0);
+
+        state.on_aircraft_changed(&config, "Boeing 787-9", &logs);
+        assert_eq!(config.get().engine_idle_n2, default_idle);
+    }
+
+    #[test]
+    fn is_fenix_aircraft_matches_regardless_of_engine_type() {
+        assert!(is_fenix_aircraft("Fenix A320"));
+        assert!(is_fenix_aircraft("FENIX A320 CFM56"));
+        assert!(is_fenix_aircraft("fenix a320 iae v2500"));
+        assert!(!is_fenix_aircraft("Airbus A320neo"));
     }
 }

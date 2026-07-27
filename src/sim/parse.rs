@@ -1,9 +1,14 @@
 use crate::{FlightVars, SimStatus};
 
+// Порог Overspeed по умолчанию, когда ни AIRSPEED BARBER POLE, ни L:I_PFD_VMAX
+// ещё не пришли от SimConnect (0.0/невалидное значение) — см. sanitize_flight_vars.
+const DEFAULT_OVERSPEED_BARBER_POLE_KN: f64 = 350.0;
+
 pub fn parse_main_elems(
     elem: &[f64],
     paused_from_events: bool,
     ias_deadband_kn: f64,
+    aircraft_title: &str,
 ) -> FlightVars {
     // Спойлеры: берём МИНИМУМ левой/правой панели (индексы 41/42), а не
     // общий SPOILERS HANDLE POSITION (10) — на части самолётов (напр. TFDI
@@ -76,8 +81,17 @@ pub fn parse_main_elems(
         prop2_rpm: elem.get(35).copied().unwrap_or(0.0),
         prop3_rpm: elem.get(36).copied().unwrap_or(0.0),
         prop4_rpm: elem.get(37).copied().unwrap_or(0.0),
-        // AIRSPEED BARBER POLE — динамический порог Overspeed (Vmo/Mmo) для текущего самолёта.
-        overspeed_barber_pole_kn: elem.get(38).copied().unwrap_or(0.0),
+        // Порог Overspeed: Fenix A320 не держит AIRSPEED BARBER POLE синхронной
+        // с реальным PFD, поэтому для этого борта (подстрока "Fenix" в title,
+        // регистронезависимо) читаем его собственный L:I_PFD_VMAX (индекс 59)
+        // вместо AIRSPEED BARBER POLE (индекс 38). Финальный fallback на
+        // DEFAULT_OVERSPEED_BARBER_POLE_KN, если выбранное значение всё ещё
+        // 0.0/невалидно — см. sanitize_flight_vars.
+        overspeed_barber_pole_kn: if crate::profiles::is_fenix_aircraft(aircraft_title) {
+            elem.get(59).copied().unwrap_or(0.0)
+        } else {
+            elem.get(38).copied().unwrap_or(0.0)
+        },
         // Предкрылки (Slats) — среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
         slats_pct: ((elem.get(39).copied().unwrap_or(0.0) + elem.get(40).copied().unwrap_or(0.0))
             * 0.5)
@@ -114,10 +128,12 @@ pub fn sanitize_flight_vars(fv: &mut FlightVars, ias_deadband_kn: f64) {
     if !fv.bank_deg.is_finite() {
         fv.bank_deg = 0.0;
     }
-    // AIRSPEED BARBER POLE приходит как 0.0 для самолётов/сценариев, где
-    // SimConnect не отдаёт это значение (или ещё не подключились) — трактуем как "N/A".
-    if !fv.overspeed_barber_pole_kn.is_finite() || fv.overspeed_barber_pole_kn < 0.0 {
-        fv.overspeed_barber_pole_kn = 0.0;
+    // AIRSPEED BARBER POLE / L:I_PFD_VMAX приходят как 0.0, когда SimConnect
+    // ещё не отдал значение (не подключились/аддон его не поддерживает) —
+    // вместо того, чтобы оставлять эффект Overspeed навсегда выключенным,
+    // подставляем безопасный дефолт.
+    if !fv.overspeed_barber_pole_kn.is_finite() || fv.overspeed_barber_pole_kn <= 0.0 {
+        fv.overspeed_barber_pole_kn = DEFAULT_OVERSPEED_BARBER_POLE_KN;
     }
 }
 
@@ -133,7 +149,7 @@ pub fn flight_status(fv: &FlightVars) -> SimStatus {
 mod tests {
     use super::*;
 
-fn sample_elems() -> [f64; 53] {
+    fn sample_elems() -> [f64; 53] {
         let mut e = [0.0; 53];
         e[0] = 120.0; // IAS
         e[1] = 0.0; // on ground
@@ -156,7 +172,7 @@ fn sample_elems() -> [f64; 53] {
 
     #[test]
     fn parses_all_fields_from_sample_elems() {
-        let fv = parse_main_elems(&sample_elems(), false, 1.0);
+        let fv = parse_main_elems(&sample_elems(), false, 1.0, "");
         assert_eq!(fv.airspeed_indicated, 120.0);
         assert!(!fv.on_ground);
         assert_eq!(fv.bank_deg, 15.0);
@@ -172,7 +188,7 @@ fn sample_elems() -> [f64; 53] {
     #[test]
     fn spoilers_pct_handles_missing_elements_gracefully() {
         let short_e = &sample_elems()[0..10];
-        let fv = parse_main_elems(short_e, false, 1.0);
+        let fv = parse_main_elems(short_e, false, 1.0, "");
         assert_eq!(fv.spoilers_pct, 0.0);
     }
 
@@ -180,7 +196,7 @@ fn sample_elems() -> [f64; 53] {
     fn spoilers_pct_ignores_legacy_handle_position_index() {
         // Индекс 10 (SPOILERS HANDLE POSITION) в sample_elems() выставлен в 999.0,
         // но spoilers_pct теперь считается из индексов 41/42 (L/R), а не из него.
-        let fv = parse_main_elems(&sample_elems(), false, 1.0);
+        let fv = parse_main_elems(&sample_elems(), false, 1.0, "");
         assert_eq!(fv.spoilers_pct, 45.0);
     }
 
@@ -189,7 +205,7 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[41] = 60.0;
         e[42] = 60.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.spoilers_pct, 60.0);
     }
 
@@ -200,7 +216,7 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[41] = 15.0;
         e[42] = 0.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.spoilers_pct, 0.0);
     }
 
@@ -212,13 +228,13 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[41] = 70.0;
         e[42] = 50.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.spoilers_pct, 50.0);
     }
 
     #[test]
     fn spoilers_md11_panel_averages_default_to_zero_on_other_aircraft() {
-        let fv = parse_main_elems(&sample_elems(), false, 1.0);
+        let fv = parse_main_elems(&sample_elems(), false, 1.0, "");
         assert_eq!(fv.spoilers_md11_left_avg, 0.0);
         assert_eq!(fv.spoilers_md11_right_avg, 0.0);
     }
@@ -232,7 +248,7 @@ fn sample_elems() -> [f64; 53] {
         for i in 48..53 {
             e[i] = 0.0; // R1..R5 (крен без выпуска рычага, как на скриншоте)
         }
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert!((fv.spoilers_md11_left_avg - 29.511).abs() < 1e-9);
         assert_eq!(fv.spoilers_md11_right_avg, 0.0);
     }
@@ -242,7 +258,7 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[3] = 0.0;
         e[4] = 100.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.flaps_pct, 50.0);
     }
 
@@ -250,7 +266,7 @@ fn sample_elems() -> [f64; 53] {
     fn non_finite_ias_becomes_zero() {
         let mut e = sample_elems();
         e[0] = f64::NAN;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.airspeed_indicated, 0.0);
     }
 
@@ -258,7 +274,7 @@ fn sample_elems() -> [f64; 53] {
     fn out_of_range_ias_becomes_zero() {
         let mut e = sample_elems();
         e[0] = 1500.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.airspeed_indicated, 0.0);
     }
 
@@ -266,7 +282,7 @@ fn sample_elems() -> [f64; 53] {
     fn ias_within_deadband_becomes_zero() {
         let mut e = sample_elems();
         e[0] = 0.5;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.airspeed_indicated, 0.0);
     }
 
@@ -274,7 +290,7 @@ fn sample_elems() -> [f64; 53] {
     fn non_finite_bank_becomes_zero() {
         let mut e = sample_elems();
         e[2] = f64::INFINITY;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.bank_deg, 0.0);
     }
 
@@ -282,7 +298,7 @@ fn sample_elems() -> [f64; 53] {
     fn ground_speed_is_clamped_to_non_negative() {
         let mut e = sample_elems();
         e[9] = -5.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(fv.ground_speed_kt, 0.0);
     }
 
@@ -291,7 +307,7 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[0] = 150.0;
         e[1] = 0.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(flight_status(&fv), SimStatus::InFlight);
     }
 
@@ -300,7 +316,7 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[1] = 1.0;
         e[0] = 150.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(flight_status(&fv), SimStatus::Connected);
     }
 
@@ -309,13 +325,13 @@ fn sample_elems() -> [f64; 53] {
         let mut e = sample_elems();
         e[0] = 20.0;
         e[1] = 0.0;
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert_eq!(flight_status(&fv), SimStatus::Connected);
     }
 
     #[test]
     fn pmdg_diagnostic_lvars_default_to_false_on_other_aircraft() {
-        let fv = parse_main_elems(&sample_elems(), false, 1.0);
+        let fv = parse_main_elems(&sample_elems(), false, 1.0, "");
         assert!(!fv.eng1_pmdg_starter_ext);
         assert!(!fv.eng2_pmdg_starter_ext);
         assert!(!fv.eng1_starter_active);
@@ -329,10 +345,42 @@ fn sample_elems() -> [f64; 53] {
         e[56] = 1.0; // L:EngineStart2b_Ext
         e[57] = 1.0; // GENERAL ENG STARTER ACTIVE:1
         e[58] = 1.0; // GENERAL ENG STARTER ACTIVE:2
-        let fv = parse_main_elems(&e, false, 1.0);
+        let fv = parse_main_elems(&e, false, 1.0, "");
         assert!(fv.eng1_pmdg_starter_ext);
         assert!(fv.eng2_pmdg_starter_ext);
         assert!(fv.eng1_starter_active);
         assert!(fv.eng2_starter_active);
+    }
+
+    #[test]
+    fn overspeed_threshold_uses_airspeed_barber_pole_by_default() {
+        let mut e = [0.0; 60];
+        e[38] = 340.0; // AIRSPEED BARBER POLE
+        e[59] = 320.0; // L:I_PFD_VMAX — must be ignored on non-Fenix aircraft
+        let fv = parse_main_elems(&e, false, 1.0, "Boeing 737-800");
+        assert_eq!(fv.overspeed_barber_pole_kn, 340.0);
+    }
+
+    #[test]
+    fn overspeed_threshold_uses_i_pfd_vmax_on_fenix() {
+        let mut e = [0.0; 60];
+        e[38] = 340.0; // AIRSPEED BARBER POLE — must be ignored on Fenix
+        e[59] = 320.0; // L:I_PFD_VMAX
+        let fv = parse_main_elems(&e, false, 1.0, "Fenix A320");
+        assert_eq!(fv.overspeed_barber_pole_kn, 320.0);
+    }
+
+    #[test]
+    fn overspeed_threshold_fenix_match_is_case_insensitive() {
+        let mut e = [0.0; 60];
+        e[59] = 320.0; // L:I_PFD_VMAX
+        let fv = parse_main_elems(&e, false, 1.0, "fenix a320neo");
+        assert_eq!(fv.overspeed_barber_pole_kn, 320.0);
+    }
+
+    #[test]
+    fn overspeed_threshold_defaults_to_350_when_unavailable() {
+        let fv = parse_main_elems(&sample_elems(), false, 1.0, "Boeing 737-800");
+        assert_eq!(fv.overspeed_barber_pole_kn, 350.0);
     }
 }

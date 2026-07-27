@@ -1,8 +1,8 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -18,7 +18,7 @@ pub struct FlightVars {
     pub ground_speed_kt: f64,
     pub paused: bool,
     pub spoilers_pct: f64, // min(L, R) — эффективное положение спойлеров для эффекта, см. sim/parse.rs
-    pub spoilers_left_pct: f64,  // сырое положение левой плоскости, для телеметрии/отладки
+    pub spoilers_left_pct: f64, // сырое положение левой плоскости, для телеметрии/отладки
     pub spoilers_right_pct: f64, // сырое положение правой плоскости, для телеметрии/отладки
     // TFDI MD-11: среднее по 5 секциям L:MD11_EXT_L/R_SPOILER_1..5 — доп.
     // проверка симметрии для этого борта (см. rumble.rs). На других самолётах
@@ -71,10 +71,14 @@ pub struct FlightVars {
     pub prop2_rpm: f64,
     pub prop3_rpm: f64,
     pub prop4_rpm: f64,
-    // AIRSPEED BARBER POLE — динамическая "красная черта" (Vmo/Mmo), которую
-    // сим сам двигает вниз при наборе высоты. Порог Overspeed, приходящий из
-    // SimConnect для текущего загруженного самолёта (вместо ручного слайдера
-    // в UI). 0.0 означает "ещё не получено от SimConnect" (см. UI: "Limit: N/A").
+    // Порог Overspeed для текущего загруженного самолёта (вместо ручного
+    // слайдера в UI): на большинстве бортов — AIRSPEED BARBER POLE
+    // (динамическая "красная черта" Vmo/Mmo, сим сам двигает её вниз при
+    // наборе высоты), на Fenix A320 (title содержит "Fenix") — его
+    // собственный L:I_PFD_VMAX, т.к. этот аддон не держит AIRSPEED BARBER
+    // POLE синхронной с реальным PFD (см. sim/parse.rs). Если выбранный
+    // источник ещё не пришёл от SimConnect (0.0/невалиден), sim/parse.rs
+    // подставляет дефолт 350.0 узлов.
     pub overspeed_barber_pole_kn: f64,
     // Предкрылки (Slats): среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
     // Пока только для отображения в UI ("Live Aircraft Data"), в логику
@@ -143,10 +147,10 @@ pub struct EffectDeviceTargets {
     pub stall: EffectDeviceTarget,
     pub spoilers: EffectDeviceTarget,
     pub bank: EffectDeviceTarget,
-    pub gear_comp_nose: EffectDeviceTarget,  // Обжатие носовой стойки (Touchdown)
-    pub gear_comp_left: EffectDeviceTarget,  // Обжатие левой стойки (Touchdown)
+    pub gear_comp_nose: EffectDeviceTarget, // Обжатие носовой стойки (Touchdown)
+    pub gear_comp_left: EffectDeviceTarget, // Обжатие левой стойки (Touchdown)
     pub gear_comp_right: EffectDeviceTarget, // Обжатие правой стойки (Touchdown)
-    pub gear_transit: EffectDeviceTarget,    // Движение стоек + удар дверей на замке
+    pub gear_transit: EffectDeviceTarget,   // Движение стоек + удар дверей на замке
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -161,7 +165,7 @@ pub struct RumbleConfig {
     // тогда порог можно задать вручную через overspeed_manual_kn.
     pub overspeed_enabled: bool,
     pub overspeed_intensity: f32,
-     pub overspeed_max_kn: f32,
+    pub overspeed_max_kn: f32,
     pub overspeed_override_enabled: bool,
     pub overspeed_manual_kn: f64,
     // Learjet 35A (Flysimware): дополнительный триггер эффекта Overspeed от
@@ -329,7 +333,7 @@ impl Default for RumbleConfig {
             bank_intensity: 70.0,
             bank_threshold_deg: 45.0,
 
-            ground_roll: 7.5, // 15% от техн. предела 50
+            ground_roll: 7.5,  // 15% от техн. предела 50
             flaps_peak: 153.0, // ~0.6 duty cycle — прежняя фиксированная сила эффекта
             gear_peak: 110.0,
             stall_ceiling: 160.0,
@@ -393,29 +397,29 @@ impl Default for RumbleConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
- pub struct EffectsSnapshot {
-     pub flaps_bump_active: bool,
-     pub gear_bump_active: bool,
-     pub ground_active: bool,
-     pub ground_thump_active: bool,
-     pub taxi_start_crossed: bool,
-     pub taxi_end_crossed: bool,
-     pub bank_active: bool,
-     pub stall_active: bool,
-     pub spoilers_active: bool,
-     pub overspeed_active: bool,
-     
-     // Gear Strut Compression (Touchdown) status
-     pub gear_comp_nose_active: bool,
-     pub gear_comp_left_active: bool,
-     pub gear_comp_right_active: bool,
+pub struct EffectsSnapshot {
+    pub flaps_bump_active: bool,
+    pub gear_bump_active: bool,
+    pub ground_active: bool,
+    pub ground_thump_active: bool,
+    pub taxi_start_crossed: bool,
+    pub taxi_end_crossed: bool,
+    pub bank_active: bool,
+    pub stall_active: bool,
+    pub spoilers_active: bool,
+    pub overspeed_active: bool,
 
-     // Gear Transit & Doors (движение стоек + удар фиксации на замке)
-     pub gear_transit_active: bool,
+    // Gear Strut Compression (Touchdown) status
+    pub gear_comp_nose_active: bool,
+    pub gear_comp_left_active: bool,
+    pub gear_comp_right_active: bool,
 
-     // Engine Spool-up & Ignition status
-     pub engine_start_active: bool,
- }
+    // Gear Transit & Doors (движение стоек + удар фиксации на замке)
+    pub gear_transit_active: bool,
+
+    // Engine Spool-up & Ignition status
+    pub engine_start_active: bool,
+}
 
 #[derive(Debug)]
 pub enum HidCmd {
@@ -424,7 +428,11 @@ pub enum HidCmd {
     /// устройство, решает EffectDeviceTarget конкретного эффекта в rumble.rs.
     /// РУД имеет два независимых вибромотора (левый/правый), поэтому
     /// throttle тоже разбит на два канала.
-    SendIntensity { joystick: u8, throttle_left: u8, throttle_right: u8 },
+    SendIntensity {
+        joystick: u8,
+        throttle_left: u8,
+        throttle_right: u8,
+    },
     SendRaw(Vec<u8>),
     StopAll,
     ReopenDevices,

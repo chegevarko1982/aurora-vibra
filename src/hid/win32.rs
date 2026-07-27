@@ -1,10 +1,9 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
-use windows::core::PCWSTR;
 use windows::Win32::Devices::HumanInterfaceDevice::{
-    HidD_FreePreparsedData, HidD_GetPreparsedData, HidP_GetCaps, HidP_GetValueCaps, HidP_Output,
-    HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS,
+    HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, HidD_FreePreparsedData, HidD_GetPreparsedData,
+    HidP_GetCaps, HidP_GetValueCaps, HidP_Output,
 };
 use windows::Win32::Foundation::{HANDLE, NTSTATUS};
 use windows::Win32::Storage::FileSystem::{
@@ -12,6 +11,7 @@ use windows::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     OPEN_EXISTING,
 };
+use windows::core::PCWSTR;
 
 use crate::LogBuffer;
 

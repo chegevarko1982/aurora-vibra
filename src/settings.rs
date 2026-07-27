@@ -1,4 +1,4 @@
-use crate::{aircraft_profiles::AircraftProfile, i18n::Lang, RumbleConfig};
+use crate::{RumbleConfig, aircraft_profiles::AircraftProfile, i18n::Lang};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

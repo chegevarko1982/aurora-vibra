@@ -19,9 +19,9 @@ use std::time::Duration;
 fn open_device(is_joystick: bool) -> (hidapi::HidDevice, [u8; 14]) {
     let api = HidApi::new().expect("Не удалось инициализировать HID API");
     let pid: u16 = if is_joystick { 0xBC2A } else { 0xB920 };
-    let device = api
-        .open(0x4098, pid)
-        .unwrap_or_else(|_| panic!("Устройство (PID {pid:#06X}) не найдено! Закрой основное приложение и SimAppPro."));
+    let device = api.open(0x4098, pid).unwrap_or_else(|_| {
+        panic!("Устройство (PID {pid:#06X}) не найдено! Закрой основное приложение и SimAppPro.")
+    });
 
     let mut buf = [0u8; 14];
     buf[0] = 0x02;
@@ -61,8 +61,14 @@ fn main() {
 
     if raw_args.first().map(String::as_str) == Some("fadejerk") {
         let is_joystick = raw_args.get(1).map(String::as_str) == Some("joystick");
-        let label = if is_joystick { "Joystick (Fighter R)" } else { "Throttle" };
-        println!("Демо fadejerk на {label}: держим 10/255 1с, спад 10->0 за 4с, затем 2 микро-рывка (<=3)...");
+        let label = if is_joystick {
+            "Joystick (Fighter R)"
+        } else {
+            "Throttle"
+        };
+        println!(
+            "Демо fadejerk на {label}: держим 10/255 1с, спад 10->0 за 4с, затем 2 микро-рывка (<=3)..."
+        );
         let (device, mut buf) = open_device(is_joystick);
 
         // Держим 10 1с
@@ -122,7 +128,11 @@ fn main() {
         _ => (64, 64, 5.0),
     };
 
-    let label = if is_joystick { "Joystick (Fighter R)" } else { "Throttle" };
+    let label = if is_joystick {
+        "Joystick (Fighter R)"
+    } else {
+        "Throttle"
+    };
     if start == end {
         println!("Держим {start}/255 на {label} {duration_s:.1}с...");
     } else {

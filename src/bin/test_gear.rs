@@ -41,9 +41,9 @@ fn main() {
     let mut time = 0.0;
     let mut pos = 50.0;
     let mut prev_pos = 50.0;
-    
+
     // Симулируем 60 кадров в секунду (dt = 0.016)
-    let dt = 0.016; 
+    let dt = 0.016;
     let speed = 50.0 / (5.0 / dt); // Шасси убирается ровно 5 секунд
 
     while pos > 0.0 {
@@ -53,11 +53,14 @@ fn main() {
         }
 
         let effect = calc_transit(pos, prev_pos, time);
-        
+
         // Визуализация графика (1 символ = 1 единица мощности)
         let bars = "█".repeat(effect.round() as usize);
-        
-        println!("Time: {:4.2}s | Pos: {:5.2} | Effect: {:5.2} | {}", time, pos, effect, bars);
+
+        println!(
+            "Time: {:4.2}s | Pos: {:5.2} | Effect: {:5.2} | {}",
+            time, pos, effect, bars
+        );
 
         prev_pos = pos;
         time += dt;

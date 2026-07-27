@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -9,8 +9,8 @@ use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
 use crate::hid::protocol::{
-    build_simapp_vibe_frame, build_throttle_vibe_frame, is_ursa_minor_joystick,
-    is_ursa_minor_throttle, ursa_model_name, THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID,
+    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_simapp_vibe_frame,
+    build_throttle_vibe_frame, is_ursa_minor_joystick, is_ursa_minor_throttle, ursa_model_name,
 };
 use crate::hid::win32::hid_query_caps_from_path;
 use crate::{HidCmd, LogBuffer};
@@ -340,16 +340,24 @@ pub fn hid_worker(
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(cmd) => match cmd {
-                HidCmd::SendIntensity { joystick, throttle_left, throttle_right } => {
+                HidCmd::SendIntensity {
+                    joystick,
+                    throttle_left,
+                    throttle_right,
+                } => {
                     desired_joystick = joystick;
                     desired_throttle_left = throttle_left;
                     desired_throttle_right = throttle_right;
                     if verbose_hid
                         && ((i16::from(desired_joystick) - i16::from(last_sent_joystick)).abs()
                             >= 15
-                            || (i16::from(desired_throttle_left) - i16::from(last_sent_throttle_left)).abs()
+                            || (i16::from(desired_throttle_left)
+                                - i16::from(last_sent_throttle_left))
+                            .abs()
                                 >= 15
-                            || (i16::from(desired_throttle_right) - i16::from(last_sent_throttle_right)).abs()
+                            || (i16::from(desired_throttle_right)
+                                - i16::from(last_sent_throttle_right))
+                            .abs()
                                 >= 15)
                     {
                         logs.push(format!(
@@ -387,7 +395,13 @@ pub fn hid_worker(
                     logs.push(format!("HID: cmd SetHold({})", hold));
                     if hold {
                         let (_ok, _fail, failed_paths) = hid_send_out(&devices, 0, 0, 0, &logs);
-                        prune_failed_devices(&mut devices, &failed_paths, &controller_connected, &throttle_connected, &logs);
+                        prune_failed_devices(
+                            &mut devices,
+                            &failed_paths,
+                            &controller_connected,
+                            &throttle_connected,
+                            &logs,
+                        );
                         last_sent_joystick = 0;
                         last_sent_throttle_left = 0;
                         last_sent_throttle_right = 0;
@@ -415,8 +429,15 @@ pub fn hid_worker(
                 || out_t_left != last_sent_throttle_left
                 || out_t_right != last_sent_throttle_right
             {
-                let (ok, fail, failed_paths) = hid_send_out(&devices, out_j, out_t_left, out_t_right, &logs);
-                prune_failed_devices(&mut devices, &failed_paths, &controller_connected, &throttle_connected, &logs);
+                let (ok, fail, failed_paths) =
+                    hid_send_out(&devices, out_j, out_t_left, out_t_right, &logs);
+                prune_failed_devices(
+                    &mut devices,
+                    &failed_paths,
+                    &controller_connected,
+                    &throttle_connected,
+                    &logs,
+                );
 
                 let now = Instant::now();
                 if fail > 0

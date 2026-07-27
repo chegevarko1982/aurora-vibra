@@ -118,7 +118,12 @@ pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity:
 /// где motor_addr — THROTTLE_MOTOR_LEFT (0x0E) или THROTTLE_MOTOR_RIGHT (0x10).
 /// В отличие от джойстиков, заголовок здесь фиксирован и не зависит от PID —
 /// это отдельный протокол устройства.
-pub fn build_throttle_vibe_frame(report_id: u8, out_len: u16, motor_addr: u8, intensity: u8) -> Vec<u8> {
+pub fn build_throttle_vibe_frame(
+    report_id: u8,
+    out_len: u16,
+    motor_addr: u8,
+    intensity: u8,
+) -> Vec<u8> {
     let body: [u8; 13] = [
         0x10, 0xB9, 0x00, 0x00, 0x03, 0x49, motor_addr, intensity, 0, 0, 0, 0, 0,
     ];
@@ -147,7 +152,9 @@ mod tests {
         assert_eq!(frame[0], 0x02);
         assert_eq!(
             &frame[1..],
-            &[0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]
+            &[
+                0x07, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0
+            ]
         );
     }
 
@@ -221,7 +228,9 @@ mod tests {
         let frame = build_throttle_vibe_frame(0x02, 14, THROTTLE_MOTOR_LEFT, 0x7F);
         assert_eq!(
             frame,
-            vec![0x02, 0x10, 0xB9, 0x00, 0x00, 0x03, 0x49, 0x0E, 0x7F, 0, 0, 0, 0, 0]
+            vec![
+                0x02, 0x10, 0xB9, 0x00, 0x00, 0x03, 0x49, 0x0E, 0x7F, 0, 0, 0, 0, 0
+            ]
         );
     }
 
@@ -231,7 +240,9 @@ mod tests {
         let frame = build_throttle_vibe_frame(0x02, 14, THROTTLE_MOTOR_RIGHT, 0xFF);
         assert_eq!(
             frame,
-            vec![0x02, 0x10, 0xB9, 0x00, 0x00, 0x03, 0x49, 0x10, 0xFF, 0, 0, 0, 0, 0]
+            vec![
+                0x02, 0x10, 0xB9, 0x00, 0x00, 0x03, 0x49, 0x10, 0xFF, 0, 0, 0, 0, 0
+            ]
         );
     }
 

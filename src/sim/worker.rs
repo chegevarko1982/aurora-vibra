@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_void};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -150,14 +150,8 @@ type PfnSimConnectGetNextDispatch =
     unsafe extern "system" fn(Handle, *mut *mut SimRecv, *mut DWord) -> HRESULT;
 type PfnSimConnectSubscribeToSystemEvent =
     unsafe extern "system" fn(Handle, DWord, *const c_char) -> HRESULT;
-type PfnSimConnectRequestSystemState = unsafe extern "system" fn(
-    Handle,
-    DWord,
-    *const c_char,
-    DWord,
-    DWord,
-    DWord,
-) -> HRESULT;
+type PfnSimConnectRequestSystemState =
+    unsafe extern "system" fn(Handle, DWord, *const c_char, DWord, DWord, DWord) -> HRESULT;
 
 #[inline]
 fn hr_hex(hr: HRESULT) -> String {
@@ -348,7 +342,7 @@ pub fn sim_worker(
                 )
             };
 
-           let defs = [
+            let defs = [
                 ("AIRSPEED INDICATED", "Knots"),
                 ("SIM ON GROUND", "Bool"),
                 ("PLANE BANK DEGREES", "Degrees"),
@@ -448,6 +442,15 @@ pub fn sim_worker(
                 // 0.0 (самонейтрализуется, тот же паттерн, что у
                 // L:MD11_EXT_*_SPOILER_* выше). Индекс 54.
                 ("L:XMLSND75", "Bool"),
+                // Fenix A320 (FenixSim): L:I_PFD_VMAX — этот аддон не держит
+                // AIRSPEED BARBER POLE синхронной с реальным PFD (см. отчёты
+                // пользователей), зато сам выставляет свой предел overspeed в
+                // этот L-var. Используется вместо AIRSPEED BARBER POLE только
+                // когда aircraft title содержит "Fenix" (см. sim/parse.rs) —
+                // на остальных бортах L-var не определён, SimConnect отдаёт
+                // 0.0 (самонейтрализуется, тот же паттерн, что у L:XMLSND75
+                // выше). Индекс 59.
+                ("L:I_PFD_VMAX", "Knots"),
                 // PMDG 737 (NG3, MSFS): L:EngineStart1b/2b_Ext — true, пока стартер
                 // крутит двигатель до воспламенения (взято из sound.xml самого PMDG).
                 // Подтверждено тестом в симе, что это надёжный сигнал — используется в
@@ -655,14 +658,22 @@ pub fn sim_worker(
                                 // and let our smart polling mechanism fetch it via ONCE requests.
                                 title_resolved = false;
                                 last_title_request_time = Instant::now() - Duration::from_secs(10);
-                                logs.push("SimConnect: triggered TITLE retrieval on SimStart".to_string());
+                                logs.push(
+                                    "SimConnect: triggered TITLE retrieval on SimStart".to_string(),
+                                );
                             } else if ev.u_event_id == EVT_AIRCRAFT_LOADED {
-                                logs.push("SimConnect: AircraftLoaded system event received!".to_string());
+                                logs.push(
+                                    "SimConnect: AircraftLoaded system event received!".to_string(),
+                                );
                                 title_resolved = false;
                                 last_title_request_time = Instant::now() - Duration::from_secs(10); // force immediate request next tick
                             } else if ev.u_event_id == EVT_SIM_STOP {
                                 in_flight = false;
-                                let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
+                                let _ = tx_hid.send(HidCmd::SendIntensity {
+                                    joystick: 0,
+                                    throttle_left: 0,
+                                    throttle_right: 0,
+                                });
                                 *last_vars.lock() = None;
                                 effects.clear_all();
                             } else if ev.u_event_id == EVT_PAUSE_SYS {
@@ -681,7 +692,8 @@ pub fn sim_worker(
 
                             if sod.dw_request_id == REQ_TITLE {
                                 // Explicit debug logging of raw bytes
-                                let raw_bytes = std::slice::from_raw_parts(data_ptr, payload_len.min(256));
+                                let raw_bytes =
+                                    std::slice::from_raw_parts(data_ptr, payload_len.min(256));
                                 logs.push(format!(
                                     "SimConnect: TITLE packet received in dispatch. payload_len={}, raw bytes (first 32): {:?}",
                                     payload_len,
@@ -696,7 +708,10 @@ pub fn sim_worker(
                                         sod.dw_request_id, title
                                     ));
                                     if !title.is_empty() {
-                                        let prev = std::mem::replace(&mut *aircraft_title.lock(), title.clone());
+                                        let prev = std::mem::replace(
+                                            &mut *aircraft_title.lock(),
+                                            title.clone(),
+                                        );
                                         title_resolved = true;
                                         if prev != title {
                                             crate::aircraft_profiles::apply_for_aircraft(
@@ -727,7 +742,11 @@ pub fn sim_worker(
                                 if !in_flight {
                                     *status.lock() = SimStatus::Connected;
                                     *last_vars.lock() = None;
-                                    let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
+                                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                                        joystick: 0,
+                                        throttle_left: 0,
+                                        throttle_right: 0,
+                                    });
                                     effects.clear_all();
                                     continue;
                                 }
@@ -773,19 +792,22 @@ pub fn sim_worker(
                                 // PMDG 737 (NG3), см. defs выше: L:EngineStart1b/2b_Ext
                                 // (55/56) — используется в rumble.rs для pre-spool
                                 // разгона; GENERAL ENG STARTER ACTIVE:1/2 (57/58) —
-                                // пока только для телеметрии.
+                                // пока только для телеметрии. L:I_PFD_VMAX (59) —
+                                // Fenix A320, альтернативный источник порога
+                                // Overspeed вместо AIRSPEED BARBER POLE (см.
+                                // sim/parse.rs).
                                 //
                                 // ВНИМАНИЕ: длина elem[] и clamp count.min(..) ниже
                                 // должны покрывать ВСЕ зарегистрированные индексы
-                                // (0..=58, т.е. 59 элементов) — раньше здесь стоял
+                                // (0..=59, т.е. 60 элементов) — раньше здесь стоял
                                 // count.min(53), из-за чего индекс 53 (OVERSPEED
                                 // WARNING) никогда не копировался из живых данных
                                 // SimConnect и оставался равен 0.0/false.
-                                let mut elem = [0f64; 59];
+                                let mut elem = [0f64; 60];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(59),
+                                        count.min(60),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -793,7 +815,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(59),
+                                        count.min(60),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;
@@ -803,10 +825,12 @@ pub fn sim_worker(
                                 let paused_from_events =
                                     paused_event_flag || (paused_ex1_bits != 0);
                                 let cfg_now = config.get();
+                                let title_snapshot = aircraft_title.lock().clone();
                                 let fv = parse_main_elems(
                                     &elem,
                                     paused_from_events,
                                     cfg_now.ias_deadband_kn,
+                                    &title_snapshot,
                                 );
 
                                 *last_vars.lock() = Some(fv);
@@ -852,7 +876,10 @@ pub fn sim_worker(
                                     title
                                 ));
                                 if !title.is_empty() {
-                                    let prev = std::mem::replace(&mut *aircraft_title.lock(), title.clone());
+                                    let prev = std::mem::replace(
+                                        &mut *aircraft_title.lock(),
+                                        title.clone(),
+                                    );
                                     title_resolved = true;
                                     if prev != title {
                                         crate::aircraft_profiles::apply_for_aircraft(
@@ -935,7 +962,9 @@ pub fn sim_worker(
                         0,
                     );
                     last_title_request_time = Instant::now();
-                    logs.push("SimConnect: TITLE retry request sent (ONCE, after re-add)".to_string());
+                    logs.push(
+                        "SimConnect: TITLE retry request sent (ONCE, after re-add)".to_string(),
+                    );
                 }
             }
 
@@ -943,7 +972,11 @@ pub fn sim_worker(
             *status.lock() = SimStatus::Disconnected;
             *aircraft_title.lock() = String::new();
             *last_vars.lock() = None;
-            let _ = tx_hid.send(HidCmd::SendIntensity { joystick: 0, throttle_left: 0, throttle_right: 0 });
+            let _ = tx_hid.send(HidCmd::SendIntensity {
+                joystick: 0,
+                throttle_left: 0,
+                throttle_right: 0,
+            });
             thread::sleep(Duration::from_millis(600));
         }
     }

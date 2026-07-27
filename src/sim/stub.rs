@@ -1,11 +1,11 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
 use crate::{
-    aircraft_profiles::AircraftProfiles, profiles::ProfileState, ConfigShared, EffectsShared,
-    FlightVars, HidCmd, LogBuffer, SimStatus,
+    ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
+    aircraft_profiles::AircraftProfiles, profiles::ProfileState,
 };
 
 pub fn sim_worker(
