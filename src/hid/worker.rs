@@ -9,8 +9,8 @@ use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
 use crate::hid::protocol::{
-    build_simapp_vibe_frame, build_throttle_vibe_frame, is_ursa_minor_throttle, ursa_model_name,
-    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID,
+    build_simapp_vibe_frame, build_throttle_vibe_frame, is_ursa_minor_joystick,
+    is_ursa_minor_throttle, ursa_model_name, THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID,
 };
 use crate::hid::win32::hid_query_caps_from_path;
 use crate::{HidCmd, LogBuffer};
@@ -53,15 +53,25 @@ fn send_throttle_rumble(
     (ok, fail)
 }
 
+/// Возвращает (ok, fail, paths устройств, у которых запись провалилась).
+/// Список путей нужен вызывающей стороне: неудачная запись в физически
+/// открытый HID-хендл — самый быстрый и надёжный сигнал "устройство только
+/// что отключили", гораздо быстрее и точнее, чем ждать очередного
+/// периодического hid_enumerate() в ensure_open() (который на Windows может
+/// не заметить пропажу конкретного устройства ещё несколько секунд, если
+/// не дольше — см. вызов в hid_worker). Ложное срабатывание (временный сбой
+/// записи при физически ещё подключённом устройстве) не страшно: устройство
+/// просто переоткроется на ближайшем ensure_open().
 fn hid_send_out(
     devs: &[HidEntry],
     joystick_intensity: u8,
     throttle_left_intensity: u8,
     throttle_right_intensity: u8,
     _logs: &LogBuffer,
-) -> (usize, usize) {
+) -> (usize, usize, Vec<String>) {
     let mut ok = 0usize;
     let mut fail = 0usize;
+    let mut failed_paths: Vec<String> = Vec::new();
 
     for d in devs {
         if !(d.usage_page == 0x0001 && d.usage == 0x0004) {
@@ -80,6 +90,9 @@ fn hid_send_out(
             );
             ok += t_ok;
             fail += t_fail;
+            if t_fail > 0 {
+                failed_paths.push(d.path.clone());
+            }
             continue;
         }
 
@@ -90,15 +103,53 @@ fn hid_send_out(
                     ok += 1;
                 } else {
                     fail += 1;
+                    failed_paths.push(d.path.clone());
                 }
             }
             Err(_) => {
                 fail += 1;
+                failed_paths.push(d.path.clone());
             }
         }
     }
 
-    (ok, fail)
+    (ok, fail, failed_paths)
+}
+
+/// Убирает из `devices` записи с провалившейся записью (см. failed_paths из
+/// hid_send_out) и немедленно пересчитывает/публикует controller_connected/
+/// throttle_connected — не дожидаясь очередного периодического пересканирования
+/// в ensure_open() (там пропажа конкретного устройства на Windows иногда
+/// подтверждается с заметной задержкой). Если устройство физически на месте, а
+/// запись просто сбоила разово — оно переоткроется на ближайшем ensure_open(),
+/// без потери функциональности.
+fn prune_failed_devices(
+    devices: &mut Vec<HidEntry>,
+    failed_paths: &[String],
+    controller_connected: &Arc<AtomicBool>,
+    throttle_connected: &Arc<AtomicBool>,
+    logs: &LogBuffer,
+) {
+    if failed_paths.is_empty() {
+        return;
+    }
+    devices.retain(|d| {
+        if failed_paths.iter().any(|p| p == &d.path) {
+            logs.push(format!(
+                "HID: write failed on PID=0x{:04X} ({}) path='{}' → treating as disconnected",
+                d.pid,
+                ursa_model_name(d.pid),
+                d.path
+            ));
+            false
+        } else {
+            true
+        }
+    });
+    let joystick_present = devices.iter().any(|d| is_ursa_minor_joystick(d.pid));
+    let throttle_present = devices.iter().any(|d| is_ursa_minor_throttle(d.pid));
+    controller_connected.store(joystick_present, Ordering::Relaxed);
+    throttle_connected.store(throttle_present, Ordering::Relaxed);
 }
 
 pub fn hid_worker(
@@ -148,8 +199,20 @@ pub fn hid_worker(
             idx_by_path.insert(d.path.clone(), i);
         }
 
-        if let Err(e) = api.refresh_devices() {
-            logs.push(format!("HID: refresh_devices FAILED: {}", e));
+        // ПОЛНОЕ пересоздание HidApi вместо api.refresh_devices(): на Windows
+        // refresh_devices() у некоторых версий/бэкендов hidapi не всегда
+        // сбрасывает внутренний закешированный список устройств библиотеки —
+        // физическое отключение конкретного устройства может годами не
+        // отражаться в device_list(), пока контекст не будет создан заново.
+        // HidApi::new() делает свежее перечисление "с нуля", так же как при
+        // самом первом старте программы. Уже открытые HidEntry.dev (хендлы) не
+        // трогаем — они закрываются независимо от api и продолжают работать
+        // (или начинают проваливать write(), что тоже ловится отдельно, см.
+        // prune_failed_devices), пересоздание api влияет только на то, что мы
+        // УВИДИМ при следующем enumerate.
+        match HidApi::new() {
+            Ok(fresh) => *api = fresh,
+            Err(e) => logs.push(format!("HID: HidApi::new (rescan) FAILED: {}", e)),
         }
 
         let mut seen_paths: HashSet<String> = HashSet::new();
@@ -204,6 +267,15 @@ pub fn hid_worker(
             }
 
             let pid = devinfo.product_id();
+            // VID 0x4098 у WinWing общий для разных линеек устройств (МФД,
+            // панели и т.д.), не только для нашего джойстика/РУД. Открываем и
+            // отслеживаем ТОЛЬКО распознанные PID — иначе посторонний прибор
+            // того же производителя ошибочно считался бы подключённым
+            // джойстиком (см. is_ursa_minor_joystick ниже) и получал бы
+            // вибро-фреймы, ему не предназначенные.
+            if !is_ursa_minor_joystick(pid) && !is_ursa_minor_throttle(pid) {
+                continue;
+            }
             let (out_len, report_id) =
                 hid_query_caps_from_path(&path, &logs).unwrap_or((14u16, 0x02u8));
 
@@ -256,7 +328,7 @@ pub fn hid_worker(
             last_missing_log = Instant::now();
         }
 
-        let joystick_present = devices.iter().any(|d| !is_ursa_minor_throttle(d.pid));
+        let joystick_present = devices.iter().any(|d| is_ursa_minor_joystick(d.pid));
         let throttle_present = devices.iter().any(|d| is_ursa_minor_throttle(d.pid));
         controller_connected.store(joystick_present, Ordering::Relaxed);
         throttle_connected.store(throttle_present, Ordering::Relaxed);
@@ -314,7 +386,8 @@ pub fn hid_worker(
                     hold = x;
                     logs.push(format!("HID: cmd SetHold({})", hold));
                     if hold {
-                        let (_ok, _fail) = hid_send_out(&devices, 0, 0, 0, &logs);
+                        let (_ok, _fail, failed_paths) = hid_send_out(&devices, 0, 0, 0, &logs);
+                        prune_failed_devices(&mut devices, &failed_paths, &controller_connected, &throttle_connected, &logs);
                         last_sent_joystick = 0;
                         last_sent_throttle_left = 0;
                         last_sent_throttle_right = 0;
@@ -342,7 +415,8 @@ pub fn hid_worker(
                 || out_t_left != last_sent_throttle_left
                 || out_t_right != last_sent_throttle_right
             {
-                let (ok, fail) = hid_send_out(&devices, out_j, out_t_left, out_t_right, &logs);
+                let (ok, fail, failed_paths) = hid_send_out(&devices, out_j, out_t_left, out_t_right, &logs);
+                prune_failed_devices(&mut devices, &failed_paths, &controller_connected, &throttle_connected, &logs);
 
                 let now = Instant::now();
                 if fail > 0

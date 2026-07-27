@@ -115,6 +115,20 @@ pub struct RumbleState {
     eng2_starter_engaged_at: Option<Instant>,
     eng3_starter_engaged_at: Option<Instant>,
     eng4_starter_engaged_at: Option<Instant>,
+    // Флаг "двигатель хоть раз воспламенялся в текущей попытке запуска" —
+    // выставляется на фронте воспламенения, сбрасывается, когда N2 падает
+    // ниже ENGINE_SHUTDOWN_N2_THRESHOLD (турбина полностью остановилась).
+    // Нужен, чтобы отличить СТАДИЮ 1 (ещё ни разу не воспламенялся, крутит
+    // только стартер — амплитуда по синтетической рампе, см. комментарий у
+    // starter_only_amplitude) от СТАДИИ 4 (уже воспламенялся и сейчас
+    // ОСТАНАВЛИВАЕТСЯ — турбина ещё физически раскручена по инерции,
+    // амплитуда берётся из настоящей N2-кривой). Без этого флага после
+    // остановки двигателя (combustion → false, но N2 ещё далеко не 0)
+    // эффект ошибочно уходил в СТАДИЮ 1 и мгновенно замолкал.
+    eng1_has_ignited: bool,
+    eng2_has_ignited: bool,
+    eng3_has_ignited: bool,
+    eng4_has_ignited: bool,
     // Starter-only abort fade: если стартер выключился ДО воспламенения
     // (неудачная/отменённая попытка запуска), амплитуда не должна замирать
     // на достигнутом уровне рампы — плавно гаснет к нулю за
@@ -835,7 +849,11 @@ impl RumbleEngine {
 
         let mut gear_transit_term: f64 = 0.0;
 
-        if cfg.gear_transit_enabled {
+        // Эффект уборки/выпуска шасси имеет смысл только пока самолёт
+        // практически неподвижен (наземный тест шасси на стоянке) — при
+        // GS >= 0.1 узла отключаем целиком, чтобы не путать его с шумом
+        // strut-компрессии во время руления/пробега.
+        if cfg.gear_transit_enabled && gs < 0.1 {
             // Использует переменные анимации шасси из FlightVars
             let moving_count = gear_is_moving(fv.gear_comp_nose, s.prev_gear_nose) as i32
                              + gear_is_moving(fv.gear_comp_left, s.prev_gear_left) as i32
@@ -880,6 +898,8 @@ impl RumbleEngine {
             let slam_active =
                 s.gear_doors_closed_t0 > 0.0 && fv.sim_time_s <= s.gear_doors_closed_t0 + 1.0;
             effects.gear_transit_active = moving_count > 0 || slam_active;
+        } else {
+            effects.gear_transit_active = false;
         }
 
         // Обновляем состояния для следующего кадра (независимо от чекбокса,
@@ -905,10 +925,20 @@ impl RumbleEngine {
         // считаем джетом, если сработал L:EngineStart1b/2b_Ext — иначе эта
         // короткая щель могла бы попасть в PISTON-ветку. На не-PMDG бортах эти
         // L-vars всегда false (самонейтрализуется), поведение не меняется.
+        //
+        // БАГ (найден при тестировании 4-моторного режима): раньше здесь
+        // проверялись ТОЛЬКО Eng1/Eng2. Если тестировать/запускать по
+        // отдельности Eng3 или Eng4, пока Eng1/Eng2 ещё стоят на 0% (типичный
+        // сценарий пошаговой проверки каждого двигателя), самолёт ошибочно
+        // определялся как PISTON и весь эффект уходил в piston-модель
+        // (5-секундный фиксированный фейд удара, без продолжающейся
+        // N2-кривой) — вместо корректной JET-модели. В 4-моторном режиме
+        // дополнительно учитываем N2 третьего и четвёртого двигателя.
         let is_jet = fv.eng1_n2_percent > 1.0
             || fv.eng2_n2_percent > 1.0
             || fv.eng1_pmdg_starter_ext
-            || fv.eng2_pmdg_starter_ext;
+            || fv.eng2_pmdg_starter_ext
+            || (cfg.four_engine_mode && (fv.eng3_n2_percent > 1.0 || fv.eng4_n2_percent > 1.0));
 
         let engine_count: usize = if cfg.four_engine_mode { 4 } else { 2 };
         let (left_engines, right_engines): (&[usize], &[usize]) = if cfg.four_engine_mode {
@@ -995,17 +1025,40 @@ impl RumbleEngine {
             // COMBUSTION на PMDG NG3 подтверждён надёжным и точным по времени
             // (engine_start_probe capture), поэтому удар воспламенения
             // триггерится тем же обычным фронтом, что и у любого другого джета.
+            // Также сбрасываем starter_engaged_at в None на этом же фронте:
+            // иначе после успешного запуска это поле навсегда остаётся
+            // Some(старый_момент), и если двигатель ПОЗЖЕ заглохнет
+            // (combustion → false), starter_only_amplitude() снова будет
+            // вызвана с этим устаревшим таймстампом — t0.elapsed() окажется
+            // намного больше STARTER_ONLY_RAMP_SECS, рампа зависнет на
+            // STARTER_ONLY_AMPLITUDE_CAP (10.0) НАВСЕГДА вместо честного 0.0
+            // (см. None-ветку функции). Именно так эффект "не выключался"
+            // после остановки однажды запускавшегося двигателя.
+            // На этом же фронте помечаем eng_has_ignited = true — это ключ к
+            // корректному эффекту ОСТАНОВКИ (СТАДИЯ 4, см. комментарий у
+            // eng1..4_has_ignited в RumbleState): после этого момента, пока
+            // N2 не упадёт ниже ENGINE_SHUTDOWN_N2_THRESHOLD, амплитуда идёт
+            // по настоящей N2-кривой, даже когда combustion уже false
+            // (турбина ещё раскручена по инерции).
             if is_combusting_eng1 && !s.prev_eng1_combusting {
                 s.eng1_kick_started_at = Some(Instant::now());
+                s.eng1_starter_engaged_at = None;
+                s.eng1_has_ignited = true;
             }
             if is_combusting_eng2 && !s.prev_eng2_combusting {
                 s.eng2_kick_started_at = Some(Instant::now());
+                s.eng2_starter_engaged_at = None;
+                s.eng2_has_ignited = true;
             }
             if is_combusting_eng3 && !s.prev_eng3_combusting {
                 s.eng3_kick_started_at = Some(Instant::now());
+                s.eng3_starter_engaged_at = None;
+                s.eng3_has_ignited = true;
             }
             if is_combusting_eng4 && !s.prev_eng4_combusting {
                 s.eng4_kick_started_at = Some(Instant::now());
+                s.eng4_starter_engaged_at = None;
+                s.eng4_has_ignited = true;
             }
 
             // Обновляем предыдущее состояние зажигания для следующего кадра.
@@ -1149,11 +1202,23 @@ impl RumbleEngine {
             let eng3_effective = fv.eng3_n2_percent;
             let eng4_effective = fv.eng4_n2_percent;
 
-            // ДО воспламенения — starter_only_amplitude (см. starter-only ramp
-            // выше), НЕ engine_spool_term(N2): реальный N2 в фазе прокрутки
-            // растёт слишком непредсказуемо/медленно, чтобы линейно давать
-            // ощутимую вибрацию с первых секунд (см. комментарий у СТАДИИ 1
-            // выше). ПОСЛЕ воспламенения — обычная N2-кривая, без изменений.
+            // ДО воспламенения (СТАДИЯ 1, is_combusting == false И ни разу ещё
+            // не воспламенялся в этой попытке) — starter_only_amplitude (см.
+            // starter-only ramp выше), НЕ engine_spool_term(N2): реальный N2 в
+            // фазе прокрутки растёт слишком непредсказуемо/медленно, чтобы
+            // линейно давать ощутимую вибрацию с первых секунд.
+            // ПОСЛЕ воспламенения (is_combusting == true) — обычная N2-кривая.
+            // ОСТАНОВКА (СТАДИЯ 4, is_combusting == false, НО двигатель уже
+            // воспламенялся раньше, eng_has_ignited == true) — турбина ещё
+            // физически раскручена по инерции, поэтому продолжаем использовать
+            // ту же N2-кривую (engine_spool_term), пока N2 не упадёт ниже
+            // ENGINE_SHUTDOWN_N2_THRESHOLD — эффект должен выключаться именно
+            // тогда, а не мгновенно в момент падения флага combustion (раньше
+            // в этот момент эффект обрывался мгновенно, даже если N2 всё ещё
+            // был на уровне Idle). Как только N2 уходит ниже порога — считаем
+            // двигатель полностью остановленным и сбрасываем eng_has_ignited,
+            // чтобы следующий запуск снова начинался с чистой СТАДИИ 1.
+            //
             // Гейт по s.engN_starter_engaged_at (а не по мгновенному значению
             // сигнала стартера каждый кадр) — устойчивее к возможному
             // "дребезгу"/пропускам самого сигнала на отдельных кадрах;
@@ -1163,27 +1228,40 @@ impl RumbleEngine {
             // в None в момент старта фейда, см. задний фронт выше), так что
             // max() здесь эквивалентен сложению, но не заставляет думать о
             // порядке — рампа ИЛИ фейд отмены, никогда оба разом.
+            const ENGINE_SHUTDOWN_N2_THRESHOLD: f64 = 3.0;
             let eng1_term = if is_combusting_eng1 {
                 engine_spool_term(eng1_effective)
+            } else if s.eng1_has_ignited && eng1_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+                engine_spool_term(eng1_effective)
             } else {
+                s.eng1_has_ignited = false;
                 starter_only_amplitude(s.eng1_starter_engaged_at)
                     .max(starter_abort_fade_amplitude(s.eng1_abort_fade_started_at, s.eng1_abort_fade_start_value))
             };
             let eng2_term = if is_combusting_eng2 {
                 engine_spool_term(eng2_effective)
+            } else if s.eng2_has_ignited && eng2_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+                engine_spool_term(eng2_effective)
             } else {
+                s.eng2_has_ignited = false;
                 starter_only_amplitude(s.eng2_starter_engaged_at)
                     .max(starter_abort_fade_amplitude(s.eng2_abort_fade_started_at, s.eng2_abort_fade_start_value))
             };
             let eng3_term = if is_combusting_eng3 {
                 engine_spool_term(eng3_effective)
+            } else if s.eng3_has_ignited && eng3_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+                engine_spool_term(eng3_effective)
             } else {
+                s.eng3_has_ignited = false;
                 starter_only_amplitude(s.eng3_starter_engaged_at)
                     .max(starter_abort_fade_amplitude(s.eng3_abort_fade_started_at, s.eng3_abort_fade_start_value))
             };
             let eng4_term = if is_combusting_eng4 {
                 engine_spool_term(eng4_effective)
+            } else if s.eng4_has_ignited && eng4_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+                engine_spool_term(eng4_effective)
             } else {
+                s.eng4_has_ignited = false;
                 starter_only_amplitude(s.eng4_starter_engaged_at)
                     .max(starter_abort_fade_amplitude(s.eng4_abort_fade_started_at, s.eng4_abort_fade_start_value))
             };
@@ -1208,34 +1286,54 @@ impl RumbleEngine {
                 .map(|t0| t0.elapsed() < ENGINE_IGNITION_KICK_DURATION)
                 .unwrap_or(false);
 
-            // Комбинируем по сторонам ТОЛЬКО сейчас, когда каждый двигатель уже
-            // посчитан независимо. В обычном режиме left = Eng1, right = Eng2
-            // (без изменений). В 4-моторном режиме (cfg.four_engine_mode) left =
-            // Eng1 и/или Eng2 (левое крыло), right = Eng3 и/или Eng4 (правое
-            // крыло) — удар срабатывает от КАЖДОГО двигателя своей группы
-            // независимо, а не только от первого воспламенившегося.
-            let (is_combusting_left, is_combusting_right, left_n2_term, right_n2_term, left_kick_active, right_kick_active);
-            if cfg.four_engine_mode {
-                is_combusting_left = is_combusting_eng1 || is_combusting_eng2;
-                is_combusting_right = is_combusting_eng3 || is_combusting_eng4;
-                left_n2_term = eng1_term.max(eng2_term);
-                right_n2_term = eng3_term.max(eng4_term);
-                left_kick_active = eng1_kick_active || eng2_kick_active;
-                right_kick_active = eng3_kick_active || eng4_kick_active;
+            // Удар (kick) остаётся групповым по стороне — срабатывает от КАЖДОГО
+            // двигателя своей группы независимо (не только от первого
+            // воспламенившегося), см. поля prev_engN_combusting в RumbleState.
+            let (left_kick_active, right_kick_active) = if cfg.four_engine_mode {
+                (eng1_kick_active || eng2_kick_active, eng3_kick_active || eng4_kick_active)
             } else {
-                is_combusting_left = is_combusting_eng1;
-                is_combusting_right = is_combusting_eng2;
-                left_n2_term = eng1_term;
-                right_n2_term = eng2_term;
-                left_kick_active = eng1_kick_active;
-                right_kick_active = eng2_kick_active;
-            }
+                (eng1_kick_active, eng2_kick_active)
+            };
 
-            // Маршрутизация базовой раскрутки зависит от состояния combustion
-            // каждой стороны (СТАДИЯ 1 vs СТАДИЯ 3):
-            //   combustion == false → только свой борт (Left→Throttle, Right→Joystick)
-            //   combustion == true  → ОБА борта одновременно (сторона уже работает)
-            // В 4-моторном режиме "сторона" — это группа из двух двигателей (см. выше).
+            // Маршрутизация базовой раскрутки — ПОЭЛЕМЕНТНО, по СВОЕМУ состоянию
+            // combustion КАЖДОГО двигателя, а не по агрегированному OR всей
+            // "стороны". Раньше (баг) сторона считалась "уже воспламенившейся",
+            // если ГОРЕЛ хотя бы один из пары — из-за этого в 4-моторном режиме,
+            // как только первый двигатель пары (Eng1/Eng3) воспламенялся, второй
+            // (Eng2/Eng4), ещё только раскручивающийся стартером, тоже начинал
+            // литься в ОБА канала вместо своего борта. Чтобы сохранить прежнюю
+            // "амплитуда = max по стороне" (не сумма, иначе одновременная работа
+            // пары удваивала бы силу), максимум берём отдельно для двигателей
+            // стороны, которые УЖЕ горят, и отдельно — для тех, что ещё стартуют:
+            //   • горящие  → максимум идёт в ОБА канала (сторона уже работает)
+            //   • стартующие → максимум идёт ТОЛЬКО на свой борт
+            // Двигатель, который уже воспламенялся и сейчас останавливается
+            // (СТАДИЯ 4, eng_has_ignited && N2 > порога — см. вычисление
+            // eng1..4_term выше), для маршрутизации тоже считается "горящим":
+            // раскручивающаяся по инерции турбина ощущается по всей кабине,
+            // как и работающий двигатель, а не только на своей стороне.
+            let eng_combusting = [
+                is_combusting_eng1 || (s.eng1_has_ignited && eng1_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng2 || (s.eng2_has_ignited && eng2_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng3 || (s.eng3_has_ignited && eng3_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+                is_combusting_eng4 || (s.eng4_has_ignited && eng4_effective > ENGINE_SHUTDOWN_N2_THRESHOLD),
+            ];
+            let eng_term = [eng1_term, eng2_term, eng3_term, eng4_term];
+            let side_terms = |indices: &[usize]| -> (f64, f64) {
+                let mut combusting_max = 0.0_f64;
+                let mut starting_max = 0.0_f64;
+                for &i in indices {
+                    if eng_combusting[i] {
+                        combusting_max = combusting_max.max(eng_term[i]);
+                    } else {
+                        starting_max = starting_max.max(eng_term[i]);
+                    }
+                }
+                (combusting_max, starting_max)
+            };
+            let (left_combusting_term, left_starting_term) = side_terms(left_engines);
+            let (right_combusting_term, right_starting_term) = side_terms(right_engines);
+
             let mut throttle_eng_vib: f64 = 0.0;
             let mut joystick_eng_vib: f64 = 0.0;
 
@@ -1243,43 +1341,49 @@ impl RumbleEngine {
             // Eng2/right) считается "рукой РУД", а какая "рукой джойстика" —
             // см. комментарий у поля в RumbleConfig. По умолчанию (false)
             // сохраняется исходное поведение: Eng1 → РУД, Eng2 → джойстик.
-            let (throttle_side_combusting, throttle_side_n2, joystick_side_combusting, joystick_side_n2) =
+            let (throttle_combusting_term, throttle_starting_term, joystick_combusting_term, joystick_starting_term) =
                 if cfg.swap_hand_layout {
-                    (is_combusting_right, right_n2_term, is_combusting_left, left_n2_term)
+                    (right_combusting_term, right_starting_term, left_combusting_term, left_starting_term)
                 } else {
-                    (is_combusting_left, left_n2_term, is_combusting_right, right_n2_term)
+                    (left_combusting_term, left_starting_term, right_combusting_term, right_starting_term)
                 };
 
             if cfg.enable_engine_start {
-                // Сторона "руки РУД"
-                if throttle_side_combusting {
-                    // Работающая сторона трясёт всю кабину — оба канала.
-                    throttle_eng_vib += throttle_side_n2;
-                    joystick_eng_vib += throttle_side_n2;
-                } else {
-                    // Ещё не воспламенилась — только свой борт (РУД).
-                    throttle_eng_vib += throttle_side_n2;
-                }
+                // Сторона "руки РУД": уже горящие двигатели трясут оба канала,
+                // ещё стартующие — только свой борт (РУД).
+                throttle_eng_vib += throttle_combusting_term;
+                joystick_eng_vib += throttle_combusting_term;
+                throttle_eng_vib += throttle_starting_term;
 
-                // Сторона "руки джойстика"
-                if joystick_side_combusting {
-                    throttle_eng_vib += joystick_side_n2;
-                    joystick_eng_vib += joystick_side_n2;
-                } else {
-                    // Ещё не воспламенилась — только свой борт (джойстик).
-                    joystick_eng_vib += joystick_side_n2;
-                }
+                // Сторона "руки джойстика": симметрично.
+                throttle_eng_vib += joystick_combusting_term;
+                joystick_eng_vib += joystick_combusting_term;
+                joystick_eng_vib += joystick_starting_term;
             }
 
             // Финальный клэмп ПОСЛЕ маршрутизации по бортам — гарантирует потолок
             // слайдера (engine_spool_max_amplitude, 1%..80%) независимо от того,
             // сколько двигателей сейчас работает: при одновременной работе ОБОИХ
-            // сторон кросс-роутинг суммирует их термины (throttle_side_n2 +
-            // joystick_side_n2) в один канал, а каждый term уже отдельно
-            // ограничен потолком в engine_spool_term — без этого клэмпа их сумма
-            // могла бы превысить его.
+            // сторон кросс-роутинг суммирует их термины в один канал, а каждый
+            // term уже отдельно ограничен потолком в engine_spool_term — без
+            // этого клэмпа их сумма могла бы превысить его.
             throttle_eng_vib = throttle_eng_vib.min(engine_spool_max_amplitude);
             joystick_eng_vib = joystick_eng_vib.min(engine_spool_max_amplitude);
+
+            // Если физически подключено только ОДНО устройство (джойстик ИЛИ
+            // РУД) — весь эффект запуска двигателя должен идти на него целиком,
+            // а не частично теряться в канале несуществующего устройства (см.
+            // cfg.joystick_hw_connected/throttle_hw_connected — живой снимок из
+            // UI, обновляется автоматически, не пользовательский чекбокс).
+            // Если подключены оба (или ни одного — например, сим только что
+            // запущен) — раздельная маршрутизация по бортам не трогается.
+            if cfg.joystick_hw_connected && !cfg.throttle_hw_connected {
+                joystick_eng_vib += throttle_eng_vib;
+                throttle_eng_vib = 0.0;
+            } else if cfg.throttle_hw_connected && !cfg.joystick_hw_connected {
+                throttle_eng_vib += joystick_eng_vib;
+                joystick_eng_vib = 0.0;
+            }
 
             // Удар — глобальный эффект: срабатывает от ЛЮБОГО двигателя (каждый
             // отслеживается независимо, см. выше) и применяется одновременно к
@@ -1436,13 +1540,24 @@ impl RumbleEngine {
             transients_t_right += flaps_term_t_right;
         }
 
-        // Universal Engine Start (Starter phase): моторы throttle_left/right
-        // жёстко привязаны к Eng1/Eng2 (железо квадранта, поза за столом тут
-        // ни при чём). А вот "чья сторона" дублируется на джойстик — зависит
-        // от cfg.swap_hand_layout (см. комментарий у поля и jet-ветку выше).
-        transients_t_left += throttle_eng_vib_left;
-        transients_t_right += throttle_eng_vib_right;
-        transients_j += if cfg.swap_hand_layout { throttle_eng_vib_left } else { throttle_eng_vib_right };
+        // Universal Engine Start (Starter phase, PISTON): моторы throttle_left/
+        // right жёстко привязаны к Eng1/Eng2 (железо квадранта, поза за столом
+        // тут ни при чём). В обычном режиме (оба устройства подключены) "чья
+        // сторона" дублируется на джойстик — зависит от cfg.swap_hand_layout
+        // (см. комментарий у поля и jet-ветку выше). Если подключено только
+        // ОДНО устройство — весь вклад (оба борта) уходит целиком на него, а не
+        // теряется наполовину в канале несуществующего устройства (см.
+        // cfg.joystick_hw_connected/throttle_hw_connected — живой снимок из UI).
+        if cfg.joystick_hw_connected && !cfg.throttle_hw_connected {
+            transients_j += throttle_eng_vib_left + throttle_eng_vib_right;
+        } else if cfg.throttle_hw_connected && !cfg.joystick_hw_connected {
+            transients_t_left += throttle_eng_vib_left;
+            transients_t_right += throttle_eng_vib_right;
+        } else {
+            transients_t_left += throttle_eng_vib_left;
+            transients_t_right += throttle_eng_vib_right;
+            transients_j += if cfg.swap_hand_layout { throttle_eng_vib_left } else { throttle_eng_vib_right };
+        }
 
         let mut total_j = s.bg_smoothed + ground_term_j + transients_j + bank_term_j + spoilers_term_j;
         let mut total_t_left = s.bg_smoothed_throttle + ground_term_t + transients_t_left + bank_term_t + spoilers_term_t;

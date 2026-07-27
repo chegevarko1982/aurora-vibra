@@ -364,7 +364,7 @@ impl UiState {
         };
         let image = egui::Image::new(source)
             .tint(tint)
-            .fit_to_exact_size(egui::vec2(16.0, 16.0));
+            .fit_to_exact_size(egui::vec2(19.2, 19.2));
         ui.add(egui::Button::new(image).selected(selected))
     }
 
@@ -670,8 +670,8 @@ impl eframe::App for UiState {
                 (t.lbl_bank_turb, mon.bank_enabled, self.effects.bank_active.load(Ordering::Relaxed)),
                 (t.name_engine_start, mon.enable_engine_start, self.effects.engine_start_active.load(Ordering::Relaxed)),
                 (t.name_ground_roll, mon.ground_enabled, self.effects.ground_active.load(Ordering::Relaxed) || self.effects.ground_thump_active.load(Ordering::Relaxed)),
-                (t.name_nose_peak, mon.gear_comp_nose_enabled, self.effects.gear_comp_nose_active.load(Ordering::Relaxed)),
                 (t.name_left_peak, mon.gear_comp_left_enabled, self.effects.gear_comp_left_active.load(Ordering::Relaxed)),
+                (t.name_nose_peak, mon.gear_comp_nose_enabled, self.effects.gear_comp_nose_active.load(Ordering::Relaxed)),
                 (t.name_right_peak, mon.gear_comp_right_enabled, self.effects.gear_comp_right_active.load(Ordering::Relaxed)),
                 (t.lbl_gear_transit, mon.gear_transit_enabled, self.effects.gear_transit_active.load(Ordering::Relaxed)),
             ];
@@ -888,7 +888,24 @@ impl eframe::App for UiState {
                                 .filter(|kn| *kn > 0.0)
                         };
 
+                        // Живой снимок "физически подключено" — джойстик и РУД по
+                        // отдельности. Используется ниже сразу для двух вещей:
+                        //   • SPLIT (3 стойки → 3 мотора) требует ОБА устройства
+                        //     (иначе некуда разводить стойки по разным рукам);
+                        //   • Engine Start: если подключено только ОДНО устройство,
+                        //     rumble-движок сливает в него весь эффект целиком (см.
+                        //     cfg.joystick_hw_connected/throttle_hw_connected в
+                        //     rumble.rs), а не теряет "чужую" половину.
+                        // Пишем каждый кадр, независимо от того, какой раздел
+                        // настроек сейчас открыт.
+                        let joystick_hw_connected = self.controller_connected.load(Ordering::Relaxed);
+                        let throttle_hw_connected = self.throttle_connected.load(Ordering::Relaxed);
+                        let split_touchdown_auto = joystick_hw_connected && throttle_hw_connected;
+
                         self.config.with_mut(|cfg| {
+                            cfg.split_touchdown = split_touchdown_auto;
+                            cfg.joystick_hw_connected = joystick_hw_connected;
+                            cfg.throttle_hw_connected = throttle_hw_connected;
                             match self.active_section {
                                 Section::Rumble => {
                                     ui.heading(t.nav_rumble);
@@ -1246,14 +1263,6 @@ impl eframe::App for UiState {
                                         if ui.checkbox(&mut gear_comp_enabled, t.chk_enabled).changed() {
                                             _changed = true;
                                         }
-                                        ui.add_space(12.0);
-                                        if ui
-                                            .checkbox(&mut cfg.split_touchdown, t.chk_split_touchdown)
-                                            .on_hover_text(t.hover_split_touchdown)
-                                            .changed()
-                                        {
-                                            _changed = true;
-                                        }
                                     });
                                     cfg.gear_comp_enabled = gear_comp_enabled;
                                     ui.add_space(4.0);
@@ -1284,30 +1293,7 @@ impl eframe::App for UiState {
                                             cfg.ground_enabled = ground_enabled;
                                         }
 
-                                        // Nose / Left / Right Peak — активны только пока Gear Strut Compression включён.
-                                        {
-                                            let mut nose_enabled = cfg.gear_comp_nose_enabled;
-                                            let active = self.effects.gear_comp_nose_active.load(Ordering::Relaxed);
-                                            let col = &mut *ui;
-                                            col.add_enabled_ui(gear_comp_enabled, |ui| {
-                                                UiState::effect_card(ui, nose_enabled, active, |ui| {
-                                                    UiState::effect_row_percent_hinted(
-                                                        ui,
-                                                        t.name_nose_peak,
-                                                        &mut cfg.gear_comp_nose_peak,
-                                                        55.0,
-                                                        &mut nose_enabled,
-                                                        active,
-                                                        &mut _changed,
-                                                        Some(headroom_hint),
-                                                        &mut cfg.device_targets.gear_comp_nose,
-                                                        t,
-                                                    );
-                                                });
-                                            });
-                                            cfg.gear_comp_nose_enabled = nose_enabled;
-                                        }
-
+                                        // Left / Nose / Right Peak — активны только пока Gear Strut Compression включён.
                                         {
                                             let mut left_enabled = cfg.gear_comp_left_enabled;
                                             let active = self.effects.gear_comp_left_active.load(Ordering::Relaxed);
@@ -1329,6 +1315,29 @@ impl eframe::App for UiState {
                                                 });
                                             });
                                             cfg.gear_comp_left_enabled = left_enabled;
+                                        }
+
+                                        {
+                                            let mut nose_enabled = cfg.gear_comp_nose_enabled;
+                                            let active = self.effects.gear_comp_nose_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            col.add_enabled_ui(gear_comp_enabled, |ui| {
+                                                UiState::effect_card(ui, nose_enabled, active, |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_nose_peak,
+                                                        &mut cfg.gear_comp_nose_peak,
+                                                        55.0,
+                                                        &mut nose_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(headroom_hint),
+                                                        &mut cfg.device_targets.gear_comp_nose,
+                                                        t,
+                                                    );
+                                                });
+                                            });
+                                            cfg.gear_comp_nose_enabled = nose_enabled;
                                         }
 
                                         {

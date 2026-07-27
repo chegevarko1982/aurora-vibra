@@ -206,6 +206,19 @@ pub struct RumbleConfig {
     // РУД одновременно).
     pub split_touchdown: bool,
 
+    // Живой снимок "физически подключено" для джойстика/РУД — пишется
+    // автоматически из UI каждый кадр (см. self.controller_connected /
+    // self.throttle_connected), не пользовательский чекбокс. Используется
+    // rumble-движком, чтобы при подключённом ТОЛЬКО ОДНОМ устройстве
+    // сливать в него весь эффект целиком (см. split_touchdown выше — та же
+    // идея, но для Engine Start), а не терять "чужую" половину эффекта в
+    // канале несуществующего устройства. Default true/true — если по
+    // какой-то причине UI ещё не успел выставить актуальное значение
+    // (первый кадр), считаем оба устройства подключёнными — прежнее
+    // поведение "как есть", без потери вибрации.
+    pub joystick_hw_connected: bool,
+    pub throttle_hw_connected: bool,
+
     // Bank/Turb settings
     pub bank_enabled: bool,
     pub bank_intensity: f32,     // Максимальная интенсивность (0-200)
@@ -361,6 +374,8 @@ impl Default for RumbleConfig {
             gear_transit_enabled: true,
             gear_comp_right_peak: 30.0,
             split_touchdown: false,
+            joystick_hw_connected: true,
+            throttle_hw_connected: true,
 
             is_combat_edition: false,
 

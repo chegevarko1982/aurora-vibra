@@ -49,6 +49,15 @@ pub fn is_ursa_minor_right(pid: u16) -> bool {
     )
 }
 
+/// Джойстик (sidestick) — любой известный вариант L/R (Airbus/Fighter/Space).
+/// ВАЖНО: используется вместо "не РУД" (`!is_ursa_minor_throttle`) там, где
+/// нужно определить "это именно джойстик" — VID 0x4098 у WinWing общий для
+/// РАЗНЫХ устройств (МФД, панели и т.д.), поэтому "не РУД" ошибочно засчитывал
+/// бы любое другое стороннее устройство WinWing как подключённый джойстик.
+pub fn is_ursa_minor_joystick(pid: u16) -> bool {
+    is_ursa_minor_left(pid) || is_ursa_minor_right(pid)
+}
+
 /// Байт адреса вибро-канала джойстика.
 ///
 /// Подтверждено USB-снифом (Wireshark): Airbus L/R и Fighter R сняты и

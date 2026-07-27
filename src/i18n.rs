@@ -132,8 +132,6 @@ pub struct Strings {
 
     pub heading_gear_comp: &'static str,
     pub chk_enabled: &'static str,
-    pub chk_split_touchdown: &'static str,
-    pub hover_split_touchdown: &'static str,
     pub hover_headroom: &'static str,
     pub name_nose_peak: &'static str,
     pub name_left_peak: &'static str,
@@ -299,8 +297,6 @@ pub const EN: Strings = Strings {
 
     heading_gear_comp: "Gear Strut Compression (Touchdown)",
     chk_enabled: "Enabled",
-    chk_split_touchdown: "SPLIT (3 struts → 3 motors)",
-    hover_split_touchdown: "Three-point landing awareness: the main struts (left/right) are routed to DIFFERENT hands (Throttle and Joystick), since they touch down almost simultaneously — otherwise they'd blend together in one hand. The nose strut (touches down later) shares the Throttle hand with 'its' main strut on a second motor, with a separate, sharper impact shape. Which side is on Throttle vs Joystick is switched by Swap Hand Layout. Independent of the routing checkboxes below.",
     hover_headroom: "0% = fixed impact strength on any landing. 100% = the harder the landing, the stronger the impact",
     name_nose_peak: "Nose Peak",
     name_left_peak: "Left Peak",
@@ -460,8 +456,6 @@ pub const RU: Strings = Strings {
 
     heading_gear_comp: "Сжатие стоек шасси (касание)",
     chk_enabled: "Включено",
-    chk_split_touchdown: "SPLIT (3 стойки → 3 мотора)",
-    hover_split_touchdown: "Three-point landing awareness: основные стойки (лево/право) разводятся по РАЗНЫМ рукам (РУД и джойстик), т.к. касаются почти одновременно — иначе слились бы в одной ладони. Носовая стойка (касается позже) делит руку РУД со «своей» основной стойкой на второй мотор, с отдельной, более резкой формой удара. Какая сторона на РУД, а какая на джойстик — переключается Swap Hand Layout. Независимо от чекбоксов маршрутизации ниже.",
     hover_headroom: "0% = фиксированная сила удара при любой посадке. 100% = чем жёстче посадка, тем сильнее удар",
     name_nose_peak: "Носовая стойка",
     name_left_peak: "Левая стойка",
