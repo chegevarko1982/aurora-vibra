@@ -207,8 +207,10 @@ fn main() -> Result<()> {
 
     let tx_ui_for_tray = tx_ui.clone();
 
+    let window_title = format!("Aurora Vibra v{}", env!("CARGO_PKG_VERSION"));
+
     let run = eframe::run_native(
-        "Aurora Vibra v4.0.1",
+        &window_title,
         native_options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
