@@ -20,3 +20,6 @@ target/
 
 # Local Claude Code settings (machine-specific permissions, not project config)
 /.claude/
+
+# Old snapshots for chat tools (no longer synced with src/)
+/TXT/
