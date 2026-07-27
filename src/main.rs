@@ -195,7 +195,6 @@ fn main() -> Result<()> {
 
         active_tab: Tab::Main,
         active_section: aurora_vibra::ui::Section::Rumble,
-        monitor_collapsed: true,
         monitor_show_disabled: false,
         hold,
         close_to_tray,
@@ -213,6 +212,7 @@ fn main() -> Result<()> {
         native_options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            aurora_vibra::ui::apply_theme(&cc.egui_ctx);
             let ctx = cc.egui_ctx.clone();
             aurora_vibra::tray::spawn_tray_with_ctx(
                 tx_ui_for_tray.clone(),

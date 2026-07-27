@@ -21,6 +21,56 @@ use crate::{
     tray,
 };
 
+/// Цветовая палитра карточек эффектов и Live Monitor. Раньше цвета были
+/// разбросаны литералами (`Color32::from_rgb(...)`) по десятку мест — свели
+/// в одно место, чтобы контраст карточка/фон и роли акцентов (primary vs
+/// live vs warning) были согласованы по всему приложению.
+mod palette {
+    use egui::Color32;
+
+    pub const BG_APP: Color32 = Color32::from_rgb(0x0B, 0x0E, 0x14);
+    pub const BG_SIDEBAR: Color32 = Color32::from_rgb(0x0F, 0x13, 0x1A);
+    pub const BG_CARD: Color32 = Color32::from_rgb(0x16, 0x1B, 0x24);
+    pub const BG_CARD_DISABLED: Color32 = Color32::from_rgb(0x12, 0x16, 0x1D);
+
+    pub const BORDER_DEFAULT: Color32 = Color32::from_rgb(0x2A, 0x33, 0x44);
+    pub const BORDER_ACTIVE: Color32 = Color32::from_rgb(0x3B, 0x4A, 0x61);
+
+    pub const ACCENT_PRIMARY: Color32 = Color32::from_rgb(0x3B, 0x82, 0xF6);
+    pub const ACCENT_LIVE: Color32 = Color32::from_rgb(0x22, 0xD3, 0xEE);
+
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(0x94, 0xA3, 0xB8);
+    pub const TEXT_DISABLED: Color32 = Color32::from_rgb(0x64, 0x74, 0x8B);
+
+    /// Единая тёмная тема приложения поверх egui::Visuals::dark() —
+    /// применяется один раз при старте (см. UiState::apply_theme), а не
+    /// каждый кадр, т.к. это глобальное состояние Context, а не что-то,
+    /// что нужно пересчитывать в render-цикле.
+    pub fn apply(ctx: &egui::Context) {
+        let mut visuals = egui::Visuals::dark();
+        // panel_fill — общий фон по умолчанию для side/top/central-панелей
+        // (см. Frame::side_top_panel / Frame::central_panel в egui). Ставим
+        // его в BG_APP, а sidebar и Live Monitor явно перекрывают своим
+        // Frame::fill(BG_SIDEBAR) в местах создания панелей — иначе все
+        // панели красились бы в один и тот же цвет и контраст пропадал бы.
+        visuals.panel_fill = BG_APP;
+        visuals.window_fill = BG_APP;
+        visuals.extreme_bg_color = BG_APP;
+        visuals.faint_bg_color = BG_SIDEBAR;
+        visuals.selection.bg_fill = ACCENT_PRIMARY.gamma_multiply(0.35);
+        visuals.selection.stroke.color = ACCENT_PRIMARY;
+        visuals.hyperlink_color = ACCENT_PRIMARY;
+        ctx.set_visuals(visuals);
+    }
+}
+
+/// Точка входа для main.rs: применяет тёмную тему один раз при старте
+/// приложения (см. `eframe::run_native`'s creation callback), до того как
+/// нарисован первый кадр.
+pub fn apply_theme(ctx: &egui::Context) {
+    palette::apply(ctx);
+}
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Tab {
     Main,
@@ -56,6 +106,41 @@ fn circle_indicator_colored(ui: &mut egui::Ui, color: Color32, filled: bool) {
     ui.painter().circle_filled(center, r, fill_color);
     ui.painter()
         .circle_stroke(center, r, egui::Stroke::new(1.4, stroke_color));
+}
+
+/// Тот же кружок-индикатор, но с явно заданным радиусом — нужен для плотных
+/// строк Live Monitor, где полноразмерная (interact_size) точка из
+/// `circle_indicator_colored` съедала бы слишком много вертикального места.
+fn dot_indicator(ui: &mut egui::Ui, color: Color32, filled: bool, diameter: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(diameter), egui::Sense::hover());
+    let center = rect.center();
+    let r = diameter * 0.36;
+    let fill_color = if filled { color } else { Color32::TRANSPARENT };
+    ui.painter().circle_filled(center, r, fill_color);
+    ui.painter()
+        .circle_stroke(center, r, egui::Stroke::new(1.2, color));
+}
+
+/// Статус-бейдж карточки эффекта: одна точка + подпись состояния
+/// (Off / Idle / Active) вместо прежней голой точки без подписи, которую
+/// приходилось домысливать по цвету. Active получает капсулу-заливку
+/// ACCENT_LIVE — единственный элемент в карточке, который должен цепляться
+/// боковым зрением; Idle/Off остаются плоскими, чтобы не спорить за внимание.
+/// `active` больше не влияет на вид бейджа — он мигал в такт реальным
+/// импульсам эффекта (active включается/выключается на каждый "тик" мотора),
+/// что на карточке читалось как раздражающее мерцание. Того же сигнала
+/// достаточно в Live Monitor (см. dot_indicator в панели справа), здесь же
+/// бейдж просто ровно показывает Off/Idle по чекбоксу.
+fn effect_status_badge(ui: &mut egui::Ui, enabled: bool, _active: bool, t: &Strings) {
+    if !enabled {
+        ui.label(RichText::new(t.status_off).small().color(palette::TEXT_DISABLED));
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        dot_indicator(ui, palette::BORDER_ACTIVE, false, 8.0);
+        ui.label(RichText::new(t.status_idle).small().color(palette::TEXT_SECONDARY));
+    });
 }
 
 fn status_badge(ui: &mut egui::Ui, status: &SimStatus, t: &Strings) {
@@ -137,9 +222,6 @@ pub struct UiState {
 
     pub active_tab: Tab,
     pub active_section: Section,
-    // Live Monitor по умолчанию свёрнут в узкую полоску с точками —
-    // разворачивается кликом по шеврону в именованный список.
-    pub monitor_collapsed: bool,
     // В развёрнутом виде монитор по умолчанию показывает только включённые
     // эффекты; выключенные скрыты за "+N disabled", пока не нажали явно.
     pub monitor_show_disabled: bool,
@@ -205,12 +287,8 @@ impl UiState {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, filled) = if active && *enabled {
-                        (Color32::WHITE, true)
-                    } else {
-                        (Color32::from_gray(90), false)
-                    };
-                    circle_indicator_colored(ui, color, filled);
+                    effect_status_badge(ui, *enabled, active, t);
+                    ui.add(egui::Separator::default().vertical().spacing(10.0));
                     Self::device_target_toggle(ui, device, on_change, t);
                 });
             });
@@ -261,14 +339,10 @@ impl UiState {
         t: &Strings,
     ) {
         ui.vertical(|ui| {
+            // Триггерится только когда порог реально пришёл от SimConnect (или
+            // задан вручную через Override) — без threshold_kn эффект физически
+            // не может сработать, даже если галочка включена.
             let is_triggering = active && *enabled && threshold_kn.is_some();
-            let (color, filled) = if is_triggering {
-                (Color32::from_rgb(220, 60, 60), true)
-            } else if *enabled && threshold_kn.is_some() {
-                (Color32::from_rgb(30, 180, 90), false)
-            } else {
-                (Color32::from_gray(90), false)
-            };
 
             ui.horizontal(|ui| {
                 let cb = ui.checkbox(enabled, "");
@@ -279,7 +353,8 @@ impl UiState {
                 ui.label(RichText::new(t.overspeed_effect_name).strong());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    circle_indicator_colored(ui, color, filled);
+                    effect_status_badge(ui, *enabled, is_triggering, t);
+                    ui.add(egui::Separator::default().vertical().spacing(10.0));
                     Self::device_target_toggle(ui, device, on_change, t);
                 });
             });
@@ -293,9 +368,6 @@ impl UiState {
                     ui.label(RichText::new(limit_text).weak())
                         .on_hover_text(t.hover_overspeed_limit_barberpole);
                 });
-                if is_triggering {
-                    ui.colored_label(color, t.status_active);
-                }
             });
 
             ui.horizontal(|ui| {
@@ -368,7 +440,15 @@ impl UiState {
         let image = egui::Image::new(source)
             .tint(tint)
             .fit_to_exact_size(egui::vec2(19.2, 19.2));
-        ui.add(egui::Button::new(image).selected(selected))
+        let mut button = egui::Button::new(image).selected(selected);
+        if selected {
+            // Явный fill вместо стандартной полупрозрачной selection.bg_fill —
+            // просили конкретную подложку под включённой иконкой устройства,
+            // не трогая глобальный акцент выбора (он используется и в других
+            // местах — nav, чекбоксы).
+            button = button.fill(Color32::from_rgb(0xCC, 0xCE, 0xFF));
+        }
+        ui.add(button)
     }
 
     /// Обёртка-карточка вокруг одного эффекта: рамка со скруглением,
@@ -377,35 +457,44 @@ impl UiState {
     fn effect_card(
         ui: &mut egui::Ui,
         enabled: bool,
-        active: bool,
+        _active: bool,
         add_contents: impl FnOnce(&mut egui::Ui),
     ) {
-        const ACCENT: Color32 = Color32::from_rgb(255, 157, 66);
-        let stroke = if enabled && active {
-            egui::Stroke::new(1.4, ACCENT)
+        // `active` сознательно не влияет на обводку карточки — раньше она
+        // мигала cyan в такт реальным импульсам эффекта (active моргает на
+        // каждый "тик" мотора), что было слишком навязчиво на весь блок.
+        // Live-индикация оставлена только в Live Monitor справа.
+        let (stroke, fill) = if enabled {
+            (
+                egui::Stroke::new(1.0, palette::BORDER_ACTIVE),
+                palette::BG_CARD,
+            )
         } else {
-            // Всегда видимая, но нейтральная граница карточки — раньше здесь
-            // был почти невидимый theme-default bg_stroke, из-за чего соседние
-            // карточки в сетке визуально сливались друг с другом без явной
-            // границы между ними.
-            egui::Stroke::new(1.0, Color32::from_gray(85))
+            (
+                egui::Stroke::new(1.0, palette::BORDER_DEFAULT),
+                palette::BG_CARD_DISABLED,
+            )
         };
         egui::Frame::group(ui.style())
             .stroke(stroke)
-            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 20))
+            .fill(fill)
             .shadow(egui::Shadow {
                 offset: [0, 2],
-                blur: 6,
+                blur: 4,
                 spread: 0,
-                color: Color32::from_black_alpha(50),
+                color: Color32::from_black_alpha(60),
             })
-            .corner_radius(6u8)
-            .inner_margin(egui::Margin::same(8))
+            .corner_radius(8u8)
+            .inner_margin(egui::Margin::same(12))
             .outer_margin(egui::Margin::symmetric(6, 4))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                // Выключенную карточку гасим через override текста, а не
+                // set_opacity(): opacity глушит заодно slider handle и рамки
+                // контролов, из-за чего карточка выглядит "сломанной", а не
+                // просто неактивной.
                 if !enabled {
-                    ui.set_opacity(0.55);
+                    ui.visuals_mut().override_text_color = Some(palette::TEXT_DISABLED);
                 }
                 add_contents(ui);
             });
@@ -420,6 +509,7 @@ impl UiState {
         active: bool,
         on_change: &mut bool,
         hint: Option<&str>,
+        t: &Strings,
     ) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -434,12 +524,7 @@ impl UiState {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, filled) = if active && *enabled {
-                        (Color32::WHITE, true)
-                    } else {
-                        (Color32::from_gray(90), false)
-                    };
-                    circle_indicator_colored(ui, color, filled);
+                    effect_status_badge(ui, *enabled, active, t);
                 });
             });
 
@@ -721,68 +806,84 @@ impl eframe::App for UiState {
             let mon = self.config.get();
             // Порядок элементов соответствует новой группировке по разделам
             // (Aerodynamics / Taxi / Engines / Gears) — см. диапазоны ниже.
-            let rows: [(&str, bool, bool); 11] = [
+            // Четвёртое поле — текущая интенсивность эффекта в процентах (та же
+            // формула val/native_max*100, что использует слайдер самой карточки),
+            // None — для triggered-по-порогу эффектов без единого "уровня"
+            // (Gear Transit). Используется компактным Live Monitor, чтобы
+            // показывать не только "включён/активен", но и реальное число.
+            let rows: [(&str, bool, bool, Option<f32>); 11] = [
                 (
                     t.overspeed_effect_name,
                     mon.overspeed_enabled,
                     self.effects.overspeed_active.load(Ordering::Relaxed),
+                    Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_stall,
                     mon.stall_enabled,
                     self.effects.stall_active.load(Ordering::Relaxed),
+                    Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_spoilers,
                     mon.spoilers_enabled,
                     self.effects.spoilers_active.load(Ordering::Relaxed),
+                    Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_flaps,
                     mon.flaps_enabled,
                     self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                    Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.lbl_bank_turb,
                     mon.bank_enabled,
                     self.effects.bank_active.load(Ordering::Relaxed),
+                    Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_engine_start,
                     mon.enable_engine_start,
                     self.effects.engine_start_active.load(Ordering::Relaxed),
+                    Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_ground_roll,
                     mon.ground_enabled,
                     self.effects.ground_active.load(Ordering::Relaxed)
                         || self.effects.ground_thump_active.load(Ordering::Relaxed),
+                    Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_left_peak,
                     mon.gear_comp_left_enabled,
                     self.effects.gear_comp_left_active.load(Ordering::Relaxed),
+                    Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_nose_peak,
                     mon.gear_comp_nose_enabled,
                     self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
+                    Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.name_right_peak,
                     mon.gear_comp_right_enabled,
                     self.effects.gear_comp_right_active.load(Ordering::Relaxed),
+                    Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
                 ),
                 (
                     t.lbl_gear_transit,
                     mon.gear_transit_enabled,
                     self.effects.gear_transit_active.load(Ordering::Relaxed),
+                    None,
                 ),
             ];
             let section_active = |range: std::ops::Range<usize>| -> bool {
                 rows[range]
                     .iter()
-                    .any(|(_, enabled, active)| *enabled && *active)
+                    .any(|(_, enabled, active, _)| *enabled && *active)
             };
             let rumble_active = section_active(0..5);
             let taxi_active = false; // в Taxi Thump больше нет эффектов из Live Monitor (Flaps переехал в Aerodynamics)
@@ -792,6 +893,7 @@ impl eframe::App for UiState {
             egui::Panel::left("nav_panel")
                 .resizable(false)
                 .exact_size(150.0)
+                .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
                 .show(ui, |ui| {
                     ui.add_space(4.0);
                     let nav_item =
@@ -873,92 +975,76 @@ impl eframe::App for UiState {
                     }
                 });
 
-            let monitor_width = if self.monitor_collapsed { 32.0 } else { 220.0 };
+            // Компактный, всегда развёрнутый Live Monitor: раньше сворачивался в
+            // узкую полоску безымянных точек по умолчанию — теперь фиксированные
+            // 160px с именем + реальным %, никакого режима "просто точки".
             egui::Panel::right("live_monitor_panel")
                 .resizable(false)
-                .exact_size(monitor_width)
+                .exact_size(160.0)
+                .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
                 .show(ui, |ui| {
                     ui.add_space(4.0);
+                    ui.label(RichText::new(t.heading_live_monitor).strong());
+                    ui.separator();
 
-                    if self.monitor_collapsed {
-                        // Свёрнутая полоска: шеврон-разворот + столбик точек активности,
-                        // без подписей — минимальная стоимость по пространству.
+                    let enabled_rows: Vec<_> =
+                        rows.iter().filter(|(_, enabled, ..)| *enabled).collect();
+                    let disabled_count = rows.len() - enabled_rows.len();
+
+                    if enabled_rows.is_empty() {
+                        ui.weak(t.lbl_no_active_effects);
+                    }
+                    for (name, enabled, active, pct) in enabled_rows {
+                        ui.horizontal(|ui| {
+                            let (dot_color, filled) = if *enabled && *active {
+                                (palette::ACCENT_LIVE, true)
+                            } else {
+                                (palette::BORDER_ACTIVE, false)
+                            };
+                            dot_indicator(ui, dot_color, filled, 8.0);
+                            ui.label(RichText::new(*name).small());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let value_text = if *active {
+                                    match pct {
+                                        Some(p) => format!("{p:.0}%"),
+                                        None => t.status_active.to_string(),
+                                    }
+                                } else {
+                                    "—".to_string()
+                                };
+                                let color = if *active {
+                                    palette::ACCENT_LIVE
+                                } else {
+                                    palette::TEXT_SECONDARY
+                                };
+                                ui.colored_label(color, RichText::new(value_text).small());
+                            });
+                        });
+                    }
+
+                    if disabled_count > 0 {
+                        ui.add_space(4.0);
+                        let label = i18n::lbl_disabled_count(self.lang, disabled_count);
                         if ui
-                            .button("<")
-                            .on_hover_text(t.heading_live_monitor)
+                            .selectable_label(
+                                self.monitor_show_disabled,
+                                RichText::new(label).small().weak(),
+                            )
                             .clicked()
                         {
-                            self.monitor_collapsed = false;
+                            self.monitor_show_disabled = !self.monitor_show_disabled;
                         }
-                        ui.add_space(4.0);
-                        ui.separator();
-                        for (_, enabled, active) in rows {
-                            let (color, filled) = if enabled && active {
-                                (Color32::WHITE, true)
-                            } else {
-                                (Color32::from_gray(90), false)
-                            };
-                            ui.vertical_centered(|ui| {
-                                circle_indicator_colored(ui, color, filled);
-                            });
-                        }
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.heading(t.heading_live_monitor);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.button(">").clicked() {
-                                        self.monitor_collapsed = true;
-                                    }
-                                },
-                            );
-                        });
-                        ui.separator();
-
-                        let enabled_rows: Vec<_> =
-                            rows.iter().filter(|(_, enabled, _)| *enabled).collect();
-                        let disabled_count = rows.len() - enabled_rows.len();
-
-                        if enabled_rows.is_empty() {
-                            ui.weak(t.lbl_no_active_effects);
-                        }
-                        for (name, enabled, active) in enabled_rows {
-                            ui.horizontal(|ui| {
-                                let (color, filled) = if *enabled && *active {
-                                    (Color32::WHITE, true)
-                                } else {
-                                    (Color32::from_gray(90), false)
-                                };
-                                circle_indicator_colored(ui, color, filled);
-                                ui.label(RichText::new(*name).small());
-                            });
-                        }
-
-                        if disabled_count > 0 {
-                            ui.add_space(4.0);
-                            let label = i18n::lbl_disabled_count(self.lang, disabled_count);
-                            if ui
-                                .selectable_label(
-                                    self.monitor_show_disabled,
-                                    RichText::new(label).small().weak(),
-                                )
-                                .clicked()
+                        if self.monitor_show_disabled {
+                            for (name, _enabled, _active, _pct) in
+                                rows.iter().filter(|(_, enabled, ..)| !*enabled)
                             {
-                                self.monitor_show_disabled = !self.monitor_show_disabled;
-                            }
-                            if self.monitor_show_disabled {
-                                for (name, _enabled, _active) in
-                                    rows.iter().filter(|(_, enabled, _)| !*enabled)
-                                {
-                                    ui.horizontal(|ui| {
-                                        circle_indicator_colored(ui, Color32::from_gray(90), false);
-                                        ui.add_enabled(
-                                            false,
-                                            egui::Label::new(RichText::new(*name).small()),
-                                        );
-                                    });
-                                }
+                                ui.horizontal(|ui| {
+                                    dot_indicator(ui, palette::TEXT_DISABLED, false, 8.0);
+                                    ui.add_enabled(
+                                        false,
+                                        egui::Label::new(RichText::new(*name).small()),
+                                    );
+                                });
                             }
                         }
                     }
@@ -1284,14 +1370,16 @@ impl eframe::App for UiState {
                                                             egui::Align::Center,
                                                         ),
                                                         |ui| {
-                                                            circle_indicator_colored(
+                                                            effect_status_badge(
                                                                 ui,
-                                                                if active && bank_enabled {
-                                                                    Color32::WHITE
-                                                                } else {
-                                                                    Color32::from_gray(90)
-                                                                },
-                                                                active && bank_enabled,
+                                                                bank_enabled,
+                                                                active,
+                                                                t,
+                                                            );
+                                                            ui.add(
+                                                                egui::Separator::default()
+                                                                    .vertical()
+                                                                    .spacing(10.0),
                                                             );
                                                             Self::device_target_toggle(
                                                                 ui,
@@ -1388,6 +1476,7 @@ impl eframe::App for UiState {
                                                         taxi_start_crossed,
                                                         &mut _changed,
                                                         Some(t.hover_taxi_start),
+                                                        t,
                                                     );
                                                     cfg.taxi_start_enabled = start_enabled;
 
@@ -1404,6 +1493,7 @@ impl eframe::App for UiState {
                                                         taxi_end_crossed,
                                                         &mut _changed,
                                                         Some(t.hover_taxi_end),
+                                                        t,
                                                     );
                                                     cfg.taxi_end_enabled = end_enabled;
 
@@ -1516,16 +1606,11 @@ impl eframe::App for UiState {
                                                                 egui::Align::Center,
                                                             ),
                                                             |ui| {
-                                                                circle_indicator_colored(
+                                                                effect_status_badge(
                                                                     ui,
-                                                                    if active
-                                                                        && engine_start_enabled
-                                                                    {
-                                                                        Color32::WHITE
-                                                                    } else {
-                                                                        Color32::from_gray(90)
-                                                                    },
-                                                                    active && engine_start_enabled,
+                                                                    engine_start_enabled,
+                                                                    active,
+                                                                    t,
                                                                 );
                                                             },
                                                         );
@@ -1748,16 +1833,16 @@ impl eframe::App for UiState {
                                                                 egui::Align::Center,
                                                             ),
                                                             |ui| {
-                                                                circle_indicator_colored(
+                                                                effect_status_badge(
                                                                     ui,
-                                                                    if active
-                                                                        && gear_transit_enabled
-                                                                    {
-                                                                        Color32::WHITE
-                                                                    } else {
-                                                                        Color32::from_gray(90)
-                                                                    },
-                                                                    active && gear_transit_enabled,
+                                                                    gear_transit_enabled,
+                                                                    active,
+                                                                    t,
+                                                                );
+                                                                ui.add(
+                                                                    egui::Separator::default()
+                                                                        .vertical()
+                                                                        .spacing(10.0),
                                                                 );
                                                                 Self::device_target_toggle(
                                                                     ui,
