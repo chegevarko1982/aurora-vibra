@@ -121,10 +121,10 @@ fn dot_indicator(ui: &mut egui::Ui, color: Color32, filled: bool, diameter: f32)
         .circle_stroke(center, r, egui::Stroke::new(1.2, color));
 }
 
-/// Статус-бейдж карточки эффекта: круглый маркер + подпись Off/Idle.
+/// Статус-бейдж карточки эффекта: круглый маркер без текстовой подписи.
 /// Когда эффект реально сработал (`active && enabled`), маркер закрашивается
-/// белым — этого сигнала достаточно, отдельной текстовой подписи "Active"
-/// рядом с ним больше нет (маркер уже показывает состояние).
+/// белым — этого сигнала достаточно, отдельной текстовой подписи рядом с ним
+/// нет (маркер уже показывает состояние).
 fn effect_status_badge(ui: &mut egui::Ui, enabled: bool, active: bool, t: &Strings) {
     if !enabled {
         ui.label(RichText::new(t.status_off).small().color(palette::TEXT_DISABLED));
@@ -136,7 +136,6 @@ fn effect_status_badge(ui: &mut egui::Ui, enabled: bool, active: bool, t: &Strin
             dot_indicator(ui, Color32::WHITE, true, 8.0);
         } else {
             dot_indicator(ui, palette::BORDER_ACTIVE, false, 8.0);
-            ui.label(RichText::new(t.status_idle).small().color(palette::TEXT_SECONDARY));
         }
     });
 }

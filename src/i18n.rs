@@ -91,7 +91,6 @@ pub struct Strings {
     pub limit_na: &'static str,
     pub val_na: &'static str,
     pub status_active: &'static str,
-    pub status_idle: &'static str,
     pub status_off: &'static str,
 
     pub device_label: &'static str,
@@ -260,7 +259,6 @@ pub const EN: Strings = Strings {
     limit_na: "Limit: N/A",
     val_na: "N/A",
     status_active: "ACTIVE",
-    status_idle: "Idle",
     status_off: "Off",
 
     device_label: "Device:",
@@ -423,7 +421,6 @@ pub const RU: Strings = Strings {
     limit_na: "Порог: Н/Д",
     val_na: "Н/Д",
     status_active: "АКТИВНО",
-    status_idle: "Ожидание",
     status_off: "Выкл",
 
     device_label: "Устройство:",
