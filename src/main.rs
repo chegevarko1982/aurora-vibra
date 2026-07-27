@@ -149,7 +149,7 @@ fn main() -> Result<()> {
             // RumbleConfig::telemetry_expanded). Точные значения не проверены
             // визуально в этой среде — подгони при первом запуске, если не
             // совпадёт с реальным рендером/экраном.
-            .with_inner_size([1000.0, 985.0])
+            .with_inner_size([1000.0, 660.0])
             .with_min_inner_size([700.0, 600.0])
             .with_resizable(true) // Разрешили изменение размера
             .with_maximize_button(true)
