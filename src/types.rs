@@ -28,6 +28,20 @@ pub struct FlightVars {
     pub gear_comp_nose: f64,
     pub gear_comp_left: f64,
     pub gear_comp_right: f64,
+    // Fenix A320: сырое значение L:A320_Gear_Nose (0 = убрано, 1000 = выпущено).
+    // GEAR ANIMATION POSITION:0/1/2 на этом борте не отражает реальное движение
+    // стоек, поэтому эффект Gear Transit в rumble.rs берёт позицию отсюда
+    // (см. is_fenix ниже), когда этот флаг взведён. Также остаётся в
+    // телеметрии как "F_Gear" для отладки.
+    pub fenix_gear_nose_raw: f64,
+    // true, если aircraft title содержит "Fenix" (см.
+    // profiles::is_fenix_aircraft) — резолвится один раз в sim/parse.rs,
+    // чтобы rumble.rs не тянул за собой строку title на каждый тик, только
+    // готовый флаг. Используется, чтобы эффект Gear Transit переключался на
+    // fenix_gear_nose_raw вместо gear_comp_nose/left/right, которые на этом
+    // борте не отражают движение стоек. Эффект Gear Strut Compression
+    // (Touchdown) НЕ тронут — он по-прежнему читает gear_comp_* напрямую.
+    pub is_fenix: bool,
     pub trailing_edge_flaps_left_percent: f64,
     // Телеметрия запуска двигателей (Engine Spool-up & Ignition)
     pub eng1_n2_percent: f64,

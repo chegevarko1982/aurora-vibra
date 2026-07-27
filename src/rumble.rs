@@ -919,17 +919,35 @@ impl RumbleEngine {
             pos > 0.0 && pos < 50.0 && (pos - prev).abs() >= 0.001
         };
 
+        // Fenix A320: GEAR ANIMATION POSITION:0/1/2 (gear_comp_nose/left/right)
+        // на этом борте не отражает реальное движение стоек, зато сам аддон
+        // пишет позицию носовой стойки в L:A320_Gear_Nose (0..1000, см.
+        // fenix_gear_nose_raw в types.rs/sim/parse.rs). Левой/правой стойки
+        // отдельно пока нет — используем нос как общий индикатор для всех
+        // трёх, поделив шкалу на 20, чтобы попасть в тот же диапазон 0..50,
+        // что и gear_comp_* (0 = убрано, 50 = выпущено). Затрагивает ТОЛЬКО
+        // этот блок (Gear Transit) — Gear Strut Compression/Touchdown ниже
+        // по-прежнему читает gear_comp_nose/left/right напрямую.
+        let (gear_nose, gear_left, gear_right) = if fv.is_fenix {
+            let p = (fv.fenix_gear_nose_raw / 20.0).clamp(0.0, 50.0);
+            (p, p, p)
+        } else {
+            (fv.gear_comp_nose, fv.gear_comp_left, fv.gear_comp_right)
+        };
+
         let mut gear_transit_term: f64 = 0.0;
 
-        // Эффект уборки/выпуска шасси имеет смысл только пока самолёт
-        // практически неподвижен (наземный тест шасси на стоянке) — при
-        // GS >= 0.1 узла отключаем целиком, чтобы не путать его с шумом
-        // strut-компрессии во время руления/пробега.
-        if cfg.gear_transit_enabled && gs < 0.1 {
-            // Использует переменные анимации шасси из FlightVars
-            let moving_count = gear_is_moving(fv.gear_comp_nose, s.prev_gear_nose) as i32
-                + gear_is_moving(fv.gear_comp_left, s.prev_gear_left) as i32
-                + gear_is_moving(fv.gear_comp_right, s.prev_gear_right) as i32;
+        // Эффект уборки/выпуска шасси должен срабатывать, пока самолёт
+        // движется (в полёте на скорости или на пробеге/рулении) — именно
+        // тогда пилот реально убирает/выпускает шасси. При GS <= 0.1 узла
+        // (стоянка, ручной тест шасси на месте) отключаем, чтобы не путать
+        // редкий наземный тест с обычным полётным сценарием.
+        if cfg.gear_transit_enabled && gs > 0.1 {
+            // Использует переменные анимации шасси из FlightVars (либо их
+            // Fenix-замену gear_nose/left/right, см. выше)
+            let moving_count = gear_is_moving(gear_nose, s.prev_gear_nose) as i32
+                + gear_is_moving(gear_left, s.prev_gear_left) as i32
+                + gear_is_moving(gear_right, s.prev_gear_right) as i32;
 
             if moving_count > 0 {
                 let multiplier = match moving_count {
@@ -956,15 +974,12 @@ impl RumbleEngine {
             }
 
             // Детекция финала уборки (все стойки в 0.0)
-            let all_up_now =
-                fv.gear_comp_nose <= 0.0 && fv.gear_comp_left <= 0.0 && fv.gear_comp_right <= 0.0;
+            let all_up_now = gear_nose <= 0.0 && gear_left <= 0.0 && gear_right <= 0.0;
             let not_all_up_prev =
                 s.prev_gear_nose > 0.0 || s.prev_gear_left > 0.0 || s.prev_gear_right > 0.0;
 
             // Детекция финала выпуска (все стойки в 50.0)
-            let all_down_now = fv.gear_comp_nose >= 49.9
-                && fv.gear_comp_left >= 49.9
-                && fv.gear_comp_right >= 49.9;
+            let all_down_now = gear_nose >= 49.9 && gear_left >= 49.9 && gear_right >= 49.9;
             let not_all_down_prev =
                 s.prev_gear_nose < 49.9 || s.prev_gear_left < 49.9 || s.prev_gear_right < 49.9;
 
@@ -985,9 +1000,9 @@ impl RumbleEngine {
 
         // Обновляем состояния для следующего кадра (независимо от чекбокса,
         // иначе при включении эффекта в середине движения сработает ложный триггер)
-        s.prev_gear_nose = fv.gear_comp_nose;
-        s.prev_gear_left = fv.gear_comp_left;
-        s.prev_gear_right = fv.gear_comp_right;
+        s.prev_gear_nose = gear_nose;
+        s.prev_gear_left = gear_left;
+        s.prev_gear_right = gear_right;
 
         if dt_.gear_transit.enable_joystick {
             transients_j += gear_transit_term;

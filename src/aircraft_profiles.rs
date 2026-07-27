@@ -158,7 +158,7 @@ mod tests {
     fn no_named_profile_gets_built_in_override_from_shared_default() {
         // Борт есть в profiles.rs (Fenix CFM), но именного сохранённого
         // профиля для него нет — конфиг берётся из ap.default, и встроенный
-        // оверлей (engine_idle_n2 = 65.0) обязан накатиться поверх.
+        // оверлей (engine_idle_n2 = 59.0) обязан накатиться поверх.
         let mut ap = AircraftProfiles::default();
         let config = ConfigShared::new();
         let mut state = ProfileState::new();
@@ -166,7 +166,7 @@ mod tests {
 
         apply_for_aircraft(&mut ap, &config, &mut state, "Fenix A320 CFM56", &logs);
 
-        assert_eq!(config.get().engine_idle_n2, 65.0);
+        assert_eq!(config.get().engine_idle_n2, 59.0);
         assert!(ap.active_match.is_none());
     }
 
@@ -174,7 +174,7 @@ mod tests {
     fn named_profile_wins_over_built_in_override() {
         // Пользователь ранее сохранил именной профиль для этого конкретного
         // борта с engine_idle_n2 = 68.0 (не совпадает ни с дефолтным 60.0, ни
-        // с захардкоженным Fenix CFM оверрайдом 65.0). При следующей загрузке
+        // с захардкоженным Fenix CFM оверрайдом 59.0). При следующей загрузке
         // этого борта должно применяться ИМЕННО сохранённое значение — а не
         // повторно накатываемый встроенный оверлей.
         let mut ap = AircraftProfiles::default();

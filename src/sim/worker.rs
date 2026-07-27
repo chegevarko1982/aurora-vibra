@@ -471,6 +471,14 @@ pub fn sim_worker(
                 // (сравнение с L:EngineStart1b/2b_Ext). Индексы 57/58.
                 ("GENERAL ENG STARTER ACTIVE:1", "Bool"),
                 ("GENERAL ENG STARTER ACTIVE:2", "Bool"),
+                // Fenix A320 (FenixSim): L:A320_Gear_Nose — GEAR ANIMATION
+                // POSITION:0/1/2 (11/12/13) на этом борте не отражает реальное
+                // движение стоек, зато сам аддон выставляет позицию в этот
+                // L-var (0 = убрано, 1000 = выпущено). Пока только для
+                // телеметрии/отладки (см. sim/parse.rs, ui.rs), на остальных
+                // самолётах L-var не определён, SimConnect отдаёт 0.0
+                // (самонейтрализуется). Индекс 60.
+                ("L:A320_Gear_Nose", "Number"),
             ];
             for (name, unit) in defs {
                 let hr = add(DEF_MAIN, name, unit);
@@ -795,19 +803,21 @@ pub fn sim_worker(
                                 // пока только для телеметрии. L:I_PFD_VMAX (59) —
                                 // Fenix A320, альтернативный источник порога
                                 // Overspeed вместо AIRSPEED BARBER POLE (см.
-                                // sim/parse.rs).
+                                // sim/parse.rs). L:A320_Gear_Nose (60) — Fenix
+                                // A320, сырая позиция носовой стойки (0..1000),
+                                // пока только для телеметрии (см. sim/parse.rs).
                                 //
                                 // ВНИМАНИЕ: длина elem[] и clamp count.min(..) ниже
                                 // должны покрывать ВСЕ зарегистрированные индексы
-                                // (0..=59, т.е. 60 элементов) — раньше здесь стоял
+                                // (0..=60, т.е. 61 элемент) — раньше здесь стоял
                                 // count.min(53), из-за чего индекс 53 (OVERSPEED
                                 // WARNING) никогда не копировался из живых данных
                                 // SimConnect и оставался равен 0.0/false.
-                                let mut elem = [0f64; 60];
+                                let mut elem = [0f64; 61];
                                 if want_f64 {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f64,
-                                        count.min(60),
+                                        count.min(61),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x;
@@ -815,7 +825,7 @@ pub fn sim_worker(
                                 } else {
                                     let v = std::slice::from_raw_parts(
                                         data_ptr as *const f32,
-                                        count.min(60),
+                                        count.min(61),
                                     );
                                     for (i, &x) in v.iter().enumerate() {
                                         elem[i] = x as f64;

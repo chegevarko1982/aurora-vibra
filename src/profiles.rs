@@ -67,10 +67,10 @@ const BUILT_IN_PROFILES: &[BuiltInProfile] = &[
         match_all: &["FENIX", "CFM"],
         overrides: AircraftOverrides {
             spoilers_threshold_pct: None,
-            // Fenix A320 CFM56: выходит на Idle при N2 ≈ 65%, а не при
+            // Fenix A320 CFM56: выходит на Idle при N2 ≈ 59%, а не при
             // дефолтных 60% (по сравнению с IAE-вариантом ниже — другой
             // двигатель, другая idle N2).
-            engine_idle_n2: Some(65.0),
+            engine_idle_n2: Some(59.0),
             flaps_track_slats: None,
             overspeed_lear_horn_enabled: None,
         },
@@ -291,12 +291,12 @@ mod tests {
     use crate::LogBuffer;
 
     #[test]
-    fn fenix_cfm_sets_idle_n2_to_65() {
+    fn fenix_cfm_sets_idle_n2_to_59() {
         let config = ConfigShared::new();
         let mut state = ProfileState::new();
         let logs = LogBuffer::default();
         state.on_aircraft_changed(&config, "Fenix A320 CFM56", &logs);
-        assert_eq!(config.get().engine_idle_n2, 65.0);
+        assert_eq!(config.get().engine_idle_n2, 59.0);
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         let mut state = ProfileState::new();
         let logs = LogBuffer::default();
         state.on_aircraft_changed(&config, "Fenix A320 CFM56", &logs);
-        assert_eq!(config.get().engine_idle_n2, 65.0);
+        assert_eq!(config.get().engine_idle_n2, 59.0);
 
         config.with_mut(|cfg| cfg.engine_idle_n2 = 63.0);
         assert_eq!(config.get().engine_idle_n2, 63.0);

@@ -890,26 +890,44 @@ impl eframe::App for UiState {
             let engines_active = section_active(5..6);
             let gear_active = section_active(6..11);
 
+            let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
             egui::Panel::left("nav_panel")
                 .resizable(false)
-                .exact_size(150.0)
+                .exact_size(nav_panel_width)
                 .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
                 .show(ui, |ui| {
                     ui.add_space(4.0);
+                    // Кириллические подписи заметно длиннее английских, поэтому кнопка
+                    // должна переноситься на 2 строки, а не выходить за границы панели.
+                    // Индикатор активности резервирует своё место первым (через
+                    // right_to_left), чтобы кнопка получила корректную оставшуюся ширину.
                     let nav_item =
                         |ui: &mut egui::Ui, selected: bool, label: &str, active: bool| -> bool {
                             let resp = ui
                                 .horizontal(|ui| {
-                                    let r = ui.selectable_label(selected, label);
-                                    if active {
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                circle_indicator_colored(ui, Color32::WHITE, true);
-                                            },
-                                        );
-                                    }
-                                    r
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if active {
+                                                circle_indicator_colored(
+                                                    ui,
+                                                    Color32::WHITE,
+                                                    true,
+                                                );
+                                            }
+                                            ui.with_layout(
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.add(
+                                                        egui::Button::selectable(selected, label)
+                                                            .wrap(),
+                                                    )
+                                                },
+                                            )
+                                            .inner
+                                        },
+                                    )
+                                    .inner
                                 })
                                 .inner;
                             resp.clicked()
@@ -977,10 +995,11 @@ impl eframe::App for UiState {
 
             // Компактный, всегда развёрнутый Live Monitor: раньше сворачивался в
             // узкую полоску безымянных точек по умолчанию — теперь фиксированные
-            // 160px с именем + реальным %, никакого режима "просто точки".
+            // 160/220px (EN/RU) с именем + реальным %, никакого режима "просто точки".
+            let live_monitor_width = if self.lang == Lang::Ru { 220.0 } else { 160.0 };
             egui::Panel::right("live_monitor_panel")
                 .resizable(false)
-                .exact_size(160.0)
+                .exact_size(live_monitor_width)
                 .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
                 .show(ui, |ui| {
                     ui.add_space(4.0);
@@ -1001,8 +1020,9 @@ impl eframe::App for UiState {
                             } else {
                                 (palette::BORDER_ACTIVE, false)
                             };
-                            dot_indicator(ui, dot_color, filled, 8.0);
-                            ui.label(RichText::new(*name).small());
+                            // Значение резервирует место первым (right_to_left), затем
+                            // точка + имя получают оставшуюся ширину и переносятся, если
+                            // русская подпись не помещается в одну строку.
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let value_text = if *active {
                                     match pct {
@@ -1018,6 +1038,15 @@ impl eframe::App for UiState {
                                     palette::TEXT_SECONDARY
                                 };
                                 ui.colored_label(color, RichText::new(value_text).small());
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        dot_indicator(ui, dot_color, filled, 8.0);
+                                        ui.add(
+                                            egui::Label::new(RichText::new(*name).small()).wrap(),
+                                        );
+                                    },
+                                );
                             });
                         });
                     }
@@ -1042,7 +1071,7 @@ impl eframe::App for UiState {
                                     dot_indicator(ui, palette::TEXT_DISABLED, false, 8.0);
                                     ui.add_enabled(
                                         false,
-                                        egui::Label::new(RichText::new(*name).small()),
+                                        egui::Label::new(RichText::new(*name).small()).wrap(),
                                     );
                                 });
                             }
@@ -1960,6 +1989,13 @@ impl eframe::App for UiState {
 
                                                 ui.label(t.lbl_right_main);
                                                 ui.label(format!("{:.1}", v.gear_comp_right));
+                                                ui.end_row();
+
+                                                // Временная отладочная строка: сырой Fenix
+                                                // L:A320_Gear_Nose (0..1000), пока не подключим
+                                                // эффект уборки/выпуска шасси к этому борту.
+                                                ui.label("F_Gear");
+                                                ui.label(format!("{:.0}", v.fenix_gear_nose_raw));
                                                 ui.end_row();
                                                 // ------------------------------------------------
 

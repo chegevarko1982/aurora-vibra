@@ -109,6 +109,13 @@ pub fn parse_main_elems(
         eng2_pmdg_starter_ext: elem.get(56).copied().unwrap_or(0.0) != 0.0,
         eng1_starter_active: elem.get(57).copied().unwrap_or(0.0) != 0.0,
         eng2_starter_active: elem.get(58).copied().unwrap_or(0.0) != 0.0,
+        // Fenix A320: L:A320_Gear_Nose, сырая позиция носовой стойки
+        // (0 = убрано, 1000 = выпущено), см. sim/worker.rs (индекс 60).
+        // Используется эффектом Gear Transit в rumble.rs вместо
+        // gear_comp_nose/left/right (не отражают движение стоек на этом
+        // борте), см. is_fenix ниже. Также остаётся в телеметрии как "F_Gear".
+        fenix_gear_nose_raw: elem.get(60).copied().unwrap_or(0.0),
+        is_fenix: crate::profiles::is_fenix_aircraft(aircraft_title),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);
