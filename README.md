@@ -60,11 +60,15 @@ To build from source (requires the **Rust** toolchain):
 cargo build --release --bin aurora-vibra --features app
 ```
 
+The build embeds a copy of `SimConnect.dll` and extracts it at runtime as a last-resort fallback, so the binary works even where no SimConnect client library is installed — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licensing status of that file.
+
 ---
 
 ## 📌 Acknowledgments
 
 Special thanks to [Rodrigo Troncoso](https://github.com/rtroncoso) for creating the original base repository ([ursa-minor-ffb](https://github.com/rtroncoso/ursa-minor-ffb)), its foundational architecture, and the open-source codebase that made this extended and enhanced utility possible.
+
+Aurora Vibra is a **fork** of [ursa-minor-ffb](https://github.com/rtroncoso/ursa-minor-ffb), used under the MIT License. Portions of this software are Copyright (c) 2025 Rodrigo Troncoso.
 
 ## ☕ Support the Project
 
@@ -76,4 +80,6 @@ We'd be happy to receive your donation towards the project's development — add
 
 ## 📜 License
 
-Distributed under the [MIT License](LICENSE).
+Distributed under the [MIT License](LICENSE), which covers the Aurora Vibra source code and the upstream code it derives from.
+
+It does **not** cover third-party components. In particular, released binaries embed Microsoft's proprietary `SimConnect.dll` as a fallback for machines where no SimConnect client library is present; that file is governed by the [MSFS SDK EULA](https://docs.flightsimulator.com/msfs2024/html/1_Introduction/SDK_EULA.htm), not by this project's license. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full statement, including how to build without it.

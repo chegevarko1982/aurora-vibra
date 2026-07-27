@@ -298,7 +298,13 @@ fn pipeline_pause_zeros_output() {
 
 #[test]
 fn pipeline_gear_retraction_bump() {
-    let cfg = RumbleConfig::default();
+    // gear_enabled по умолчанию false (фича временно скрыта из UI, см.
+    // types.rs) — включаем явно, тест проверяет саму логику эффекта,
+    // а не значение переключателя по умолчанию.
+    let cfg = RumbleConfig {
+        gear_enabled: true,
+        ..RumbleConfig::default()
+    };
     let mut engine = RumbleEngine::new();
 
     let gear_down = elems_from_flight(150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0);

@@ -4,6 +4,15 @@ version = "4.0.1"
 edition = "2024"
 build = "src/build.rs"
 default-run = "aurora-vibra"  # Оставляем основное приложение
+description = "Tactile feedback (force feedback / rumble) and telemetry utility for Microsoft Flight Simulator"
+authors = ["chegevarko1982"]
+repository = "https://github.com/chegevarko1982/Aurora_Vibra"
+license = "MIT"
+readme = "README.md"
+
+# lib/SimConnect.dll — проприетарный компонент Microsoft (см. THIRD-PARTY-NOTICES.md),
+# его не должно быть в публикуемом архиве крейта. TXT/ — устаревшие копии исходников.
+exclude = ["lib/", "TXT/", "dist/"]
 
 [lib]
 name = "aurora_vibra"

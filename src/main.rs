@@ -89,6 +89,7 @@ fn main() -> Result<()> {
     aurora_vibra::i18n::set(lang);
     let close_to_tray = settings_file.close_to_tray;
     aurora_vibra::settings::set_close_to_tray(close_to_tray);
+    aurora_vibra::settings::set_simconnect_dll_path(settings_file.simconnect_dll_path.clone());
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
     let aircraft_profiles = Arc::new(Mutex::new(AircraftProfiles {

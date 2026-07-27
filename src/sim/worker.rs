@@ -171,19 +171,54 @@ struct SimConnectFns {
     request_system_state: Option<PfnSimConnectRequestSystemState>,
 }
 
+// Проприетарный компонент Microsoft, не покрытый MIT этого проекта —
+// см. THIRD-PARTY-NOTICES.md.
 const EMBED_SIMCONNECT_BYTES: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/lib/SimConnect.dll"));
 
+/// Пишет вшитую DLL во временный файл и грузит её оттуда.
+///
+/// Запись идёт во временное имя с последующим rename: имя результата
+/// фиксировано, и две одновременно запущенные копии приложения иначе писали бы
+/// в один и тот же файл, пока другая его уже грузит. Если файл уже на месте и
+/// совпадает по содержимому — не трогаем его вовсе: перезапись DLL, которую
+/// держит открытой соседний процесс, всё равно не удалась бы.
 fn try_load_embedded_simconnect(logs: &LogBuffer) -> Result<Library> {
-    let mut dst = std::env::temp_dir();
-    dst.push("aurora-simconnect-embedded-64.dll");
+    let dst = std::env::temp_dir().join("aurora-simconnect-embedded-64.dll");
 
-    logs.push(format!(
-        "SimConnect: writing embedded DLL to {}",
-        dst.display()
-    ));
-    std::fs::write(&dst, EMBED_SIMCONNECT_BYTES)
-        .with_context(|| format!("write {}", dst.display()))?;
+    let up_to_date = std::fs::read(&dst)
+        .map(|existing| existing == EMBED_SIMCONNECT_BYTES)
+        .unwrap_or(false);
+
+    if up_to_date {
+        logs.push(format!(
+            "SimConnect: embedded DLL already extracted at {}",
+            dst.display()
+        ));
+    } else {
+        logs.push(format!(
+            "SimConnect: writing embedded DLL to {}",
+            dst.display()
+        ));
+        let tmp = std::env::temp_dir().join(format!(
+            "aurora-simconnect-embedded-64.{}.tmp",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, EMBED_SIMCONNECT_BYTES)
+            .with_context(|| format!("write {}", tmp.display()))?;
+        if let Err(e) = std::fs::rename(&tmp, &dst) {
+            // Занят другим экземпляром — грузим из своего временного файла.
+            logs.push(format!(
+                "SimConnect: rename to {} failed ({e}), using {}",
+                dst.display(),
+                tmp.display()
+            ));
+            let lib = unsafe { Library::new(&tmp) }
+                .with_context(|| format!("Library::new({})", tmp.display()))?;
+            logs.push("SimConnect: embedded DLL loaded successfully");
+            return Ok(lib);
+        }
+    }
 
     logs.push(format!(
         "SimConnect: loading embedded DLL from {}",
@@ -228,8 +263,49 @@ fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
     }
 }
 
+/// Ищет клиентскую библиотеку SimConnect в явном порядке кандидатов.
+///
+/// Полагаться на голый `Library::new("SimConnect.dll")` недостаточно: на машине,
+/// где стоит только MSFS 2024, файла с таким именем нет нигде. Симулятор держит
+/// свою копию под именем SimConnect_internal.dll, а каталог WindowsApps закрыт
+/// ACL — поэтому «просто найдётся сам» не работает, и каждый шаг логируется,
+/// чтобы по логу было видно, что именно перепробовано.
 fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
-    logs.push("SimConnect: trying normal load (EXE dir / PATH)...");
+    // 1. Путь, указанный пользователем вручную, — имеет приоритет над всем.
+    if let Some(path) = crate::settings::simconnect_dll_path() {
+        logs.push(format!(
+            "SimConnect: trying user-configured path {}...",
+            path.display()
+        ));
+        match unsafe { Library::new(&path) } {
+            Ok(lib) => {
+                logs.push("SimConnect: loaded from user-configured path");
+                return bind_simconnect(lib);
+            }
+            Err(e) => logs.push(format!("SimConnect: user-configured path failed: {e}")),
+        }
+    }
+
+    // 2. Каталог рядом с exe — явно, не полагаясь на порядок поиска Win32.
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        let path = dir.join("SimConnect.dll");
+        if path.exists() {
+            logs.push(format!("SimConnect: trying {}...", path.display()));
+            match unsafe { Library::new(&path) } {
+                Ok(lib) => {
+                    logs.push("SimConnect: loaded from EXE directory");
+                    return bind_simconnect(lib);
+                }
+                Err(e) => logs.push(format!("SimConnect: EXE directory failed: {e}")),
+            }
+        }
+    }
+
+    // 3. Обычный поиск Win32 — PATH и системные каталоги.
+    logs.push("SimConnect: trying normal load (PATH / system dirs)...");
     match unsafe { Library::new("SimConnect.dll") } {
         Ok(lib) => {
             logs.push("SimConnect: loaded via normal search");
@@ -240,6 +316,7 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
         }
     }
 
+    // 4. Последний резерв — вшитая копия.
     let lib = try_load_embedded_simconnect(logs)
         .context("embedded SimConnect fallback was unavailable or failed to load")?;
     bind_simconnect(lib)
@@ -266,6 +343,9 @@ pub fn sim_worker(
         }
         Err(e) => {
             logs.push(format!("SimConnect: {}", e));
+            // Без этого бейдж остался бы на Disconnected — неотличимо от
+            // «симулятор не запущен», хотя перезапуск сима тут не поможет.
+            *status.lock() = SimStatus::SimConnectMissing;
             return;
         }
     };

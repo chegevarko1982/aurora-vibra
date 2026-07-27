@@ -1,4 +1,5 @@
 use crate::{RumbleConfig, aircraft_profiles::AircraftProfile, i18n::Lang};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +20,20 @@ pub fn set_close_to_tray(v: bool) {
     CLOSE_TO_TRAY.store(v, Ordering::Relaxed);
 }
 
+// Тот же приём, что и у CLOSE_TO_TRAY: путь к SimConnect.dll, выбранный
+// пользователем вручную, нужен sim::worker::load_simconnect, у которого нет
+// доступа ни к SettingsFile, ни к UiState. Путь, а не флаг, поэтому Mutex.
+static SIMCONNECT_DLL_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Путь к SimConnect.dll, указанный пользователем вручную (если указывался).
+pub fn simconnect_dll_path() -> Option<PathBuf> {
+    SIMCONNECT_DLL_PATH.lock().clone()
+}
+
+pub fn set_simconnect_dll_path(v: Option<PathBuf>) {
+    *SIMCONNECT_DLL_PATH.lock() = v;
+}
+
 /// Формат файла на диске: единый default-конфиг (для любого борта без
 /// именного профиля) плюс список именных профилей по самолётам (см.
 /// src/aircraft_profiles.rs). Старые файлы (плоский RumbleConfig, без
@@ -36,6 +51,10 @@ pub struct SettingsFile {
     // а прячется в трей (см. UiState::close_to_tray / tray.rs). По умолчанию
     // выключено — старые файлы без этого поля десериализуются в false.
     pub close_to_tray: bool,
+    // Путь к SimConnect.dll, выбранный пользователем вручную. Проверяется
+    // раньше вшитой копии — запасной выход, если та не подошла (устарела либо
+    // её забрал в карантин антивирус). None = искать обычным поиском.
+    pub simconnect_dll_path: Option<PathBuf>,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
@@ -104,6 +123,7 @@ pub fn load() -> Option<SettingsFile> {
                     profiles: Vec::new(),
                     lang: Lang::default(),
                     close_to_tray: false,
+                    simconnect_dll_path: None,
                 });
             }
         }

@@ -146,10 +146,17 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus, t: &Strings) {
         SimStatus::Disconnected => (t.disconnected, Color32::from_rgb(200, 60, 60), false),
         SimStatus::Connected => (t.connected, Color32::from_rgb(220, 180, 40), false),
         SimStatus::InFlight => (t.in_flight, Color32::from_rgb(30, 180, 90), true),
+        SimStatus::SimConnectMissing => {
+            (t.simconnect_missing, Color32::from_rgb(230, 130, 30), true)
+        }
     };
     ui.horizontal(|ui| {
         circle_indicator_colored(ui, color, filled);
-        ui.colored_label(color, text);
+        let label = ui.colored_label(color, text);
+        // Подсказка только там, где пользователю нужно что-то сделать руками.
+        if matches!(status, SimStatus::SimConnectMissing) {
+            label.on_hover_text(t.hover_simconnect_missing);
+        }
     });
 }
 
@@ -250,6 +257,7 @@ impl UiState {
             profiles: ap.profiles.clone(),
             lang: self.lang,
             close_to_tray: self.close_to_tray,
+            simconnect_dll_path: crate::settings::simconnect_dll_path(),
         });
     }
 

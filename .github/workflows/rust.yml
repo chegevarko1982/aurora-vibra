@@ -69,9 +69,14 @@ jobs:
           $zipName = "$repo-$tag-windows-x64.zip"
           $zipPath = Join-Path $dist $zipName
 
-          # Create a minimal bundle: just the EXE (rename inside zip to the nice BIN_NAME)
+          # Bundle: the EXE (renamed inside zip to the nice BIN_NAME) plus the
+          # license texts. MIT requires its notice to ship with every copy, and
+          # THIRD-PARTY-NOTICES.md covers the embedded Microsoft SimConnect.dll.
           $tmpDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "bundle") | Select-Object -ExpandProperty FullName
           Copy-Item $exePath (Join-Path $tmpDir "$($env:BIN_NAME).exe")
+          Copy-Item "LICENSE" $tmpDir
+          Copy-Item "THIRD-PARTY-NOTICES.md" $tmpDir
+          Copy-Item "README.md" $tmpDir
 
           Compress-Archive -Path (Join-Path $tmpDir "*") -DestinationPath $zipPath -Force
 
