@@ -40,29 +40,30 @@ pub struct RumbleState {
     flaps_active_until: f64,
     // Ground Roll (физическая модель удара о стыки плит) tracking
     thump_last_time_s: f64,
-    // Touchdown fade-in tracking: момент касания земли (переход airborne -> on_ground),
-    // используется, чтобы Ground Roll плавно нарастал и не маскировал резкий
-    // удар обжатия стоек в момент касания.
+    // Touchdown settle window tracking: момент касания земли (переход airborne
+    // -> on_ground), используется, чтобы ВЕСЬ фон эффектов (кроме Stall — см.
+    // touchdown_fade_in в step()) плавно нарастал и не маскировал резкий удар
+    // обжатия стоек в момент касания.
     prev_on_ground: bool,
     touchdown_time_s: f64,
     // Момент, когда ГАРАНТИРОВАННО отгремели удары обжатия ВСЕХ стоек (нос +
     // лево + право), которые успели сработать к этому моменту. Обновляется
     // через .max() при каждом новом срабатывании стойки (t0 + её длительность
     // импульса), поэтому всегда указывает на конец САМОГО ПОЗДНЕГО из ударов.
-    // Ground Roll использует его (а не сырой touchdown_time_s) как точку
-    // отсчёта для fade-in — так удар стоек НИКОГДА не смешивается с гулом
-    // стыков плит, даже если стойки коснулись не одновременно (нос/лево/право
-    // порознь на "трёхточечной" посадке).
+    // touchdown_fade_in в step() использует его (а не сырой touchdown_time_s)
+    // как точку отсчёта — так удар стоек НИКОГДА не смешивается с фоном
+    // остальных эффектов, даже если стойки коснулись не одновременно
+    // (нос/лево/право порознь на "трёхточечной" посадке).
     touchdown_settle_until: f64,
     // Флаги "стойка уже коснулась ХОТЯ БЫ РАЗ с момента этого захода на
     // посадку" (сбрасываются на фронте airborne -> on_ground, см. рядом с
-    // touchdown_time_s). Нужны, чтобы Ground Roll НЕ начинал fade-in, пока
+    // touchdown_time_s). Нужны, чтобы touchdown_fade_in НЕ открывался, пока
     // основные стойки уже обжаты, а носовая ЕЩЁ в воздухе (типичная ситуация:
     // самолёт садится на два колеса, затем ещё 1-3с доопускает нос) — иначе
-    // гул стыков плит успевал бы разогнаться ДО касания носа и маскировать
-    // её отдельный удар. См. GROUND_ROLL_WAIT_TIMEOUT_S в step() — таймаут-
-    // предохранитель на случай, если у борта нет рабочей телеметрии по
-    // носовой стойке (не даёт Ground Roll молчать вечно).
+    // фон остальных эффектов успевал бы разогнаться ДО касания носа и
+    // маскировать её отдельный удар. См. TOUCHDOWN_SETTLE_TIMEOUT_S в step() —
+    // таймаут-предохранитель на случай, если у борта нет рабочей телеметрии по
+    // носовой стойке (не даёт фону молчать вечно).
     nose_touched_since_air: bool,
     left_touched_since_air: bool,
     right_touched_since_air: bool,
@@ -462,6 +463,39 @@ impl RumbleEngine {
         }
         s.prev_sim_time_s = fv.sim_time_s;
 
+        // ═══════════════════════════════════════════════════════════════════
+        // TOUCHDOWN SETTLE WINDOW — общий гейт для ВСЕГО фона эффектов (двигатели,
+        // Ground Roll, Spoilers, Flaps, Gear Transit, крен и т.д.), кроме Stall.
+        //
+        // С момента первого касания земли и пока хотя бы одна из ВКЛЮЧЁННЫХ
+        // стоек ещё не коснулась — весь этот фон приглушён (fade=0), чтобы удар
+        // обжатия стойки (touchdown_override_j/t_left/t_right — отдельный
+        // абсолютный оверрайд, см. блок ниже) не смешивался и не тонул в сумме
+        // остальных эффектов. Открывается плавно за 0.75с ПОСЛЕ того, как
+        // отгремела ПОСЛЕДНЯЯ из сработавших стоек (нос/лево/право касаются не
+        // одновременно на "трёхточечной" посадке — нос ещё 1-3с висит в воздухе
+        // после обжатия основных стоек), либо — предохранитель на случай борта
+        // без рабочей телеметрии по одной из стоек — не позже
+        // TOUCHDOWN_SETTLE_TIMEOUT_S с момента самого первого касания.
+        //
+        // Stall сюда намеренно не входит: это предупреждение о сваливании,
+        // а не фоновый эффект — он применяется отдельно, СВОИМ ceiling-
+        // оверрайдом уже ПОСЛЕ этого гейта (см. dt_.stall ниже), и никогда не
+        // приглушается.
+        const TOUCHDOWN_SETTLE_TIMEOUT_S: f64 = 10.0;
+        let all_struts_settled = !cfg.gear_comp_enabled
+            || ((!cfg.gear_comp_nose_enabled || s.nose_touched_since_air)
+                && (!cfg.gear_comp_left_enabled || s.left_touched_since_air)
+                && (!cfg.gear_comp_right_enabled || s.right_touched_since_air));
+        let touchdown_timeout_elapsed =
+            fv.sim_time_s - s.touchdown_time_s >= TOUCHDOWN_SETTLE_TIMEOUT_S;
+        let touchdown_fade_anchor = s.touchdown_settle_until.max(s.touchdown_time_s);
+        let touchdown_fade_in = if all_struts_settled || touchdown_timeout_elapsed {
+            ((fv.sim_time_s - touchdown_fade_anchor) / 0.75).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
         // =========================================================================
         // БЛОК ЗАКРЫЛКОВ (FLAPS MOTOR HUM)
         // =========================================================================
@@ -644,49 +678,14 @@ impl RumbleEngine {
 
             // 5. Окно удара. Если период короче длительности импульса — удары сливаются
             // в сплошной гул (актуально на высоких скоростях рулёжки/разбега).
+            //
+            // Fade-in после касания (touchdown_fade_in) больше НЕ считается здесь
+            // локально — это общий гейт для ВСЕГО фона эффектов (см. TOUCHDOWN
+            // SETTLE WINDOW сразу после блока детекции обжатия стоек выше),
+            // применяется один раз при сведении total_j/t_left/t_right ниже, а не
+            // отдельно для Ground Roll.
             if time_since_last_thump < thump_duration_s || target_period_s <= thump_duration_s {
-                // Fade-in после касания: 0.0 пока ещё гремит хотя бы один удар обжатия
-                // стойки -> 1.0 через 750мс ПОСЛЕ того, как отгремела ПОСЛЕДНЯЯ из них.
-                // Точка отсчёта — s.touchdown_settle_until (максимум по всем трём
-                // стойкам, см. комментарий у поля), а не сырой момент касания земли:
-                // стойки касаются не одновременно (нос/лево/право порознь на
-                // "трёхточечной" посадке), поэтому фиксированный рамп от общего
-                // on_ground-фронта мог начать нарастать ДО того, как прогремел
-                // удар последней стойки, и они смешивались. Пока settle_until в
-                // будущем — разница отрицательна и clamp(0.0, 1.0) даёт строгий 0,
-                // то есть Ground Roll полностью молчит на всё время ударов стоек.
-                // .max(s.touchdown_time_s) — подстраховка на случай, если gear_comp
-                // выключен/не сработал: тогда fade-in идёт по старой схеме от факта
-                // касания земли.
-                //
-                // ВАЖНО: одного touchdown_settle_until недостаточно — он знает только
-                // про стойки, которые УЖЕ коснулись. При посадке на два колеса нос
-                // ещё 1-3с висит в воздухе (доопускание после флэра), а settle_until
-                // в это время уже "протух" (обжатие основных стоек давно отгремело),
-                // из-за чего Ground Roll успевал разогнаться ДО касания носа и
-                // маскировать её отдельный удар — та же проблема, которую мы решали,
-                // просто на уровне "нос vs основные", а не "стойки vs гул". Поэтому
-                // fade-in дополнительно ждёт, пока коснутся ВСЕ включённые стойки
-                // (nose_touched_since_air и т.д.), либо — предохранитель на случай
-                // борта без рабочей телеметрии по носовой стойке — не более
-                // GROUND_ROLL_WAIT_TIMEOUT_S с момента первого касания земли.
-                const GROUND_ROLL_WAIT_TIMEOUT_S: f64 = 10.0;
-                let all_struts_settled = !cfg.gear_comp_enabled
-                    || ((!cfg.gear_comp_nose_enabled || s.nose_touched_since_air)
-                        && (!cfg.gear_comp_left_enabled || s.left_touched_since_air)
-                        && (!cfg.gear_comp_right_enabled || s.right_touched_since_air));
-                let touchdown_timeout_elapsed =
-                    fv.sim_time_s - s.touchdown_time_s >= GROUND_ROLL_WAIT_TIMEOUT_S;
-
-                let fade_anchor = s.touchdown_settle_until.max(s.touchdown_time_s);
-                let time_since_fade_anchor = fv.sim_time_s - fade_anchor;
-                let touchdown_fade_in = if all_struts_settled || touchdown_timeout_elapsed {
-                    (time_since_fade_anchor / 0.75).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-
-                let raw_term = (thump_amplitude * amplitude_curve * touchdown_fade_in)
+                let raw_term = (thump_amplitude * amplitude_curve)
                     .clamp(GROUND_THUMP_PEAK_MIN, GROUND_THUMP_PEAK_MAX);
                 if dt_.ground_roll.enable_joystick {
                     ground_term_j = raw_term;
@@ -1713,6 +1712,17 @@ impl RumbleEngine {
             + transients_t_right
             + bank_term_t
             + spoilers_term_t;
+
+        // TOUCHDOWN SETTLE WINDOW (см. touchdown_fade_in выше, сразу после
+        // детекции обжатия стоек): приглушает ВЕСЬ фон (двигатели, Ground
+        // Roll, Spoilers, Flaps, Gear Transit, крен) до 0, пока не улягутся
+        // все включённые стойки (или не истечёт TOUCHDOWN_SETTLE_TIMEOUT_S).
+        // Stall НЕ входит сюда — его ceiling-оверрайд применяется СРАЗУ ЖЕ
+        // после, поверх уже приглушённого total_j/t_left/t_right, и всегда
+        // гарантированно восстанавливает полную силу через .max(ceiling).
+        total_j *= touchdown_fade_in;
+        total_t_left *= touchdown_fade_in;
+        total_t_right *= touchdown_fade_in;
 
         if cfg.stall_enabled && fv.stalled {
             let ceiling = cfg.stall_ceiling as f64;

@@ -297,7 +297,7 @@ pub const EN: Strings = Strings {
 
     heading_gear_comp: "Gear Strut Compression (Touchdown)",
     chk_enabled: "Enabled",
-    hover_headroom: "0% = fixed impact strength on any landing. 100% = the harder the landing, the stronger the impact",
+    hover_headroom: "Sets the ceiling, not the strength: every touchdown is guaranteed a 200/255 jolt no matter what. 0% keeps the ceiling at 200 too (every landing feels the same). 100% raises the ceiling to 255 — a hard landing can reach it, but a soft one still lands near 200 either way",
     name_nose_peak: "Nose Peak",
     name_left_peak: "Left Peak",
     name_right_peak: "Right Peak",
@@ -456,7 +456,7 @@ pub const RU: Strings = Strings {
 
     heading_gear_comp: "Сжатие стоек шасси (касание)",
     chk_enabled: "Включено",
-    hover_headroom: "0% = фиксированная сила удара при любой посадке. 100% = чем жёстче посадка, тем сильнее удар",
+    hover_headroom: "Задаёт потолок, а не саму силу: любая посадка гарантированно бьёт на 200/255. 0% держит потолок тоже на 200 (все посадки ощущаются одинаково). 100% поднимает потолок до 255 — жёсткая посадка может его достичь, но мягкая всё равно останется около 200",
     name_nose_peak: "Носовая стойка",
     name_left_peak: "Левая стойка",
     name_right_peak: "Правая стойка",

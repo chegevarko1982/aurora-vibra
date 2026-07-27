@@ -371,12 +371,12 @@ impl Default for RumbleConfig {
 
             gear_comp_enabled: true,
             gear_comp_nose_enabled: true,
-            gear_comp_nose_peak: 25.0, // запас 0..55 над полом 200 → факт. 200..225..255
+            gear_comp_nose_peak: 55.0, // 100% в UI: запас 0..55 над полом 200 → факт. 200..255
             gear_comp_left_enabled: true,
-            gear_comp_left_peak: 30.0,
+            gear_comp_left_peak: 55.0,
             gear_comp_right_enabled: true,
             gear_transit_enabled: true,
-            gear_comp_right_peak: 30.0,
+            gear_comp_right_peak: 55.0,
             split_touchdown: false,
             joystick_hw_connected: true,
             throttle_hw_connected: true,
