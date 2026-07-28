@@ -149,6 +149,19 @@ impl Dashboard {
         }
         let _ = writeln!(out);
 
+        let _ = writeln!(out, "-- Стрельба (weapon* из /indicators) --");
+        let weapons = weapon_fields(&snap.flat_indicators);
+        if weapons.is_empty() {
+            let _ = writeln!(out, "  (нет полей weapon* — /indicators ещё не поднялся)");
+        } else {
+            for (key, value) in &weapons {
+                let firing = *value >= 0.5;
+                let label = weapon_label(key);
+                let _ = writeln!(out, "  {label:<12} {}", if firing { "ОГОНЬ" } else { "-" });
+            }
+        }
+        let _ = writeln!(out);
+
         let _ = writeln!(
             out,
             "-- /state: все поля (сырой ключ -> расшифровка -> значение) --"
@@ -198,6 +211,30 @@ fn write_decoded_fields(out: &mut String, fields: &BTreeMap<String, Value>) {
         let decoded = interesting::decode_key(key).unwrap_or("—");
         let _ = writeln!(out, "  {key:<32} {decoded:<32} = {value}");
     }
+}
+
+/// Числовые поля /indicators, чьё имя содержит "weapon" (weapon1, weapon2,
+/// ...) — по живой сессии подтверждено, что это флаг "гашетка нажата"
+/// (0.0/1.0), а не счётчик боекомплекта: значение стоит на 1.0 ровно на
+/// время удержания триггера и падает обратно на 0.0 сразу после отпускания.
+/// Отдельная функция (не спрятана внутри format()), чтобы GUI мог взять то
+/// же самое для крупного цветного индикатора, не разбирая текст панели.
+pub fn weapon_fields(flat_indicators: &BTreeMap<String, Value>) -> Vec<(String, f64)> {
+    flat_indicators
+        .iter()
+        .filter(|(k, _)| k.to_lowercase().contains("weapon"))
+        .filter_map(|(k, v)| v.as_f64().map(|n| (k.clone(), n)))
+        .collect()
+}
+
+/// Человекочитаемая подпись для ключа из `weapon_fields`: "weapon1" ->
+/// "Оружие 1" и т.д. Раз запросили именно так — раз-два, без общей
+/// "Боеприпасы (по имени)" категории из interesting.rs, у неё смысл шире.
+pub fn weapon_label(key: &str) -> String {
+    key.strip_prefix("weapon")
+        .filter(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+        .map(|n| format!("Оружие {n}"))
+        .unwrap_or_else(|| key.to_string())
 }
 
 fn human_bytes(bytes: u64) -> String {

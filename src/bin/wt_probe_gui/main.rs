@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use aurora_vibra::wt_probe::dashboard::Dashboard;
+use aurora_vibra::wt_probe::dashboard::{self, Dashboard};
 use aurora_vibra::wt_probe::http::WtClient;
 use aurora_vibra::wt_probe::model::{Endpoint, PollOutcome};
 use aurora_vibra::wt_probe::shared::{Shared, SharedHandle};
@@ -71,6 +71,10 @@ struct RunningSession {
     dashboard_hz: f64,
     cached_text: String,
     last_render: Instant,
+    /// Состояние полей weapon1/weapon2 — читается каждый кадр отдельно от
+    /// cached_text (который перестраивается не чаще dashboard_hz), чтобы
+    /// цветной индикатор стрельбы реагировал без задержки панели.
+    weapon_states: Vec<(String, f64)>,
     session_path: Option<PathBuf>,
     events_path: Option<PathBuf>,
     schema_path: PathBuf,
@@ -234,6 +238,7 @@ impl App {
             dashboard_hz: self.config.dashboard_hz.max(0.1),
             cached_text: String::new(),
             last_render: Instant::now() - Duration::from_secs(3600),
+            weapon_states: Vec::new(),
             session_path,
             events_path,
             schema_path,
@@ -400,6 +405,42 @@ impl eframe::App for App {
             ui.separator();
 
             if let Some(session) = self.session.as_mut() {
+                // Читается каждый кадр отдельно от cached_text (тот
+                // перестраивается не чаще dashboard_hz) — индикатор стрельбы
+                // должен реагировать без задержки панели.
+                session.weapon_states = {
+                    let s = session.shared.lock().unwrap_or_else(|e| e.into_inner());
+                    s.last_flat
+                        .get(&Endpoint::Indicators)
+                        .map(dashboard::weapon_fields)
+                        .unwrap_or_default()
+                };
+                if !session.weapon_states.is_empty() {
+                    ui.horizontal(|ui| {
+                        for (key, value) in &session.weapon_states {
+                            let firing = *value >= 0.5;
+                            let color = if firing {
+                                egui::Color32::from_rgb(230, 50, 50)
+                            } else {
+                                egui::Color32::from_rgb(120, 120, 120)
+                            };
+                            let badge = if firing {
+                                "● ОГОНЬ"
+                            } else {
+                                "○ тишина"
+                            };
+                            let label = dashboard::weapon_label(key);
+                            ui.label(
+                                egui::RichText::new(format!("{label}: {badge}"))
+                                    .size(20.0)
+                                    .strong()
+                                    .color(color),
+                            );
+                        }
+                    });
+                    ui.separator();
+                }
+
                 if session.last_render.elapsed().as_secs_f64() >= 1.0 / session.dashboard_hz {
                     session.cached_text = session.dashboard.format_text(&session.shared);
                     session.last_render = Instant::now();
