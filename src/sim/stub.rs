@@ -8,6 +8,9 @@ use crate::{
     aircraft_profiles::AircraftProfiles, profiles::ProfileState,
 };
 
+// Сигнатура обязана совпадать с windows-версией в worker.rs (тот же
+// #[allow] стоит и там): вызывающий код в main.rs один на обе платформы.
+#[allow(clippy::too_many_arguments)]
 pub fn sim_worker(
     _last_vars: Arc<Mutex<Option<FlightVars>>>,
     _tx_hid: Sender<HidCmd>,
