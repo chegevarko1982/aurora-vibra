@@ -9,7 +9,6 @@ use crate::{ConfigShared, LogBuffer, RumbleConfig};
 pub struct AircraftOverrides {
     pub spoilers_threshold_pct: Option<f64>,
     pub engine_idle_n2: Option<f32>,
-    pub flaps_track_slats: Option<bool>,
     pub overspeed_lear_horn_enabled: Option<bool>,
 }
 
@@ -36,13 +35,6 @@ const BUILT_IN_PROFILES: &[BuiltInProfile] = &[
             spoilers_threshold_pct: Some(12.0),
             // MADDOG выходит на Idle при N2 ≈ 57.8%, а не при дефолтных 60%.
             engine_idle_n2: Some(57.0),
-            // На MADDOG предкрылки убираются не одновременно с закрылками —
-            // они держатся выпущенными до ПОСЛЕДНЕГО щелчка ручки закрылков
-            // (когда flaps_pct уже 0), и только тогда падают в 0. Если
-            // ловить движение только по flaps_pct, это последнее движение
-            // ручки (реальная работа мотора) останется без эффекта — поэтому
-            // для этого борта дополнительно следим за slats_pct.
-            flaps_track_slats: Some(true),
             overspeed_lear_horn_enabled: None,
         },
     },
@@ -52,7 +44,6 @@ const BUILT_IN_PROFILES: &[BuiltInProfile] = &[
         overrides: AircraftOverrides {
             spoilers_threshold_pct: None,
             engine_idle_n2: None,
-            flaps_track_slats: None,
             // Экспериментально: на Flysimware Learjet 35A дополнительно
             // используем L:XMLSND75 (клаксон "overspeed / mach trim" из
             // sound.xml аддона) как альтернативный триггер эффекта Overspeed
@@ -71,7 +62,6 @@ const BUILT_IN_PROFILES: &[BuiltInProfile] = &[
             // дефолтных 60% (по сравнению с IAE-вариантом ниже — другой
             // двигатель, другая idle N2).
             engine_idle_n2: Some(59.0),
-            flaps_track_slats: None,
             overspeed_lear_horn_enabled: None,
         },
     },
@@ -82,7 +72,6 @@ const BUILT_IN_PROFILES: &[BuiltInProfile] = &[
             spoilers_threshold_pct: None,
             // Fenix A320 IAE V2500: выходит на Idle при N2 ≈ 70%.
             engine_idle_n2: Some(70.0),
-            flaps_track_slats: None,
             overspeed_lear_horn_enabled: None,
         },
     },
@@ -182,9 +171,6 @@ fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
     if let Some(v) = overrides.engine_idle_n2 {
         cfg.engine_idle_n2 = v;
     }
-    if let Some(v) = overrides.flaps_track_slats {
-        cfg.flaps_track_slats = v;
-    }
     if let Some(v) = overrides.overspeed_lear_horn_enabled {
         cfg.overspeed_lear_horn_enabled = v;
     }
@@ -201,7 +187,7 @@ fn apply(cfg: &mut RumbleConfig, overrides: &AircraftOverrides) {
 pub struct ProfileState {
     // Значения полей ДО применения текущего оверрайда — восстанавливаются,
     // когда борт больше не подпадает ни под один встроенный профиль.
-    base: Option<(f64, f32, bool, bool)>,
+    base: Option<(f64, f32, bool)>,
 }
 
 impl ProfileState {
@@ -219,7 +205,7 @@ impl ProfileState {
     }
 
     /// Возвращает копию cfg, где поля, которые мог переписать встроенный
-    /// оверлей (spoilers_threshold_pct, engine_idle_n2, flaps_track_slats,
+    /// оверлей (spoilers_threshold_pct, engine_idle_n2,
     /// overspeed_lear_horn_enabled), возвращены к "базовым" значениям, если
     /// такой оверлей сейчас активен. Вызывается перед сохранением на диск
     /// (см. aircraft_profiles::save_active), чтобы значения, зашитые под
@@ -227,16 +213,11 @@ impl ProfileState {
     /// у ProfileState выше).
     pub fn sanitize_for_save(&self, cfg: &RumbleConfig) -> RumbleConfig {
         let mut out = cfg.clone();
-        if let Some((
-            spoilers_threshold_pct,
-            engine_idle_n2,
-            flaps_track_slats,
-            overspeed_lear_horn_enabled,
-        )) = self.base
+        if let Some((spoilers_threshold_pct, engine_idle_n2, overspeed_lear_horn_enabled)) =
+            self.base
         {
             out.spoilers_threshold_pct = spoilers_threshold_pct;
             out.engine_idle_n2 = engine_idle_n2;
-            out.flaps_track_slats = flaps_track_slats;
             out.overspeed_lear_horn_enabled = overspeed_lear_horn_enabled;
         }
         out
@@ -251,7 +232,6 @@ impl ProfileState {
                         self.base = Some((
                             cfg.spoilers_threshold_pct,
                             cfg.engine_idle_n2,
-                            cfg.flaps_track_slats,
                             cfg.overspeed_lear_horn_enabled,
                         ));
                     }
@@ -263,17 +243,12 @@ impl ProfileState {
                 ));
             }
             None => {
-                if let Some((
-                    spoilers_threshold_pct,
-                    engine_idle_n2,
-                    flaps_track_slats,
-                    overspeed_lear_horn_enabled,
-                )) = self.base.take()
+                if let Some((spoilers_threshold_pct, engine_idle_n2, overspeed_lear_horn_enabled)) =
+                    self.base.take()
                 {
                     config.with_mut(|cfg| {
                         cfg.spoilers_threshold_pct = spoilers_threshold_pct;
                         cfg.engine_idle_n2 = engine_idle_n2;
-                        cfg.flaps_track_slats = flaps_track_slats;
                         cfg.overspeed_lear_horn_enabled = overspeed_lear_horn_enabled;
                     });
                     logs.push(

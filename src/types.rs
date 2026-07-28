@@ -281,12 +281,6 @@ pub struct RumbleConfig {
     pub flaps_enabled: bool,
     pub gear_enabled: bool,
     pub stall_enabled: bool,
-    // На некоторых бортах (см. src/profiles.rs, MADDOG) предкрылки убираются
-    // отдельным, более поздним движением ручки, чем закрылки — flaps_pct уже
-    // 0, когда slats_pct только падает в 0. Этот флаг включается автоматически
-    // встроенным профилем самолёта (не предназначен для ручного переключения
-    // в UI) и заставляет motor-hum дополнительно ловить движение по slats_pct.
-    pub flaps_track_slats: bool,
 
     // Spoilers settings
     pub spoilers_enabled: bool,
@@ -377,7 +371,6 @@ impl Default for RumbleConfig {
             flaps_enabled: true,
             gear_enabled: false, // "Landing Gear (bump)" — временно отключён и скрыт из UI, см. ui.rs
             stall_enabled: true,
-            flaps_track_slats: false,
 
             spoilers_enabled: true,
             spoilers_threshold_pct: 10.0,

@@ -125,14 +125,13 @@ fn pipeline_flaps_pct_subpercent_jitter_does_not_sustain_hum_forever() {
 }
 
 #[test]
-fn pipeline_maddog_slats_retract_after_flaps_reach_zero() {
-    // Особенность MADDOG: предкрылки (slats) убираются отдельным, ПОСЛЕДНИМ
-    // движением ручки закрылков — flaps_pct к этому моменту уже 0, и меняется
-    // только slats_pct. Это реальная работа мотора, и она должна давать
-    // motor-hum, но только когда борт распознан как MADDOG и профиль включил
-    // cfg.flaps_track_slats (см. src/profiles.rs).
-    let mut cfg = RumbleConfig::default();
-    cfg.flaps_track_slats = true;
+fn pipeline_slats_retract_after_flaps_reach_zero() {
+    // Особенность MADDOG (и, вероятно, других бортов): предкрылки (slats)
+    // убираются отдельным, ПОСЛЕДНИМ движением ручки закрылков — flaps_pct к
+    // этому моменту уже 0, и меняется только slats_pct. Это реальная работа
+    // мотора и она должна давать motor-hum на ЛЮБОМ борте, независимо от
+    // профиля — slats_pct отслеживается безусловно (см. rumble.rs).
+    let cfg = RumbleConfig::default();
     let mut engine = RumbleEngine::new();
 
     // Закрылки и предкрылки уже некоторое время стоят неподвижно: flaps=0,
@@ -158,36 +157,99 @@ fn pipeline_maddog_slats_retract_after_flaps_reach_zero() {
     let out = engine.step(&retract_fv, &cfg, 1, false);
     assert!(
         out.effects.flaps_bump_active,
-        "slats reaching 0 after flaps already at 0 must still trigger the motor hum on MADDOG"
+        "slats reaching 0 after flaps already at 0 must still trigger the motor hum"
     );
 }
 
 #[test]
-fn pipeline_slats_change_ignored_without_flaps_track_slats() {
-    // Без включённого профилем флага (обычный борт) движение slats_pct НЕ
-    // должно влиять на эффект закрылков — иначе он ложно сработает на любом
-    // самолёте, где leading edge flaps телеметрия просто существует.
+fn pipeline_slats_extend_before_flaps_move() {
+    // Другой распространённый порядок: предкрылки выпускаются ПЕРВЫМ щелчком
+    // ручки закрылков, пока flaps_pct ещё 0 (закрылки идут следом или вовсе
+    // отдельным движением). Это тоже реальная работа мотора и должна давать
+    // motor-hum сразу, как только slats_pct трогается с места.
     let cfg = RumbleConfig::default();
-    assert!(!cfg.flaps_track_slats);
     let mut engine = RumbleEngine::new();
 
     let steady_fv = FlightVars {
         flaps_pct: 0.0,
-        slats_pct: 27.0,
+        slats_pct: 0.0,
         sim_time_s: 0.0,
         ..Default::default()
     };
     let _ = engine.step(&steady_fv, &cfg, 1, false);
-    let _ = engine.step(&steady_fv, &cfg, 1, false);
+    let steady_out = engine.step(&steady_fv, &cfg, 1, false);
+    assert!(!steady_out.effects.flaps_bump_active);
 
-    let retract_fv = FlightVars {
+    let extend_fv = FlightVars {
         flaps_pct: 0.0,
-        slats_pct: 0.0,
+        slats_pct: 27.0,
         sim_time_s: 0.15,
         ..Default::default()
     };
-    let out = engine.step(&retract_fv, &cfg, 1, false);
-    assert!(!out.effects.flaps_bump_active);
+    let out = engine.step(&extend_fv, &cfg, 1, false);
+    assert!(
+        out.effects.flaps_bump_active,
+        "slats moving off 0 before flaps_pct changes must still trigger the motor hum"
+    );
+}
+
+#[test]
+fn pipeline_slats_pct_dither_after_stop_does_not_sustain_hum_forever() {
+    // На некоторых бортах именно slats_pct (не flaps_pct) после полной
+    // остановки предкрылков дребезжит в пределах нескольких целых процентов
+    // вокруг точки покоя (например 38/39/40 туда-обратно каждый кадр) —
+    // округление тут не спасает, т.к. значения и так целые, и без клиренса
+    // (slats_pct_changed / SLATS_PCT_DITHER_TOLERANCE в rumble.rs) это
+    // выглядело бы как непрекращающийся motor-hum. flaps_pct держим
+    // неподвижным: клиренс применяется только к slats.
+    let cfg = RumbleConfig::default();
+    let mut engine = RumbleEngine::new();
+
+    let steady_fv = FlightVars {
+        flaps_pct: 0.0,
+        slats_pct: 0.0,
+        sim_time_s: 0.0,
+        ..Default::default()
+    };
+    let _ = engine.step(&steady_fv, &cfg, 1, false);
+
+    // Реальное выпускание предкрылков (далеко за пределы клиренса) обязано
+    // сработать как обычно.
+    let real_move_fv = FlightVars {
+        flaps_pct: 0.0,
+        slats_pct: 40.0,
+        sim_time_s: 0.05,
+        ..Default::default()
+    };
+    let out = engine.step(&real_move_fv, &cfg, 1, false);
+    assert!(
+        out.effects.flaps_bump_active,
+        "a real slats extension well beyond the dither tolerance must still trigger the motor hum"
+    );
+
+    // ...после чего предкрылки встали на 40%, но телеметрия дребезжит в
+    // пределах ±2% (38/39/40/41/42) каждый кадр в течение ~10с
+    // симулированного времени — заведомо дольше flaps_bump_duration_s +
+    // время затухания.
+    let mut sim_time = 0.1;
+    let mut still_active = true;
+    for i in 0..200 {
+        let dithered_pct = 40.0 + [0.0, -1.0, 1.0, -2.0, 2.0][i % 5];
+        let fv = FlightVars {
+            flaps_pct: 0.0,
+            slats_pct: dithered_pct,
+            sim_time_s: sim_time,
+            ..Default::default()
+        };
+        let out = engine.step(&fv, &cfg, 1, false);
+        still_active = out.effects.flaps_bump_active;
+        sim_time += 0.05;
+    }
+
+    assert!(
+        !still_active,
+        "flaps motor hum must eventually stop even while slats_pct dithers within tolerance at rest"
+    );
 }
 
 #[test]

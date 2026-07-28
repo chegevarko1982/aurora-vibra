@@ -34,8 +34,14 @@ pub struct RumbleState {
     // step()). i32::MIN — сентинел "ещё не видели ни одного кадра", чтобы
     // самый первый кадр не считался "изменением" от 0.
     last_flaps_pct_rounded: i32,
-    // Аналогично last_flaps_pct_rounded, но для slats_pct — используется
-    // только когда cfg.flaps_track_slats включён профилем самолёта.
+    // Аналогично last_flaps_pct_rounded, но для slats_pct — предкрылки на
+    // многих бортах двигаются независимо от закрылков (выпускаются первым
+    // щелчком ручки, пока flaps_pct ещё 0, либо убираются последним, когда
+    // flaps_pct уже 0), поэтому отслеживается всегда, для любого самолёта.
+    // Хранит последнее ПОДТВЕРЖДЁННОЕ значение — см. slats_pct_changed:
+    // на некоторых бортах именно slats_pct дребезжит на несколько процентов
+    // после полной остановки, поэтому в отличие от flaps_pct сравнение идёт
+    // не "изменилось хоть на 1%", а "вышло за пределы клиренса ±2%".
     last_slats_pct_rounded: i32,
     flaps_active_until: f64,
     // Ground Roll (физическая модель удара о стыки плит) tracking
@@ -269,6 +275,36 @@ pub struct RumbleOutput {
     pub throttle_left_intensity: u8,
     pub throttle_right_intensity: u8,
     pub effects: EffectsSnapshot,
+}
+
+/// Клиренс (в целых процентах) для детекции движения slats_pct — см.
+/// slats_pct_changed. Только slats, а не flaps: именно предкрылки — источник
+/// репортов о дребезге телеметрии после полной остановки на некоторых бортах;
+/// flaps_pct таких проблем не показывал, так что для него сравнение
+/// по-прежнему строится на "изменилось хоть на 1%" (см. pct_changed в step()).
+const SLATS_PCT_DITHER_TOLERANCE: i32 = 2;
+
+/// Подтверждает изменение округлённого slats_pct, но только если новое
+/// значение отличается от последнего ПОДТВЕРЖДЁННОГО больше, чем на
+/// SLATS_PCT_DITHER_TOLERANCE процентов. На некоторых бортах slats_pct после
+/// полной остановки предкрылков дребезжит в пределах нескольких процентов
+/// вокруг точки покоя — без такого клиренса любое из этих колебаний
+/// засчитывалось бы как движение мотора, и эффект не смолкал никогда.
+/// Настоящий ход предкрылков (десятки процентов за раз, либо накопление за
+/// несколько кадров плавной анимации) всегда переступает этот порог и ловится
+/// как обычно. `stable` — последнее подтверждённое значение (i32::MIN =
+/// кадров ещё не было).
+fn slats_pct_changed(stable: &mut i32, raw: i32) -> bool {
+    if *stable == i32::MIN {
+        *stable = raw;
+        return false;
+    }
+    if (raw - *stable).abs() > SLATS_PCT_DITHER_TOLERANCE {
+        *stable = raw;
+        true
+    } else {
+        false
+    }
 }
 
 pub struct RumbleEngine {
@@ -572,16 +608,20 @@ impl RumbleEngine {
         let flaps_pct_rounded = fv.flaps_pct.round() as i32;
         let pct_changed =
             s.last_flaps_pct_rounded != i32::MIN && s.last_flaps_pct_rounded != flaps_pct_rounded;
+        s.last_flaps_pct_rounded = flaps_pct_rounded;
 
-        // На некоторых бортах (см. cfg.flaps_track_slats, MADDOG — включается
-        // автоматически встроенным профилем по aircraft title) предкрылки
-        // убираются отдельным, последним движением ручки закрылков, когда
-        // flaps_pct УЖЕ 0 — само это движение (реальная работа мотора) видно
-        // только по смене slats_pct, поэтому дополнительно следим и за ним.
+        // Закрылки и предкрылки на разных бортах ходят по-разному: где-то
+        // предкрылки выпускаются/убираются одновременно с закрылками, а
+        // где-то — отдельным движением ручки (например MADDOG: предкрылки
+        // убираются ПОСЛЕДНИМ щелчком, когда flaps_pct УЖЕ 0). В обоих
+        // случаях это реальная работа мотора, а видно её только по смене
+        // slats_pct, поэтому следим за ним наравне с flaps_pct, для любого
+        // самолёта. slats_pct_changed (в отличие от простого сравнения выше)
+        // применяет клиренс ±SLATS_PCT_DITHER_TOLERANCE — на некоторых бортах
+        // именно slats_pct дребезжит на несколько процентов ПОСЛЕ полной
+        // остановки предкрылков, и без клиренса эффект не смолкал никогда.
         let slats_pct_rounded = fv.slats_pct.round() as i32;
-        let slats_changed = cfg.flaps_track_slats
-            && s.last_slats_pct_rounded != i32::MIN
-            && s.last_slats_pct_rounded != slats_pct_rounded;
+        let slats_changed = slats_pct_changed(&mut s.last_slats_pct_rounded, slats_pct_rounded);
 
         // Держим "мотор" включённым СТРОГО на время реального изменения
         // телеметрии + минимальный запас (cfg.flaps_bump_duration_s, по
@@ -593,8 +633,6 @@ impl RumbleEngine {
         if pct_changed || slats_changed {
             s.flaps_active_until = fv.sim_time_s + cfg.flaps_bump_duration_s.max(0.05);
         }
-        s.last_flaps_pct_rounded = flaps_pct_rounded;
-        s.last_slats_pct_rounded = slats_pct_rounded;
 
         let flaps_is_moving = fv.sim_time_s < s.flaps_active_until;
 
