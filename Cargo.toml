@@ -100,6 +100,11 @@ dev-tools = []
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 chrono = "0.4"
+# Не в cfg(windows): settings.rs / types.rs / i18n.rs / aircraft_profiles.rs —
+# кроссплатформенные модули, и они сериализуются. Пока serde жил в
+# Windows-секции, `cargo check` на Linux падал с unresolved import.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [target.'cfg(windows)'.dependencies]
 # GUI
@@ -124,13 +129,16 @@ thiserror = "1.0"
 # default-features = false обязательно: с дефолтными фичами reqwest тянет ещё и
 # default-tls (native-tls → hyper-tls → schannel) поверх запрошенного rustls,
 # то есть два TLS-стека в бинаре вместо одного.
-reqwest = { version = "0.11", default-features = false, features = [
+#
+# 0.12, а не 0.11: 0.11 тянет rustls 0.21 → rustls-webpki 0.101.7, на которую
+# висят RUSTSEC-2026-0098/-0099 (name constraints принимались там, где не
+# должны) и -0104 (паника при разборе CRL), плюс неподдерживаемый
+# rustls-pemfile 1.x. Через этот стек ходит апдейтер, поэтому держим свежий.
+reqwest = { version = "0.12", default-features = false, features = [
   "blocking",
   "json",
   "rustls-tls",
 ] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # Проверка SHA-256 скачанного обновления против опубликованного SHA256SUMS.txt
 # (см. src/updater.rs) — этот путь кода при необходимости поднимает права

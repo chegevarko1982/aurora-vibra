@@ -31,6 +31,12 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    # audit-check публикует результат как check run; без checks: write шаг
+    # отваливается с "Resource not accessible by integration" даже когда
+    # уязвимостей нет. Токен по умолчанию этого права не даёт.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4

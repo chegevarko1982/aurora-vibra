@@ -283,6 +283,9 @@ Stop/Resume in the left column mutes all effects temporarily without touching th
     hover_help_us: "Donate",
     help_us_text: "Your support helps keep Aurora Vibra up to date — adding new hardware devices, simulators, and custom aircraft support.
 
+USDT (TRC-20):
+TSP24RnqTRzA215LNDzWrNQBawWpR9z5YD
+
 BTC:
 bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5
 
@@ -491,6 +494,9 @@ pub const RU: Strings = Strings {
 Пункт «Проверить обновления…» в меню «...» → Опции запускает разовую проверку версии; при наличии новой — предложит установить и перезапустить приложение автоматически.",
     hover_help_us: "Поддержать",
     help_us_text: "Ваша поддержка помогает актуализировать Aurora Vibra — добавлять поддержку новых устройств, симуляторов и кастомных самолётов.
+
+USDT (TRC-20):
+TSP24RnqTRzA215LNDzWrNQBawWpR9z5YD
 
 BTC:
 bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5

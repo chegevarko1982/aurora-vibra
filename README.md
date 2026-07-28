@@ -128,6 +128,8 @@ Aurora Vibra is a **fork** of [ursa-minor-ffb](https://github.com/rtroncoso/ursa
 
 We'd be happy to receive your donation towards the project's development — adding new features and adapting support for custom aircraft models:
 
+**USDT (TRC-20):** `TSP24RnqTRzA215LNDzWrNQBawWpR9z5YD`
+
 **BTC:** `bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5`
 
 **YooMoney:** [410011348629282](https://yoomoney.ru/to/410011348629282)
