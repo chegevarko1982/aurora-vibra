@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.1.1
+
+**Security:**
+- Updated the HTTPS stack used by the auto-updater. The previous release shipped `rustls-webpki` 0.101.7 by way of `reqwest` 0.11, which carries three advisories — RUSTSEC-2026-0098 and -0099 (certificate name constraints accepted where they should have been rejected) and RUSTSEC-2026-0104 (a panic reachable while parsing certificate revocation lists). Exploiting any of them requires a misissued certificate, so real-world exposure was low, but the updater is the one component that fetches and installs code, and it should not be running on a stack with known findings.
+- Further dependency updates close RUSTSEC-2026-0007 in `bytes` and unsoundness advisories in `anyhow`, `memmap2` and `rand`. `cargo audit` now reports a clean tree.
+
+**New:**
+- USDT (TRC-20) added to the Donate window alongside the existing options
+
+**Fixes:**
+- The library could not be compiled on non-Windows targets at all: `serde` and `serde_json` were declared as Windows-only dependencies while cross-platform modules used them unconditionally. This affected contributors and the Docker development image, not the shipped Windows build.
+
 ## v4.1.0
 
 **New:**

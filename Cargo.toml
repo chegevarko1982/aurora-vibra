@@ -1,6 +1,6 @@
 [package]
 name = "aurora_vibra"
-version = "4.1.0"
+version = "4.1.1"
 edition = "2024"
 # edition 2024 требует 1.85, let-chains в src/updater.rs — 1.88.
 rust-version = "1.88"
