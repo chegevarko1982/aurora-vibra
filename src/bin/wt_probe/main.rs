@@ -113,6 +113,10 @@ fn run_live(args: &Args, shutdown: Arc<AtomicBool>) -> i32 {
     let (tx, rx) = unbounded::<PollOutcome>();
     let session_start = Instant::now();
     let shared: SharedHandle = Arc::new(Mutex::new(Shared::new()));
+    shared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .own_callsign = args.callsign.clone();
 
     let handles = vec![
         poller::spawn_fixed(
@@ -235,6 +239,10 @@ fn run_replay(args: &Args, path: &Path, shutdown: Arc<AtomicBool>) -> i32 {
     let weapons_path = args.out_dir.join(format!("weapons_replay_{timestamp}.md"));
 
     let shared: SharedHandle = Arc::new(Mutex::new(Shared::new()));
+    shared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .own_callsign = args.callsign.clone();
 
     let replay_shared = shared.clone();
     let replay_shutdown = shutdown.clone();

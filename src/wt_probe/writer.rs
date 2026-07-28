@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use serde_json::Value;
 
+use crate::wt_probe::hits;
 use crate::wt_probe::model::{ConnStatus, Endpoint, FlatPair, PollOutcome};
 use crate::wt_probe::schema::{self, SchemaTracker};
 use crate::wt_probe::shared::SharedHandle;
@@ -125,6 +126,14 @@ pub(crate) fn handle_outcome(
                 for line in hudmsg_event_summaries(&record.parsed) {
                     s.push_event(line);
                 }
+                if !s.own_callsign.is_empty() {
+                    let callsign = s.own_callsign.clone();
+                    for msg in hudmsg_damage_msgs(&record.parsed) {
+                        if let Some(kind) = hits::classify_own_hit(msg, &callsign) {
+                            s.push_own_hit(format!("{kind}: {msg}"));
+                        }
+                    }
+                }
             }
         }
         PollOutcome::Err {
@@ -203,6 +212,18 @@ fn hudmsg_event_summaries(body: &Value) -> Vec<String> {
     out
 }
 
+/// Тексты `msg` из /hudmsg.damage[] — только этот массив несёт боевые
+/// сообщения (в отличие от `events[]`, который во всех живых сессиях пока
+/// оставался пустым); используется и для панели "последние события", и для
+/// hits::classify_own_hit.
+fn hudmsg_damage_msgs(body: &Value) -> impl Iterator<Item = &str> {
+    body.get("damage")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get("msg").and_then(Value::as_str))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +286,54 @@ mod tests {
                 "[damage] engine on fire".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn hudmsg_damage_msgs_extracts_only_damage_array() {
+        let body = json!({
+            "events": [{"id": 1, "msg": "ignored"}],
+            "damage": [{"id": 1, "msg": "shot down enemy"}, {"id": 2, "msg": "set afire"}]
+        });
+        let out: Vec<&str> = hudmsg_damage_msgs(&body).collect();
+        assert_eq!(out, vec!["shot down enemy", "set afire"]);
+    }
+
+    #[test]
+    fn handle_outcome_populates_own_hits_when_callsign_matches() {
+        use crate::wt_probe::model::RawRecord;
+        use crate::wt_probe::shared::Shared;
+        use std::sync::{Arc, Mutex};
+
+        let shared: SharedHandle = Arc::new(Mutex::new(Shared::new()));
+        shared.lock().unwrap().own_callsign = "Lazarev_IJN".to_string();
+
+        let mut outputs = Outputs {
+            session: None,
+            events: None,
+        };
+        let mut schema = SchemaTracker::new();
+        let mut weapons = WeaponDetector::new();
+        let record = RawRecord {
+            t: 1.0,
+            endpoint: Endpoint::HudMsg,
+            parsed: json!({
+                "damage": [
+                    {"id": 1, "msg": "Krill303 (Fw 190 A) сбил Lazarev_IJN (Bf 109 E)"},
+                    {"id": 2, "msg": "Krill303 (Fw 190 A) сбил someone_else (Bf 109 F)"}
+                ],
+                "events": []
+            }),
+        };
+        handle_outcome(
+            PollOutcome::Ok(record),
+            &mut outputs,
+            &mut schema,
+            &mut weapons,
+            &shared,
+        );
+
+        let s = shared.lock().unwrap();
+        assert_eq!(s.own_hits.len(), 1);
+        assert!(s.own_hits[0].starts_with("СБИТ:"));
     }
 }

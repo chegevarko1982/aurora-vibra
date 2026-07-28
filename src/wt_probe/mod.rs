@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod dashboard;
+pub mod hits;
 pub mod http;
 pub mod interesting;
 pub mod model;

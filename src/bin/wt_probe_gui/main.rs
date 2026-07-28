@@ -39,6 +39,9 @@ struct Config {
     dashboard_hz: f64,
     out_dir: String,
     dashboard_only: bool,
+    /// Свой позывной в War Thunder — включает детектор "попадания по мне"
+    /// (hits::classify_own_hit). Пусто = детектор выключен.
+    callsign: String,
 }
 
 impl Default for Config {
@@ -54,6 +57,7 @@ impl Default for Config {
             dashboard_hz: 4.0,
             out_dir: "wt_probe_sessions".to_string(),
             dashboard_only: false,
+            callsign: String::new(),
         }
     }
 }
@@ -75,6 +79,9 @@ struct RunningSession {
     /// cached_text (который перестраивается не чаще dashboard_hz), чтобы
     /// цветной индикатор стрельбы реагировал без задержки панели.
     weapon_states: Vec<(String, f64)>,
+    /// Попадания по собственному самолёту — читается каждый кадр отдельно от
+    /// cached_text по той же причине, что и weapon_states.
+    own_hits: Vec<String>,
     session_path: Option<PathBuf>,
     events_path: Option<PathBuf>,
     schema_path: PathBuf,
@@ -159,6 +166,10 @@ impl App {
         let (tx, rx) = unbounded::<PollOutcome>();
         let session_start = Instant::now();
         let shared: SharedHandle = Arc::new(Mutex::new(Shared::new()));
+        shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .own_callsign = self.config.callsign.trim().to_string();
 
         let poller_handles = vec![
             poller::spawn_fixed(
@@ -239,6 +250,7 @@ impl App {
             cached_text: String::new(),
             last_render: Instant::now() - Duration::from_secs(3600),
             weapon_states: Vec::new(),
+            own_hits: Vec::new(),
             session_path,
             events_path,
             schema_path,
@@ -383,6 +395,10 @@ impl eframe::App for App {
                             "не писать session_*.jsonl / events_*.jsonl на диск",
                         );
                         ui.end_row();
+
+                        ui.label("Мой позывной:");
+                        ui.text_edit_singleline(&mut self.config.callsign);
+                        ui.end_row();
                     });
             });
 
@@ -438,6 +454,24 @@ impl eframe::App for App {
                             );
                         }
                     });
+                    ui.separator();
+                }
+
+                // Читается каждый кадр отдельно от cached_text — попадание
+                // должно появиться на экране без задержки панели.
+                session.own_hits = {
+                    let s = session.shared.lock().unwrap_or_else(|e| e.into_inner());
+                    s.own_hits.iter().cloned().collect()
+                };
+                if !session.own_hits.is_empty() {
+                    for hit in &session.own_hits {
+                        ui.label(
+                            egui::RichText::new(format!("💥 {hit}"))
+                                .size(18.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(230, 50, 50)),
+                        );
+                    }
                     ui.separator();
                 }
 

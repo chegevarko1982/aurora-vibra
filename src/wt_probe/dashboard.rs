@@ -20,6 +20,8 @@ struct Snapshot {
     conn: ConnStatus,
     vehicle_type: Option<String>,
     recent_events: Vec<String>,
+    own_callsign: String,
+    own_hits: Vec<String>,
     lines_written: u64,
     bytes_written: u64,
     last_error: Option<String>,
@@ -68,6 +70,8 @@ impl Dashboard {
             conn: s.conn,
             vehicle_type: s.vehicle_type.clone(),
             recent_events: s.recent_events.iter().cloned().collect(),
+            own_callsign: s.own_callsign.clone(),
+            own_hits: s.own_hits.iter().cloned().collect(),
             lines_written: s.lines_written,
             bytes_written: s.bytes_written,
             last_error: s.last_error.clone(),
@@ -158,6 +162,21 @@ impl Dashboard {
                 let firing = *value >= 0.5;
                 let label = weapon_label(key);
                 let _ = writeln!(out, "  {label:<12} {}", if firing { "ОГОНЬ" } else { "-" });
+            }
+        }
+        let _ = writeln!(out);
+
+        let _ = writeln!(out, "-- Попадания по мне (/hudmsg.damage[]) --");
+        if snap.own_callsign.is_empty() {
+            let _ = writeln!(
+                out,
+                "  (позывной не задан — укажи свой ник в War Thunder, чтобы включить детектор)"
+            );
+        } else if snap.own_hits.is_empty() {
+            let _ = writeln!(out, "  ({}: попаданий пока нет)", snap.own_callsign);
+        } else {
+            for hit in &snap.own_hits {
+                let _ = writeln!(out, "  {hit}");
             }
         }
         let _ = writeln!(out);

@@ -63,6 +63,13 @@ pub struct Args {
     /// Множитель скорости воспроизведения для --replay (2.0 = вдвое быстрее).
     #[arg(long = "replay-speed", default_value_t = 1.0)]
     pub replay_speed: f64,
+
+    /// Свой позывной в War Thunder — включает детектор "попадания по мне" в
+    /// /hudmsg.damage[] (см. src/wt_probe/hits.rs). Пусто = детектор
+    /// выключен: игра не отдаёт позывной телеметрией, взять его неоткуда,
+    /// кроме как от оператора.
+    #[arg(long, default_value = "")]
+    pub callsign: String,
 }
 
 impl Args {
