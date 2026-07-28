@@ -147,6 +147,7 @@ pub fn save_active(
         lang: crate::i18n::get(),
         close_to_tray: settings::close_to_tray(),
         simconnect_dll_path: settings::simconnect_dll_path(),
+        monitor_collapsed: settings::monitor_collapsed(),
     })
 }
 

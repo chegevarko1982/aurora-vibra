@@ -20,6 +20,20 @@ pub fn set_close_to_tray(v: bool) {
     CLOSE_TO_TRAY.store(v, Ordering::Relaxed);
 }
 
+// Same trick as CLOSE_TO_TRAY: aircraft_profiles::save_active builds its own
+// SettingsFile without access to UiState's monitor_collapsed field — without
+// this, every profile Save would silently reset the Live Monitor column back
+// to expanded.
+static MONITOR_COLLAPSED: AtomicBool = AtomicBool::new(false);
+
+pub fn monitor_collapsed() -> bool {
+    MONITOR_COLLAPSED.load(Ordering::Relaxed)
+}
+
+pub fn set_monitor_collapsed(v: bool) {
+    MONITOR_COLLAPSED.store(v, Ordering::Relaxed);
+}
+
 // Тот же приём, что и у CLOSE_TO_TRAY: путь к SimConnect.dll, выбранный
 // пользователем вручную, нужен sim::worker::load_simconnect, у которого нет
 // доступа ни к SettingsFile, ни к UiState. Путь, а не флаг, поэтому Mutex.
@@ -55,6 +69,9 @@ pub struct SettingsFile {
     // раньше вшитой копии — запасной выход, если та не подошла (устарела либо
     // её забрал в карантин антивирус). None = искать обычным поиском.
     pub simconnect_dll_path: Option<PathBuf>,
+    // Свёрнут ли столбец Live Monitor (правая панель). По умолчанию развёрнут —
+    // старые файлы без этого поля десериализуются в false.
+    pub monitor_collapsed: bool,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
@@ -124,6 +141,7 @@ pub fn load() -> Option<SettingsFile> {
                     lang: Lang::default(),
                     close_to_tray: false,
                     simconnect_dll_path: None,
+                    monitor_collapsed: false,
                 });
             }
         }

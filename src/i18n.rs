@@ -65,7 +65,6 @@ pub struct Strings {
     pub unknown_aircraft: &'static str,
     pub btn_load: &'static str,
     pub btn_save: &'static str,
-    pub chk_also_default: &'static str,
     pub hover_also_default: &'static str,
     pub tab_main: &'static str,
     pub tab_debug: &'static str,
@@ -80,6 +79,7 @@ pub struct Strings {
     pub heading_aircraft_profiles: &'static str,
     pub empty_profiles_hint: &'static str,
     pub hover_delete_profile: &'static str,
+    pub hover_active_profile: &'static str,
 
     // --- Rumble Effects ---
     pub heading_rumble_effects: &'static str,
@@ -222,6 +222,8 @@ pub struct Strings {
     pub nav_telemetry: &'static str,
     pub heading_live_monitor: &'static str,
     pub lbl_no_active_effects: &'static str,
+    pub hover_monitor_collapse: &'static str,
+    pub hover_monitor_expand: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -235,8 +237,7 @@ pub const EN: Strings = Strings {
     unknown_aircraft: "Unknown Aircraft",
     btn_load: "⬆ Load",
     btn_save: "⬇ Save",
-    chk_also_default: "also Default",
-    hover_also_default: "On Save, the current config is also written as default — applies to any aircraft without its own named profile",
+    hover_also_default: "The current config is also written as default — applies to any aircraft without its own named profile",
     tab_main: "Main",
     tab_debug: "Debug",
     btn_stop: "⛔ Stop",
@@ -249,6 +250,7 @@ pub const EN: Strings = Strings {
     heading_aircraft_profiles: "Aircraft Profiles",
     empty_profiles_hint: "No named profiles yet — use the button next to the aircraft name above to create the first one.",
     hover_delete_profile: "Delete profile",
+    hover_active_profile: "Currently loaded profile",
 
     heading_rumble_effects: "Rumble Effects",
 
@@ -315,7 +317,7 @@ pub const EN: Strings = Strings {
     lbl_threshold_deg: "Threshold (°):",
     hover_bank_threshold: "Bank angle (°) above which the Bank/Turb effect turns on",
 
-    btn_reset_defaults: "Reset to defaults",
+    btn_reset_defaults: "Reset",
     btn_hide_telemetry: "Hide Telemetry",
     btn_show_telemetry: "Show Telemetry",
 
@@ -384,6 +386,8 @@ pub const EN: Strings = Strings {
     nav_telemetry: "Telemetry",
     heading_live_monitor: "Live Monitor",
     lbl_no_active_effects: "No effects active",
+    hover_monitor_collapse: "Hide Live Monitor",
+    hover_monitor_expand: "Show Live Monitor",
 };
 
 pub const RU: Strings = Strings {
@@ -397,8 +401,7 @@ pub const RU: Strings = Strings {
     unknown_aircraft: "Неизвестный самолёт",
     btn_load: "⬆ Загрузить",
     btn_save: "⬇ Сохранить",
-    chk_also_default: "также Default",
-    hover_also_default: "При нажатии Save текущий конфиг дополнительно запишется как default — применится ко всем самолётам без именного профиля",
+    hover_also_default: "Текущий конфиг дополнительно запишется как default — применится ко всем самолётам без именного профиля",
     tab_main: "Основное",
     tab_debug: "Отладка",
     btn_stop: "⛔ Стоп",
@@ -411,6 +414,7 @@ pub const RU: Strings = Strings {
     heading_aircraft_profiles: "Профили самолётов",
     empty_profiles_hint: "Именных профилей ещё нет — используйте кнопку рядом с названием самолёта наверху, чтобы создать первый.",
     hover_delete_profile: "Удалить профиль",
+    hover_active_profile: "Загруженный сейчас профиль",
 
     heading_rumble_effects: "Эффекты вибрации",
 
@@ -477,7 +481,7 @@ pub const RU: Strings = Strings {
     lbl_threshold_deg: "Порог (°):",
     hover_bank_threshold: "Угол крена (°), после которого включается эффект Крен/Турбулентность",
 
-    btn_reset_defaults: "Сбросить по умолчанию",
+    btn_reset_defaults: "Сброс",
     btn_hide_telemetry: "Скрыть телеметрию",
     btn_show_telemetry: "Показать телеметрию",
 
@@ -546,6 +550,8 @@ pub const RU: Strings = Strings {
     nav_telemetry: "Телеметрия",
     heading_live_monitor: "Монитор активности",
     lbl_no_active_effects: "Нет активных эффектов",
+    hover_monitor_collapse: "Скрыть монитор активности",
+    hover_monitor_expand: "Показать монитор активности",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {

@@ -229,6 +229,10 @@ pub struct UiState {
     // В развёрнутом виде монитор по умолчанию показывает только включённые
     // эффекты; выключенные скрыты за "+N disabled", пока не нажали явно.
     pub monitor_show_disabled: bool,
+    // Свёрнут ли столбец Live Monitor целиком (не путать с monitor_show_disabled,
+    // который скрывает только неактивные эффекты внутри развёрнутой панели).
+    // Персистится в SettingsFile, как lang/close_to_tray — см. save_global_settings.
+    pub monitor_collapsed: bool,
     pub hold: Arc<AtomicBool>,
 
     // "Close to tray" (Options menu): при close_requested окно прячется
@@ -250,6 +254,7 @@ impl UiState {
     /// изменении любого из этих двух переключателей.
     fn save_global_settings(&self) {
         crate::settings::set_close_to_tray(self.close_to_tray);
+        crate::settings::set_monitor_collapsed(self.monitor_collapsed);
         let ap = self.aircraft_profiles.lock();
         let _ = crate::settings::save(&crate::settings::SettingsFile {
             default: ap.default.clone(),
@@ -257,6 +262,7 @@ impl UiState {
             lang: self.lang,
             close_to_tray: self.close_to_tray,
             simconnect_dll_path: crate::settings::simconnect_dll_path(),
+            monitor_collapsed: self.monitor_collapsed,
         });
     }
 
@@ -724,11 +730,16 @@ impl eframe::App for UiState {
                 }
 
                 let has_named_profile_active = self.aircraft_profiles.lock().active_match.is_some();
-                ui.add_enabled(
-                    has_named_profile_active,
-                    egui::Checkbox::new(&mut self.save_as_default_too, t.chk_also_default),
-                )
-                .on_hover_text(t.hover_also_default);
+                ui.add_space(6.0);
+                let default_toggle = ui
+                    .add_enabled(
+                        has_named_profile_active,
+                        egui::Button::selectable(self.save_as_default_too, "📌"),
+                    )
+                    .on_hover_text(t.hover_also_default);
+                if default_toggle.clicked() {
+                    self.save_as_default_too = !self.save_as_default_too;
+                }
 
                 ui.add_space(16.0);
                 ui.separator();
@@ -885,16 +896,6 @@ impl eframe::App for UiState {
                     None,
                 ),
             ];
-            let section_active = |range: std::ops::Range<usize>| -> bool {
-                rows[range]
-                    .iter()
-                    .any(|(_, enabled, active, _)| *enabled && *active)
-            };
-            let rumble_active = section_active(0..5);
-            let taxi_active = false; // в Taxi Thump больше нет эффектов из Live Monitor (Flaps переехал в Aerodynamics)
-            let engines_active = section_active(5..6);
-            let gear_active = section_active(6..11);
-
             let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
             egui::Panel::left("nav_panel")
                 .resizable(false)
@@ -904,69 +905,22 @@ impl eframe::App for UiState {
                     ui.add_space(4.0);
                     // Кириллические подписи заметно длиннее английских, поэтому кнопка
                     // должна переноситься на 2 строки, а не выходить за границы панели.
-                    // Индикатор активности резервирует своё место первым (через
-                    // right_to_left), чтобы кнопка получила корректную оставшуюся ширину.
-                    let nav_item =
-                        |ui: &mut egui::Ui, selected: bool, label: &str, active: bool| -> bool {
-                            let resp = ui
-                                .horizontal(|ui| {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if active {
-                                                circle_indicator_colored(
-                                                    ui,
-                                                    Color32::WHITE,
-                                                    true,
-                                                );
-                                            }
-                                            ui.with_layout(
-                                                egui::Layout::left_to_right(egui::Align::Center),
-                                                |ui| {
-                                                    ui.add(
-                                                        egui::Button::selectable(selected, label)
-                                                            .wrap(),
-                                                    )
-                                                },
-                                            )
-                                            .inner
-                                        },
-                                    )
-                                    .inner
-                                })
-                                .inner;
-                            resp.clicked()
-                        };
-                    if nav_item(
-                        ui,
-                        self.active_section == Section::Rumble,
-                        t.nav_rumble,
-                        rumble_active,
-                    ) {
+                    // Это простой список разделов без индикации срабатывания эффектов —
+                    // такая индикация есть только в карточках эффектов и Live Monitor.
+                    let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str| -> bool {
+                        ui.add(egui::Button::selectable(selected, label).wrap())
+                            .clicked()
+                    };
+                    if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
                         self.active_section = Section::Rumble;
                     }
-                    if nav_item(
-                        ui,
-                        self.active_section == Section::Taxi,
-                        t.nav_taxi,
-                        taxi_active,
-                    ) {
+                    if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
                         self.active_section = Section::Taxi;
                     }
-                    if nav_item(
-                        ui,
-                        self.active_section == Section::Engines,
-                        t.nav_engines,
-                        engines_active,
-                    ) {
+                    if nav_item(ui, self.active_section == Section::Engines, t.nav_engines) {
                         self.active_section = Section::Engines;
                     }
-                    if nav_item(
-                        ui,
-                        self.active_section == Section::Gear,
-                        t.nav_gear,
-                        gear_active,
-                    ) {
+                    if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
                         self.active_section = Section::Gear;
                     }
                     ui.separator();
@@ -1001,14 +955,44 @@ impl eframe::App for UiState {
             // Компактный, всегда развёрнутый Live Monitor: раньше сворачивался в
             // узкую полоску безымянных точек по умолчанию — теперь фиксированные
             // 160/220px (EN/RU) с именем + реальным %, никакого режима "просто точки".
-            let live_monitor_width = if self.lang == Lang::Ru { 220.0 } else { 160.0 };
+            let live_monitor_width = if self.monitor_collapsed {
+                24.0
+            } else if self.lang == Lang::Ru {
+                220.0
+            } else {
+                160.0
+            };
             egui::Panel::right("live_monitor_panel")
                 .resizable(false)
                 .exact_size(live_monitor_width)
                 .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
                 .show(ui, |ui| {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(t.heading_live_monitor).strong());
+                    if self.monitor_collapsed {
+                        if ui
+                            .button("◀")
+                            .on_hover_text(t.hover_monitor_expand)
+                            .clicked()
+                        {
+                            self.monitor_collapsed = false;
+                            self.save_global_settings();
+                        }
+                        return;
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(t.heading_live_monitor).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button("▶")
+                                .on_hover_text(t.hover_monitor_collapse)
+                                .clicked()
+                            {
+                                self.monitor_collapsed = true;
+                                self.save_global_settings();
+                            }
+                        });
+                    });
                     ui.separator();
 
                     let enabled_rows: Vec<_> =
@@ -1042,13 +1026,14 @@ impl eframe::App for UiState {
                                 } else {
                                     palette::TEXT_SECONDARY
                                 };
-                                ui.colored_label(color, RichText::new(value_text).small());
+                                ui.colored_label(color, RichText::new(value_text).size(10.0));
                                 ui.with_layout(
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
                                         dot_indicator(ui, dot_color, filled, 8.0);
                                         ui.add(
-                                            egui::Label::new(RichText::new(*name).small()).wrap(),
+                                            egui::Label::new(RichText::new(*name).size(10.0))
+                                                .wrap(),
                                         );
                                     },
                                 );
@@ -1062,7 +1047,7 @@ impl eframe::App for UiState {
                         if ui
                             .selectable_label(
                                 self.monitor_show_disabled,
-                                RichText::new(label).small().weak(),
+                                RichText::new(label).size(10.0).weak(),
                             )
                             .clicked()
                         {
@@ -1076,7 +1061,7 @@ impl eframe::App for UiState {
                                     dot_indicator(ui, palette::TEXT_DISABLED, false, 8.0);
                                     ui.add_enabled(
                                         false,
-                                        egui::Label::new(RichText::new(*name).small()).wrap(),
+                                        egui::Label::new(RichText::new(*name).size(10.0)).wrap(),
                                     );
                                 });
                             }
@@ -1091,19 +1076,23 @@ impl eframe::App for UiState {
                         egui::CollapsingHeader::new(t.heading_aircraft_profiles)
                             .default_open(false)
                             .show(ui, |ui| {
-                                let mut profiles_snapshot =
-                                    self.aircraft_profiles.lock().profiles.clone();
+                                let (profiles_snapshot, active_match) = {
+                                    let ap = self.aircraft_profiles.lock();
+                                    (ap.profiles.clone(), ap.active_match.clone())
+                                };
                                 if profiles_snapshot.is_empty() {
                                     ui.label(t.empty_profiles_hint);
                                 }
-                                let mut rename: Option<(usize, String, String)> = None;
                                 let mut delete: Option<usize> = None;
-                                for (i, p) in profiles_snapshot.iter_mut().enumerate() {
+                                for (i, p) in profiles_snapshot.iter().enumerate() {
                                     ui.horizontal(|ui| {
-                                        let before = p.match_substring.clone();
-                                        let resp = ui.text_edit_singleline(&mut p.match_substring);
-                                        if resp.changed() {
-                                            rename = Some((i, before, p.match_substring.clone()));
+                                        ui.label(&p.match_substring);
+                                        if active_match.as_deref() == Some(p.match_substring.as_str())
+                                        {
+                                            ui.label(
+                                                RichText::new("✔").color(palette::ACCENT_PRIMARY),
+                                            )
+                                            .on_hover_text(t.hover_active_profile);
                                         }
                                         if ui
                                             .button("🗑")
@@ -1113,15 +1102,6 @@ impl eframe::App for UiState {
                                             delete = Some(i);
                                         }
                                     });
-                                }
-                                if let Some((i, old_name, new_name)) = rename {
-                                    let mut ap = self.aircraft_profiles.lock();
-                                    if let Some(p) = ap.profiles.get_mut(i) {
-                                        p.match_substring = new_name.clone();
-                                    }
-                                    if ap.active_match.as_deref() == Some(old_name.as_str()) {
-                                        ap.active_match = Some(new_name);
-                                    }
                                 }
                                 if let Some(i) = delete {
                                     let title = self.aircraft_title.lock().clone();
@@ -1142,14 +1122,6 @@ impl eframe::App for UiState {
                                     }
                                 }
                             });
-                        ui.add_space(4.0);
-
-                        if ui.button(t.btn_reset_defaults).clicked() {
-                            // Только сбрасывает ЖИВОЙ конфиг — на диск ничего не пишет,
-                            // как и любое другое изменение. Нажмите Save (дискета в
-                            // верхней панели), чтобы зафиксировать сброс.
-                            self.config.set(RumbleConfig::default());
-                        }
                         ui.add_space(4.0);
 
                         let mut _changed = false;
@@ -1904,6 +1876,13 @@ impl eframe::App for UiState {
                             }
                         });
 
+                        ui.add_space(8.0);
+                        if ui.button(t.btn_reset_defaults).clicked() {
+                            // Только сбрасывает ЖИВОЙ конфиг — на диск ничего не пишет,
+                            // как и любое другое изменение. Нажмите Save (дискета в
+                            // верхней панели), чтобы зафиксировать сброс.
+                            self.config.set(RumbleConfig::default());
+                        }
                         ui.add_space(8.0);
                         ui.separator();
 
