@@ -29,6 +29,15 @@ jobs:
       - name: Test (lib + integration)
         run: cargo test --lib --tests --locked
 
+      # wt_probe (War Thunder telemetry recon, см. src/bin/wt_probe/) должен
+      # собираться и проходить тесты на Linux без запущенной игры — --replay
+      # гоняет записанные сессии, живой опрос сюда не нужен.
+      - name: Clippy (wt_probe)
+        run: cargo clippy --bin wt_probe --features wt-probe --tests -- -D warnings
+
+      - name: Test (wt_probe)
+        run: cargo test --bin wt_probe --features wt-probe --locked
+
   audit:
     runs-on: ubuntu-latest
     # audit-check публикует результат как check run; без checks: write шаг
@@ -71,3 +80,12 @@ jobs:
 
       - name: Test
         run: cargo test --features app --locked
+
+      - name: Build wt_probe
+        run: cargo build --bin wt_probe --features wt-probe --locked
+
+      - name: Clippy (wt_probe)
+        run: cargo clippy --bin wt_probe --features wt-probe --tests -- -D warnings
+
+      - name: Test (wt_probe)
+        run: cargo test --bin wt_probe --features wt-probe --locked

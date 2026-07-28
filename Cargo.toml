@@ -90,11 +90,33 @@ name = "test_vibroTH"
 path = "src/bin/test_vibroTH.rs"
 required-features = ["dev-tools"]
 
+# Автономная разведывательная утилита для War Thunder HTTP-телеметрии
+# (localhost:8111/state, /indicators, /hudmsg, ...). Кроссплатформенная
+# (Windows + Linux, в т.ч. --replay в CI без запущенной игры), поэтому не под
+# cfg(windows) и не в dev-tools — отдельная фича, чтобы не тянуть её зависимости
+# (clap/ctrlc) в обычную сборку app.
+[[bin]]
+name = "wt_probe"
+path = "src/bin/wt_probe/main.rs"
+required-features = ["wt-probe"]
+
+# То же самое (общий код в src/wt_probe/), но вывод в окно eframe/egui вместо
+# консоли. Windows-only на практике: egui/eframe объявлены только в
+# [target.'cfg(windows)'.dependencies] ниже (см. комментарий там), поэтому
+# required-features достаточно "wt-probe" — на Linux этот бинарник просто не
+# соберётся, как и все GUI-утилиты из dev-tools, и это ожидаемо (не входит в
+# Linux CI).
+[[bin]]
+name = "wt_probe_gui"
+path = "src/bin/wt_probe_gui/main.rs"
+required-features = ["wt-probe"]
+
 [features]
 default = []
-app = []
+app = ["dep:reqwest"]
 # Ручные диагностические стенды из src/bin/ — см. секции [[bin]] выше.
 dev-tools = []
+wt-probe = ["dep:reqwest", "dep:clap", "dep:ctrlc"]
 
 [dependencies]
 crossbeam-channel = "0.5"
@@ -105,6 +127,28 @@ chrono = "0.4"
 # Windows-секции, `cargo check` на Linux падал с unresolved import.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# reqwest живёт здесь (не в windows-секции), потому что wt_probe (см. feature
+# "wt-probe" ниже) должен собираться и работать на Linux — там нет игры, но
+# --replay гоняет записанные сессии в CI. updater.rs (windows+app) использует
+# тот же клиент. default-features = false обязательно: иначе reqwest тянет
+# ещё и default-tls (native-tls → hyper-tls → schannel) поверх запрошенного
+# rustls, то есть два TLS-стека в бинаре вместо одного.
+#
+# 0.12, а не 0.11: 0.11 тянет rustls 0.21 → rustls-webpki 0.101.7, на которую
+# висят RUSTSEC-2026-0098/-0099 (name constraints принимались там, где не
+# должны) и -0104 (паника при разборе CRL), плюс неподдерживаемый
+# rustls-pemfile 1.x.
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+], optional = true }
+# CLI-парсинг для wt_probe.
+clap = { version = "4", features = ["derive"], optional = true }
+# Корректное завершение wt_probe по Ctrl+C (дописать буферы, напечатать отчёт)
+# кроссплатформенно — на Windows и на Linux (CI --replay).
+ctrlc = { version = "3", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # GUI
@@ -126,19 +170,6 @@ libloading = "0.8"
 # utils
 anyhow = "1.0"
 thiserror = "1.0"
-# default-features = false обязательно: с дефолтными фичами reqwest тянет ещё и
-# default-tls (native-tls → hyper-tls → schannel) поверх запрошенного rustls,
-# то есть два TLS-стека в бинаре вместо одного.
-#
-# 0.12, а не 0.11: 0.11 тянет rustls 0.21 → rustls-webpki 0.101.7, на которую
-# висят RUSTSEC-2026-0098/-0099 (name constraints принимались там, где не
-# должны) и -0104 (паника при разборе CRL), плюс неподдерживаемый
-# rustls-pemfile 1.x. Через этот стек ходит апдейтер, поэтому держим свежий.
-reqwest = { version = "0.12", default-features = false, features = [
-  "blocking",
-  "json",
-  "rustls-tls",
-] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # Проверка SHA-256 скачанного обновления против опубликованного SHA256SUMS.txt
 # (см. src/updater.rs) — этот путь кода при необходимости поднимает права

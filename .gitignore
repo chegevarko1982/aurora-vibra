@@ -23,3 +23,6 @@ target/
 
 # Old snapshots for chat tools (no longer synced with src/)
 /TXT/
+
+# wt_probe session output (default --out-dir, dev-time recon captures)
+/wt_probe_sessions/
