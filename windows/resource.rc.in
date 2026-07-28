@@ -1,0 +1,44 @@
+// ШАБЛОН. Не компилируется напрямую — src/build.rs подставляет сюда версию из
+// Cargo.toml и абсолютный путь к иконке, а результат кладёт в OUT_DIR. Правь
+// этот файл, а не сгенерированный: raw-версия в репозитории намеренно одна,
+// чтобы версия .exe не могла разойтись с CARGO_PKG_VERSION (заголовок окна в
+// src/main.rs берётся оттуда же).
+//
+// Плейсхолдеры: @ICON_PATH@ @VERSION_COMMA@ @VERSION@ @COMPANY@
+
+// App icon (this name MUST match the code path that calls from_resource_name("MAINICON", ...))
+MAINICON ICON "@ICON_PATH@"
+
+1 VERSIONINFO
+FILEVERSION     @VERSION_COMMA@
+PRODUCTVERSION  @VERSION_COMMA@
+FILEFLAGSMASK   0x3fL
+#ifdef _DEBUG
+FILEFLAGS       0x1L
+#else
+FILEFLAGS       0x0L
+#endif
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"   // US English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "@COMPANY@\0"
+            VALUE "FileDescription",  "Aurora Vibra\0"
+            VALUE "FileVersion",      "@VERSION@\0"
+            VALUE "InternalName",     "aurora-vibra\0"
+            // Имя, под которым бинарь распространяется: релизный workflow
+            // (.github/workflows/rust.yml) кладёт его в zip именно так.
+            VALUE "OriginalFilename", "Aurora Vibra.exe\0"
+            VALUE "ProductName",      "Aurora Vibra\0"
+            VALUE "ProductVersion",   "@VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

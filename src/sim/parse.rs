@@ -47,11 +47,27 @@ pub fn parse_main_elems(
         / 5.0;
 
     let mut fv = FlightVars {
-        airspeed_indicated: elem.get(ElemIdx::AirspeedIndicated as usize).copied().unwrap_or(0.0),
-        on_ground: elem.get(ElemIdx::SimOnGround as usize).copied().unwrap_or(0.0) != 0.0,
-        bank_deg: elem.get(ElemIdx::PlaneBankDegrees as usize).copied().unwrap_or(0.0),
-        flaps_pct: ((elem.get(ElemIdx::FlapsLeftPercent as usize).copied().unwrap_or(0.0)
-            + elem.get(ElemIdx::FlapsRightPercent as usize).copied().unwrap_or(0.0))
+        airspeed_indicated: elem
+            .get(ElemIdx::AirspeedIndicated as usize)
+            .copied()
+            .unwrap_or(0.0),
+        on_ground: elem
+            .get(ElemIdx::SimOnGround as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        bank_deg: elem
+            .get(ElemIdx::PlaneBankDegrees as usize)
+            .copied()
+            .unwrap_or(0.0),
+        flaps_pct: ((elem
+            .get(ElemIdx::FlapsLeftPercent as usize)
+            .copied()
+            .unwrap_or(0.0)
+            + elem
+                .get(ElemIdx::FlapsRightPercent as usize)
+                .copied()
+                .unwrap_or(0.0))
             * 0.5)
             .clamp(0.0, 100.0),
         flaps_index: elem
@@ -59,19 +75,42 @@ pub fn parse_main_elems(
             .copied()
             .unwrap_or(0.0)
             .round() as i32,
-        gear_handle: elem.get(ElemIdx::GearHandlePosition as usize).copied().unwrap_or(0.0),
-        stalled: elem.get(ElemIdx::StallWarning as usize).copied().unwrap_or(0.0) != 0.0,
-        sim_time_s: elem.get(ElemIdx::AbsoluteTime as usize).copied().unwrap_or(0.0),
-        ground_speed_kt: elem.get(ElemIdx::GroundVelocity as usize).copied().unwrap_or(0.0).max(0.0),
+        gear_handle: elem
+            .get(ElemIdx::GearHandlePosition as usize)
+            .copied()
+            .unwrap_or(0.0),
+        stalled: elem
+            .get(ElemIdx::StallWarning as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        sim_time_s: elem
+            .get(ElemIdx::AbsoluteTime as usize)
+            .copied()
+            .unwrap_or(0.0),
+        ground_speed_kt: elem
+            .get(ElemIdx::GroundVelocity as usize)
+            .copied()
+            .unwrap_or(0.0)
+            .max(0.0),
         paused: paused_from_events,
         spoilers_pct: spoilers_left.min(spoilers_right),
         spoilers_left_pct: spoilers_left,
         spoilers_right_pct: spoilers_right,
         spoilers_md11_left_avg,
         spoilers_md11_right_avg,
-        gear_comp_nose: elem.get(ElemIdx::GearAnimNose as usize).copied().unwrap_or(0.0),
-        gear_comp_left: elem.get(ElemIdx::GearAnimLeft as usize).copied().unwrap_or(0.0),
-        gear_comp_right: elem.get(ElemIdx::GearAnimRight as usize).copied().unwrap_or(0.0),
+        gear_comp_nose: elem
+            .get(ElemIdx::GearAnimNose as usize)
+            .copied()
+            .unwrap_or(0.0),
+        gear_comp_left: elem
+            .get(ElemIdx::GearAnimLeft as usize)
+            .copied()
+            .unwrap_or(0.0),
+        gear_comp_right: elem
+            .get(ElemIdx::GearAnimRight as usize)
+            .copied()
+            .unwrap_or(0.0),
         trailing_edge_flaps_left_percent: elem
             .get(ElemIdx::FlapsLeftPercent as usize)
             .copied()
@@ -79,24 +118,64 @@ pub fn parse_main_elems(
             .clamp(0.0, 100.0),
         // Телеметрия запуска двигателей (Engine Spool-up & Ignition)
         eng1_n2_percent: elem.get(ElemIdx::Eng1N2 as usize).copied().unwrap_or(0.0),
-        eng1_combustion: elem.get(ElemIdx::Eng1Combustion as usize).copied().unwrap_or(0.0),
+        eng1_combustion: elem
+            .get(ElemIdx::Eng1Combustion as usize)
+            .copied()
+            .unwrap_or(0.0),
         eng2_n2_percent: elem.get(ElemIdx::Eng2N2 as usize).copied().unwrap_or(0.0),
-        eng2_combustion: elem.get(ElemIdx::Eng2Combustion as usize).copied().unwrap_or(0.0),
+        eng2_combustion: elem
+            .get(ElemIdx::Eng2Combustion as usize)
+            .copied()
+            .unwrap_or(0.0),
         // Двигатели 3/4 (4-моторные самолёты, см. RumbleConfig::four_engine_mode)
         eng3_n2_percent: elem.get(ElemIdx::Eng3N2 as usize).copied().unwrap_or(0.0),
-        eng3_combustion: elem.get(ElemIdx::Eng3Combustion as usize).copied().unwrap_or(0.0),
+        eng3_combustion: elem
+            .get(ElemIdx::Eng3Combustion as usize)
+            .copied()
+            .unwrap_or(0.0),
         eng4_n2_percent: elem.get(ElemIdx::Eng4N2 as usize).copied().unwrap_or(0.0),
-        eng4_combustion: elem.get(ElemIdx::Eng4Combustion as usize).copied().unwrap_or(0.0),
+        eng4_combustion: elem
+            .get(ElemIdx::Eng4Combustion as usize)
+            .copied()
+            .unwrap_or(0.0),
         // GENERAL ENG PCT MAX RPM:1/2/3/4 — универсальная поддержка поршневых
-        eng1_pct_max_rpm: elem.get(ElemIdx::Eng1PctMaxRpm as usize).copied().unwrap_or(0.0),
-        eng2_pct_max_rpm: elem.get(ElemIdx::Eng2PctMaxRpm as usize).copied().unwrap_or(0.0),
-        eng3_pct_max_rpm: elem.get(ElemIdx::Eng3PctMaxRpm as usize).copied().unwrap_or(0.0),
-        eng4_pct_max_rpm: elem.get(ElemIdx::Eng4PctMaxRpm as usize).copied().unwrap_or(0.0),
+        eng1_pct_max_rpm: elem
+            .get(ElemIdx::Eng1PctMaxRpm as usize)
+            .copied()
+            .unwrap_or(0.0),
+        eng2_pct_max_rpm: elem
+            .get(ElemIdx::Eng2PctMaxRpm as usize)
+            .copied()
+            .unwrap_or(0.0),
+        eng3_pct_max_rpm: elem
+            .get(ElemIdx::Eng3PctMaxRpm as usize)
+            .copied()
+            .unwrap_or(0.0),
+        eng4_pct_max_rpm: elem
+            .get(ElemIdx::Eng4PctMaxRpm as usize)
+            .copied()
+            .unwrap_or(0.0),
         // GENERAL ENG STARTER:1/2/3/4 — универсальная модель запуска
-        eng1_starter: elem.get(ElemIdx::Eng1Starter as usize).copied().unwrap_or(0.0) != 0.0,
-        eng2_starter: elem.get(ElemIdx::Eng2Starter as usize).copied().unwrap_or(0.0) != 0.0,
-        eng3_starter: elem.get(ElemIdx::Eng3Starter as usize).copied().unwrap_or(0.0) != 0.0,
-        eng4_starter: elem.get(ElemIdx::Eng4Starter as usize).copied().unwrap_or(0.0) != 0.0,
+        eng1_starter: elem
+            .get(ElemIdx::Eng1Starter as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        eng2_starter: elem
+            .get(ElemIdx::Eng2Starter as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        eng3_starter: elem
+            .get(ElemIdx::Eng3Starter as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        eng4_starter: elem
+            .get(ElemIdx::Eng4Starter as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
         // Поршневые двигатели (Piston Engine Telemetry): GENERAL ENG RPM —
         // обороты коленвала, PROP RPM — обороты воздушного винта.
         eng1_rpm: elem.get(ElemIdx::Eng1Rpm as usize).copied().unwrap_or(0.0),
@@ -114,34 +193,71 @@ pub fn parse_main_elems(
         // DEFAULT_OVERSPEED_BARBER_POLE_KN, если выбранное значение всё ещё
         // 0.0/невалидно — см. sanitize_flight_vars.
         overspeed_barber_pole_kn: if crate::profiles::is_fenix_aircraft(aircraft_title) {
-            elem.get(ElemIdx::FenixOverspeedVmax as usize).copied().unwrap_or(0.0)
+            elem.get(ElemIdx::FenixOverspeedVmax as usize)
+                .copied()
+                .unwrap_or(0.0)
         } else {
-            elem.get(ElemIdx::AirspeedBarberPole as usize).copied().unwrap_or(0.0)
+            elem.get(ElemIdx::AirspeedBarberPole as usize)
+                .copied()
+                .unwrap_or(0.0)
         },
         // Предкрылки (Slats) — среднее LEADING EDGE FLAPS LEFT/RIGHT PERCENT.
-        slats_pct: ((elem.get(ElemIdx::SlatsLeftPercent as usize).copied().unwrap_or(0.0)
-            + elem.get(ElemIdx::SlatsRightPercent as usize).copied().unwrap_or(0.0))
+        slats_pct: ((elem
+            .get(ElemIdx::SlatsLeftPercent as usize)
+            .copied()
+            .unwrap_or(0.0)
+            + elem
+                .get(ElemIdx::SlatsRightPercent as usize)
+                .copied()
+                .unwrap_or(0.0))
             * 0.5)
             .clamp(0.0, 100.0),
         // OVERSPEED WARNING — булев флаг "клацера" сима, для сравнения в
         // телеметрии с нашим порогом overspeed_barber_pole_kn.
-        overspeed_warning: elem.get(ElemIdx::OverspeedWarning as usize).copied().unwrap_or(0.0) != 0.0,
+        overspeed_warning: elem
+            .get(ElemIdx::OverspeedWarning as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
         // L:XMLSND75 — клаксон "overspeed / mach trim" на Learjet 35A
         // (Flysimware); на прочих самолётах L-var не определён, читается 0.0.
-        overspeed_lear_horn: elem.get(ElemIdx::OverspeedLearHorn as usize).copied().unwrap_or(0.0) != 0.0,
+        overspeed_lear_horn: elem
+            .get(ElemIdx::OverspeedLearHorn as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
         // PMDG 737 (NG3): L:EngineStart1b/2b_Ext, см. sim/worker.rs/elem_idx.rs
         // и rumble.rs (pre-spool разгон). На прочих самолётах L-var'ы не
         // определены, читается 0.0/false (самонейтрализуется).
-        eng1_pmdg_starter_ext: elem.get(ElemIdx::PmdgEngineStart1b as usize).copied().unwrap_or(0.0) != 0.0,
-        eng2_pmdg_starter_ext: elem.get(ElemIdx::PmdgEngineStart2b as usize).copied().unwrap_or(0.0) != 0.0,
-        eng1_starter_active: elem.get(ElemIdx::Eng1StarterActive as usize).copied().unwrap_or(0.0) != 0.0,
-        eng2_starter_active: elem.get(ElemIdx::Eng2StarterActive as usize).copied().unwrap_or(0.0) != 0.0,
+        eng1_pmdg_starter_ext: elem
+            .get(ElemIdx::PmdgEngineStart1b as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        eng2_pmdg_starter_ext: elem
+            .get(ElemIdx::PmdgEngineStart2b as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        eng1_starter_active: elem
+            .get(ElemIdx::Eng1StarterActive as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
+        eng2_starter_active: elem
+            .get(ElemIdx::Eng2StarterActive as usize)
+            .copied()
+            .unwrap_or(0.0)
+            != 0.0,
         // Fenix A320: L:A320_Gear_Nose, сырая позиция носовой стойки
         // (0 = убрано, 1000 = выпущено), см. sim/elem_idx.rs. Используется
         // эффектом Gear Transit в rumble.rs вместо gear_comp_nose/left/right
         // (не отражают движение стоек на этом борте), см. is_fenix ниже.
         // Также остаётся в телеметрии как "F_Gear".
-        fenix_gear_nose_raw: elem.get(ElemIdx::FenixGearNose as usize).copied().unwrap_or(0.0),
+        fenix_gear_nose_raw: elem
+            .get(ElemIdx::FenixGearNose as usize)
+            .copied()
+            .unwrap_or(0.0),
         is_fenix: crate::profiles::is_fenix_aircraft(aircraft_title),
     };
 
@@ -278,11 +394,11 @@ mod tests {
     #[test]
     fn spoilers_md11_panel_averages_computed_from_five_sections_per_wing() {
         let mut e = sample_elems();
-        for i in ElemIdx::Md11SpoilerL1 as usize..=ElemIdx::Md11SpoilerL5 as usize {
-            e[i] = 29.511; // L1..L5
+        for slot in &mut e[ElemIdx::Md11SpoilerL1 as usize..=ElemIdx::Md11SpoilerL5 as usize] {
+            *slot = 29.511; // L1..L5
         }
-        for i in ElemIdx::Md11SpoilerR1 as usize..=ElemIdx::Md11SpoilerR5 as usize {
-            e[i] = 0.0; // R1..R5 (крен без выпуска рычага, как на скриншоте)
+        for slot in &mut e[ElemIdx::Md11SpoilerR1 as usize..=ElemIdx::Md11SpoilerR5 as usize] {
+            *slot = 0.0; // R1..R5 (крен без выпуска рычага, как на скриншоте)
         }
         let fv = parse_main_elems(&e, false, 1.0, "");
         assert!((fv.spoilers_md11_left_avg - 29.511).abs() < 1e-9);

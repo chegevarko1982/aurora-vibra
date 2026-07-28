@@ -13,7 +13,9 @@
 // Framing идентичен hid::protocol::build_throttle_vibe_frame (см. golden
 // bytes в protocol.rs тестах) — байты здесь не пересобираются вручную.
 
-use aurora_vibra::hid::protocol::{THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, build_throttle_vibe_frame};
+use aurora_vibra::hid::protocol::{
+    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, build_throttle_vibe_frame,
+};
 use eframe::egui;
 use hidapi::{HidApi, HidDevice};
 use std::time::{Duration, Instant};
@@ -33,7 +35,10 @@ enum SendPlan {
     /// Шаг без отправки — моторы уже выключены (пауза между вариантами).
     None,
     /// Постоянная отправка с заданным интервалом (Этап 1, 2a, 2b).
-    Const { motors: MotorSet, interval: Duration },
+    Const {
+        motors: MotorSet,
+        interval: Duration,
+    },
     /// Оба мотора, но с паузой между двумя write() внутри кадра (Этап 2c).
     ConstGap { gap: Duration, interval: Duration },
     /// Чередование левого/правого мотора по кадрам (Этап 2d).
@@ -240,7 +245,11 @@ impl App {
                 r.and_then(|_| write_motor(&self.device, THROTTLE_MOTOR_RIGHT, 255))
             }
             SendPlan::Alternate { .. } => {
-                let addr = if self.alt_toggle { THROTTLE_MOTOR_LEFT } else { THROTTLE_MOTOR_RIGHT };
+                let addr = if self.alt_toggle {
+                    THROTTLE_MOTOR_LEFT
+                } else {
+                    THROTTLE_MOTOR_RIGHT
+                };
                 self.alt_toggle = !self.alt_toggle;
                 write_motor(&self.device, addr, 255)
             }
@@ -268,9 +277,13 @@ impl eframe::App for App {
 
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        egui::RichText::new(format!("Шаг {} из {}", self.current + 1, self.steps.len()))
-                            .size(16.0)
-                            .color(egui::Color32::GRAY),
+                        egui::RichText::new(format!(
+                            "Шаг {} из {}",
+                            self.current + 1,
+                            self.steps.len()
+                        ))
+                        .size(16.0)
+                        .color(egui::Color32::GRAY),
                     );
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new(step.phase).size(26.0).strong());
@@ -281,10 +294,19 @@ impl eframe::App for App {
                     } else {
                         egui::Color32::from_rgb(120, 120, 120)
                     };
-                    ui.label(egui::RichText::new(&step.variant).size(34.0).strong().color(color));
+                    ui.label(
+                        egui::RichText::new(&step.variant)
+                            .size(34.0)
+                            .strong()
+                            .color(color),
+                    );
                     ui.add_space(20.0);
 
-                    let badge = if is_sending { "● ВИБРАЦИЯ" } else { "○ ТИШИНА" };
+                    let badge = if is_sending {
+                        "● ВИБРАЦИЯ"
+                    } else {
+                        "○ ТИШИНА"
+                    };
                     ui.label(egui::RichText::new(badge).size(22.0).color(color));
 
                     ui.add_space(24.0);
@@ -314,8 +336,15 @@ impl eframe::App for App {
                 if ui.button("⟲ Заново").clicked() {
                     self.restart();
                 }
-                let stop_label = if self.running { "⏹ Стоп" } else { "остановлено" };
-                if ui.add_enabled(self.running, egui::Button::new(stop_label)).clicked() {
+                let stop_label = if self.running {
+                    "⏹ Стоп"
+                } else {
+                    "остановлено"
+                };
+                if ui
+                    .add_enabled(self.running, egui::Button::new(stop_label))
+                    .clicked()
+                {
                     stop_all(&self.device);
                     self.running = false;
                     self.status = "Остановлено вручную. Моторы выключены.".to_string();

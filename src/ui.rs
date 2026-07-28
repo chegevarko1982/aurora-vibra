@@ -129,7 +129,11 @@ fn dot_indicator(ui: &mut egui::Ui, color: Color32, filled: bool, diameter: f32)
 /// нет (маркер уже показывает состояние).
 fn effect_status_badge(ui: &mut egui::Ui, enabled: bool, active: bool, t: &Strings) {
     if !enabled {
-        ui.label(RichText::new(t.status_off).small().color(palette::TEXT_DISABLED));
+        ui.label(
+            RichText::new(t.status_off)
+                .small()
+                .color(palette::TEXT_DISABLED),
+        );
         return;
     }
     ui.horizontal(|ui| {
@@ -276,7 +280,11 @@ impl UiState {
     /// `native_max` — во что превращается 100% при передаче в RumbleConfig;
     /// хранимое значение (`val`) остаётся в исходных технических единицах —
     /// rumble.rs ничего не знает о процентах.
-
+    ///
+    /// Аргументов много намеренно: это чистая функция отрисовки одной строки,
+    /// всё её состояние приходит снаружи по &mut. Обёртка-структура «параметры
+    /// строки» была бы тем же списком полей плюс лишний слой на каждом вызове.
+    #[allow(clippy::too_many_arguments)]
     fn effect_row_percent_hinted(
         ui: &mut egui::Ui,
         name: &str,
@@ -342,6 +350,9 @@ impl UiState {
     /// загруженного самолёта. `threshold_kn` — None, если SimConnect ещё не
     /// отдал значение (например, самолёт не загружен) — в этом случае
     /// показываем "Limit: N/A" и эффект не может сработать.
+    ///
+    /// Про число аргументов — см. `effect_row_percent_hinted` выше.
+    #[allow(clippy::too_many_arguments)]
     fn overspeed_row(
         ui: &mut egui::Ui,
         enabled: &mut bool,
@@ -515,6 +526,8 @@ impl UiState {
             });
     }
 
+    /// Про число аргументов — см. `effect_row_percent_hinted` выше.
+    #[allow(clippy::too_many_arguments)]
     fn taxi_bound_row(
         ui: &mut egui::Ui,
         name: &str,
@@ -860,13 +873,13 @@ impl eframe::App for UiState {
                     } else {
                         None
                     };
-                    if let Some(new_lang) = new_lang {
-                        if new_lang != self.lang {
-                            self.lang = new_lang;
-                            i18n::set(new_lang);
-                            tray::refresh_tooltip();
-                            self.save_global_settings();
-                        }
+                    if let Some(new_lang) = new_lang
+                        && new_lang != self.lang
+                    {
+                        self.lang = new_lang;
+                        i18n::set(new_lang);
+                        tray::refresh_tooltip();
+                        self.save_global_settings();
                     }
                 });
             });
@@ -1076,32 +1089,35 @@ impl eframe::App for UiState {
                             // Значение резервирует место первым (right_to_left), затем
                             // точка + имя получают оставшуюся ширину и переносятся, если
                             // русская подпись не помещается в одну строку.
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let value_text = if *active {
-                                    match pct {
-                                        Some(p) => format!("{p:.0}%"),
-                                        None => t.status_active.to_string(),
-                                    }
-                                } else {
-                                    "—".to_string()
-                                };
-                                let color = if *active {
-                                    palette::ACCENT_LIVE
-                                } else {
-                                    palette::TEXT_SECONDARY
-                                };
-                                ui.colored_label(color, RichText::new(value_text).size(10.0));
-                                ui.with_layout(
-                                    egui::Layout::left_to_right(egui::Align::Center),
-                                    |ui| {
-                                        dot_indicator(ui, dot_color, filled, 8.0);
-                                        ui.add(
-                                            egui::Label::new(RichText::new(*name).size(10.0))
-                                                .wrap(),
-                                        );
-                                    },
-                                );
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let value_text = if *active {
+                                        match pct {
+                                            Some(p) => format!("{p:.0}%"),
+                                            None => t.status_active.to_string(),
+                                        }
+                                    } else {
+                                        "—".to_string()
+                                    };
+                                    let color = if *active {
+                                        palette::ACCENT_LIVE
+                                    } else {
+                                        palette::TEXT_SECONDARY
+                                    };
+                                    ui.colored_label(color, RichText::new(value_text).size(10.0));
+                                    ui.with_layout(
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            dot_indicator(ui, dot_color, filled, 8.0);
+                                            ui.add(
+                                                egui::Label::new(RichText::new(*name).size(10.0))
+                                                    .wrap(),
+                                            );
+                                        },
+                                    );
+                                },
+                            );
                         });
                     }
 
@@ -1151,7 +1167,8 @@ impl eframe::App for UiState {
                                 for (i, p) in profiles_snapshot.iter().enumerate() {
                                     ui.horizontal(|ui| {
                                         ui.label(&p.match_substring);
-                                        if active_match.as_deref() == Some(p.match_substring.as_str())
+                                        if active_match.as_deref()
+                                            == Some(p.match_substring.as_str())
                                         {
                                             ui.label(
                                                 RichText::new("✔").color(palette::ACCENT_PRIMARY),

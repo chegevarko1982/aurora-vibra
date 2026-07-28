@@ -17,6 +17,10 @@ use crate::sim::parse::{flight_status, parse_main_elems};
 use crate::{ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
+// Имя намеренно совпадает с типом из Win32 SDK — так подписи FFI ниже читаются
+// один в один с документацией SimConnect. Переименование в Hresult ради
+// clippy::upper_case_acronyms сделало бы их только труднее сверять.
+#[allow(clippy::upper_case_acronyms)]
 type HRESULT = i32;
 type Handle = *mut c_void;
 type HWnd = *mut c_void;
@@ -322,6 +326,10 @@ fn load_simconnect(logs: &LogBuffer) -> Result<SimConnectFns> {
     bind_simconnect(lib)
 }
 
+// Точка входа рабочего потока: каждый аргумент — отдельный разделяемый с UI
+// примитив (см. вызов в main.rs). Схлопывать их в один "контекст"-структуру
+// смысла нет — она была бы ровно этим же списком полей, только с лишним слоем.
+#[allow(clippy::too_many_arguments)]
 pub fn sim_worker(
     last_vars: Arc<Mutex<Option<FlightVars>>>,
     tx_hid: Sender<HidCmd>,

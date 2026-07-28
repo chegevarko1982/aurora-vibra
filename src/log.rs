@@ -48,13 +48,13 @@ impl LogBuffer {
 
     /// Initialize file logging, preferring the EXE directory. Truncates per session.
     pub fn try_init_file_prefer_exe_dir(&self) -> std::io::Result<PathBuf> {
-        if let Ok(p) = std::env::current_exe() {
-            if let Some(dir) = p.parent() {
-                let mut log_path = dir.to_path_buf();
-                log_path.push("AuroraVibra.log");
-                if self.attach_file_at(&log_path).is_ok() {
-                    return Ok(log_path);
-                }
+        if let Ok(p) = std::env::current_exe()
+            && let Some(dir) = p.parent()
+        {
+            let mut log_path = dir.to_path_buf();
+            log_path.push("AuroraVibra.log");
+            if self.attach_file_at(&log_path).is_ok() {
+                return Ok(log_path);
             }
         }
         if let Some(base) = std::env::var_os("LOCALAPPDATA") {

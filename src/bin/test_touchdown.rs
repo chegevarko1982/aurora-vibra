@@ -85,11 +85,12 @@ fn open_devices() -> Devices {
                 println!("Найден джойстик: PID=0x{pid:04X}");
                 joystick = Some((d, pid));
             }
-        } else if throttle.is_none() && is_ursa_minor_throttle(pid) {
-            if let Ok(d) = devinfo.open_device(&api) {
-                println!("Найден РУД: PID=0x{pid:04X}");
-                throttle = Some(d);
-            }
+        } else if throttle.is_none()
+            && is_ursa_minor_throttle(pid)
+            && let Ok(d) = devinfo.open_device(&api)
+        {
+            println!("Найден РУД: PID=0x{pid:04X}");
+            throttle = Some(d);
         }
     }
 
@@ -313,7 +314,11 @@ fn group_end_s(wheel: Wheel, severity: f64, use_new: bool) -> f64 {
 }
 
 fn play(devices: &Devices, wheel: Wheel, severity: f64, use_new: bool, interval_ms: u64) {
-    let label = if use_new { "НОВОЕ" } else { "СЕЙЧАС (легаси)" };
+    let label = if use_new {
+        "НОВОЕ"
+    } else {
+        "СЕЙЧАС (легаси)"
+    };
     println!(
         "\n=== {label}: \"{}\" (severity={:.2}) ===",
         wheel.label(),

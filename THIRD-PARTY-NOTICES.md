@@ -68,9 +68,9 @@ it will be done.
 ## Rust dependencies
 
 All Rust crate dependencies are permissively licensed (MIT, Apache-2.0, or dual
-MIT/Apache-2.0). For a full machine-readable inventory of the dependency tree and
-its licenses:
+MIT/Apache-2.0). To reproduce a full inventory of the dependency tree and its
+licenses from the committed `Cargo.lock`:
 
 ```bash
-cargo install cargo-about && cargo about generate about.hbs
+cargo install cargo-license && cargo license --avoid-build-deps
 ```

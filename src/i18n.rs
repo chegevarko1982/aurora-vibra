@@ -9,15 +9,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Lang {
+    #[default]
     En,
     Ru,
-}
-
-impl Default for Lang {
-    fn default() -> Self {
-        Lang::En
-    }
 }
 
 impl Lang {

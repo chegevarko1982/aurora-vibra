@@ -4,6 +4,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 type DWord = u32;
+// Имя как в Win32 SDK — см. одноимённый alias в src/sim/worker.rs.
+#[allow(clippy::upper_case_acronyms)]
 type HRESULT = i32;
 type Handle = *mut c_void;
 type HWnd = *mut c_void;

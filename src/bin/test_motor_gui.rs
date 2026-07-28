@@ -142,11 +142,11 @@ impl App {
         };
 
         // Выбранное устройство могло отключиться между сканами.
-        if let Some(sel) = self.selected {
-            if sel >= self.devices.len() {
-                self.stop_and_close();
-                self.selected = None;
-            }
+        if let Some(sel) = self.selected
+            && sel >= self.devices.len()
+        {
+            self.stop_and_close();
+            self.selected = None;
         }
     }
 

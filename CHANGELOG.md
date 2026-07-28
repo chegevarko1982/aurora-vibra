@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.1.0
+
+**New:**
+- Redesigned interface: dark palette, sectioned navigation, effect cards with live status badges, and a Live Monitor panel that can be collapsed out of the way
+- Fenix A320 support: overspeed barber-pole and gear-transit telemetry, per-variant idle N2, and a clear precedence order between built-in and user profile overrides
+- Reworked gear touchdown: attack–hold–decay envelope per strut, fixed motor routing, and a settle window that mutes every other effect (except Stall) right after contact so the touchdown itself is not masked
+- "Close to tray" option and a restructured tray context menu
+- **Options → Check for updates** in the toolbar, alongside the tray entry
+- Donate menu with selectable BTC / YooMoney details
+- Single-instance guard — launching the app twice focuses the existing window instead of opening a second one
+
+**Security:**
+- The auto-updater now verifies the downloaded archive against the release's published `SHA256SUMS.txt` **before** unpacking or installing anything, and refuses to proceed if the checksum is missing or does not match. Previously the archive was unpacked and copied over the application directory — with an automatic UAC elevation when needed — without any verification at all.
+- Version comparison no longer misreads pre-release tags: `4.2.0-rc1` used to parse as `4.0.0` and could be offered as an upgrade over a newer stable build. Pre-releases are now skipped entirely.
+
+**Fixes:**
+- Corrected an `elem[]` index desync that made PMDG and Fenix SimConnect variables read from the wrong slots
+- Engine start/shutdown routing, gear-transit gating, and HID hot-plug recovery
+- Slats tracking unified with flaps, with a dither tolerance so sub-percent telemetry jitter no longer triggers the effect
+- Window title and the .exe version resource are both derived from the package version, so they can no longer drift apart
+- Effect status badge lights only on real activation
+- MD-11 spoiler effect no longer false-triggers on bank
+
+**Internal:**
+- Minimum supported Rust version is now 1.88
+- Diagnostic binaries in `src/bin/` moved behind a `dev-tools` feature — release builds produce one executable instead of eleven
+- Only one TLS stack is linked into the binary (rustls); `native-tls`/schannel are no longer pulled in
+- Clippy now runs over the Windows-only UI, tray, and updater code in CI, plus a `cargo audit` job
+
 ## v4.0.1
 
 **Rebrand:** Ursa Minor FFB is now **Aurora Vibra**. New name and icon throughout the app (window title, tray, installer metadata), package/binary renamed (`aurora-vibra.exe`), auto-updater now points at the new repository, settings/log folder moved to `%LOCALAPPDATA%\AuroraVibra`. Hardware device names (WinWing/WINCTRL joystick & throttle identifiers) are unchanged — only the application's own branding moved.
@@ -20,6 +49,36 @@
 - Settings autosave no longer stalls indefinitely while the UI is active (it kept pushing its own save deadline forward every redraw)
 - TFDI MD-11: spoiler effect no longer false-triggers on bank
 - Gear touchdown effect no longer false-triggers while parked due to near-zero ground-speed telemetry noise
+
+## v3.0.0
+
+- Aircraft-based advanced rumble effects, plus airliner-specific effects (spoilers, engine N1)
+- Rumble profiles and presets with per-preset customization, reworked preset UX
+- Windows MSI installer
+- Support for all sidestick variant types
+- Stability fixes for rumble effects and SimConnect variable reads
+
+## v2.3
+
+- New runway rolling physics: individual gear struts and reworked flap logic
+- Telemetry for nose/main gear strut compression surfaced in the UI
+- Refactored force-feedback logic and the HID/Sim modules
+
+## v2.1.1
+
+- Settings are now saved automatically
+
+## v2.1.0
+
+- Stock spoilers effect
+- Taxi Thump extended up to 250 kt
+- Overspeed option
+- PWM vibration output
+- Full test suite for the project
+
+## v2.0.1
+
+- Support for Fighter and Space sidesticks
 
 ## v2.0.0
 

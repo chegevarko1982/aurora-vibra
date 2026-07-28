@@ -10,7 +10,9 @@
 // каждого этапа есть пауза и печать в консоль, чтобы можно было
 // прочувствовать разницу на реальном железе и понять, где именно провал.
 
-use aurora_vibra::hid::protocol::{THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, build_throttle_vibe_frame};
+use aurora_vibra::hid::protocol::{
+    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, build_throttle_vibe_frame,
+};
 use hidapi::{HidApi, HidDevice};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -84,7 +86,10 @@ fn phase1_timeout_test(device: &HidDevice) {
             write_motor(d, THROTTLE_MOTOR_RIGHT, 255);
         });
         stop_all(device);
-        pause("   [моторы выключены, пауза 1с перед следующим интервалом]", 1000);
+        pause(
+            "   [моторы выключены, пауза 1с перед следующим интервалом]",
+            1000,
+        );
     }
 }
 

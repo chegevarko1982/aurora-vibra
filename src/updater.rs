@@ -29,32 +29,32 @@ const UA: &str = "AuroraVibra-Updater (+https://github.com/chegevarko1982/aurora
 pub fn early_self_update_hook() -> bool {
     // Args:  --apply-update <app_dir> <extracted_dir> <new_exe_name> [--elevated]
     let mut args = std::env::args_os();
-    if let Some(first) = args.nth(1) {
-        if first == "--apply-update" {
-            let app_dir = args.next().expect("missing app_dir");
-            let extract = args.next().expect("missing extracted_dir");
-            let exe_name = args.next().expect("missing exe_name");
-            let mut elevated = false;
-            if let Some(flag) = args.next() {
-                if flag == "--elevated" {
-                    elevated = true;
-                }
-            }
-            if let Err(e) = apply_update(
-                Path::new(&app_dir),
-                Path::new(&extract),
-                &exe_name,
-                elevated,
-            ) {
-                // Last-chance message box (no parent HWND here)
-                msgbox_raw(
-                    crate::i18n::get().strings().upd_title_update_failed,
-                    &format!("{e:#}"),
-                    true,
-                );
-            }
-            return true;
+    if let Some(first) = args.nth(1)
+        && first == "--apply-update"
+    {
+        let app_dir = args.next().expect("missing app_dir");
+        let extract = args.next().expect("missing extracted_dir");
+        let exe_name = args.next().expect("missing exe_name");
+        let mut elevated = false;
+        if let Some(flag) = args.next()
+            && flag == "--elevated"
+        {
+            elevated = true;
         }
+        if let Err(e) = apply_update(
+            Path::new(&app_dir),
+            Path::new(&extract),
+            &exe_name,
+            elevated,
+        ) {
+            // Last-chance message box (no parent HWND here)
+            msgbox_raw(
+                crate::i18n::get().strings().upd_title_update_failed,
+                &format!("{e:#}"),
+                true,
+            );
+        }
+        return true;
     }
     false
 }
@@ -76,7 +76,14 @@ pub fn spawn_check(hwnd_parent: HWND, current_version: &str) {
 }
 
 fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
-    let (tag, name, asset_name, asset_url) = fetch_latest_release()?;
+    let rel = fetch_latest_release()?;
+    let LatestRelease {
+        tag,
+        name,
+        asset_name,
+        asset_url,
+        sums_url,
+    } = &rel;
 
     let new_ver = tag.trim_start_matches('v');
     let cur_ver = current_version.trim_start_matches('v');
@@ -94,13 +101,21 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
         return Ok(());
     }
 
-    let text = crate::i18n::upd_body_update_available(lang, current_version, new_ver, &name);
+    let text = crate::i18n::upd_body_update_available(lang, current_version, new_ver, name);
     if !confirm(hwnd, t.upd_title_update_available, &text) {
         return Ok(());
     }
 
+    // Ожидаемый SHA-256 берём ДО скачивания: если в релизе нет SHA256SUMS.txt
+    // или в нём нет строки под наш ассет — прерываемся, ничего не скачивая.
+    let expected_sha = fetch_expected_sha256(sums_url.as_deref(), asset_name)?;
+
     // Download
-    let zip_path = download_asset(&asset_url, &asset_name)?;
+    let zip_path = download_asset(asset_url, asset_name)?;
+    // Проверяем целостность ДО распаковки и тем более до копирования поверх
+    // приложения: дальше по этому пути helper при необходимости поднимает права
+    // через UAC, так что непроверенный архив там недопустим.
+    verify_sha256(&zip_path, &expected_sha)?;
     // Extract
     let extracted_dir = extract_zip(&zip_path)?;
     // Decide which exe to run after update
@@ -119,7 +134,21 @@ fn check_install_and_restart(hwnd: HWND, current_version: &str) -> Result<()> {
     Ok(())
 }
 
-fn fetch_latest_release() -> Result<(String, String, String, String)> {
+/// Имя ассета с контрольными суммами, которое кладёт релизный workflow
+/// (см. .github/workflows/rust.yml).
+const SUMS_ASSET_NAME: &str = "SHA256SUMS.txt";
+
+struct LatestRelease {
+    tag: String,
+    name: String,
+    asset_name: String,
+    asset_url: String,
+    /// None, если релиз опубликован без SHA256SUMS.txt — обновление в этом
+    /// случае не выполняется, см. fetch_expected_sha256.
+    sums_url: Option<String>,
+}
+
+fn fetch_latest_release() -> Result<LatestRelease> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(UA)
         .build()?;
@@ -148,12 +177,16 @@ fn fetch_latest_release() -> Result<(String, String, String, String)> {
         .and_then(|a| a.as_array())
         .ok_or_else(|| anyhow::anyhow!("No assets in latest release"))?;
     let mut chosen: Option<(String, String)> = None;
+    let mut sums_url: Option<String> = None;
     for a in assets {
         let aname = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
         let url = a
             .get("browser_download_url")
             .and_then(|x| x.as_str())
             .unwrap_or("");
+        if aname.eq_ignore_ascii_case(SUMS_ASSET_NAME) {
+            sums_url = Some(url.to_string());
+        }
         if aname.to_ascii_lowercase().ends_with(".zip") {
             let score = score_asset_name(aname);
             match chosen {
@@ -168,7 +201,86 @@ fn fetch_latest_release() -> Result<(String, String, String, String)> {
     }
     let (asset_name, asset_url) =
         chosen.ok_or_else(|| anyhow::anyhow!("No .zip asset found in latest release"))?;
-    Ok((tag, name, asset_name, asset_url))
+    Ok(LatestRelease {
+        tag,
+        name,
+        asset_name,
+        asset_url,
+        sums_url,
+    })
+}
+
+/// Достаёт ожидаемый SHA-256 нужного ассета из опубликованного SHA256SUMS.txt.
+///
+/// Fail-closed: без файла сумм или без строки под конкретный ассет обновление
+/// не выполняется вовсе. Дальше по этому пути архив распаковывается и
+/// копируется поверх каталога приложения — при необходимости из процесса,
+/// поднятого через UAC, — так что скачивать непроверяемое здесь нельзя.
+/// Релизный workflow всегда публикует этот файл (`if-no-files-found: error`),
+/// поэтому его отсутствие означает не «старый релиз», а что-то неожиданное.
+fn fetch_expected_sha256(sums_url: Option<&str>, asset_name: &str) -> Result<String> {
+    let url = sums_url.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Release has no {SUMS_ASSET_NAME}; refusing to install an unverifiable update"
+        )
+    })?;
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(UA)
+        .build()?;
+    let resp = client.get(url).send()?;
+    if !resp.status().is_success() {
+        bail!("Downloading {} failed: {}", SUMS_ASSET_NAME, resp.status());
+    }
+    let body = resp.text()?;
+
+    parse_sha256sums(&body, asset_name).ok_or_else(|| {
+        anyhow::anyhow!("{SUMS_ASSET_NAME} has no entry for '{asset_name}'; refusing to install")
+    })
+}
+
+/// Разбирает формат `sha256sum`: `<hex>  <filename>` по строке на файл.
+fn parse_sha256sums(text: &str, asset_name: &str) -> Option<String> {
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let hash = parts.next()?;
+        // Имя может содержать пробелы — забираем остаток строки целиком.
+        let Some(rest) = line.split_once(hash).map(|(_, r)| r.trim()) else {
+            continue;
+        };
+        // Формат допускает префикс '*' у имени (binary mode у coreutils).
+        let name = rest.trim_start_matches('*');
+        if name.eq_ignore_ascii_case(asset_name) && hash.len() == 64 {
+            return Some(hash.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// Считает SHA-256 файла и сверяет с ожидаемым.
+fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut f, &mut hasher).with_context(|| format!("hash {}", path.display()))?;
+    let actual = hasher.finalize();
+    let actual_hex = actual.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    if !actual_hex.eq_ignore_ascii_case(expected_hex) {
+        // Файл заведомо испорчен или подменён — не оставляем его в %TEMP%,
+        // чтобы он не подвернулся под руку при следующей попытке.
+        let _ = fs::remove_file(path);
+        bail!(
+            "Checksum mismatch for the downloaded update (expected {expected_hex}, got {actual_hex}); \
+             the file was discarded and nothing was installed"
+        );
+    }
+    Ok(())
 }
 
 fn score_asset_name(n: &str) -> i32 {
@@ -183,15 +295,49 @@ fn score_asset_name(n: &str) -> i32 {
     score
 }
 
+/// Является ли версия пре-релизной (`4.1.0-rc1`, `2.0.0-beta`).
+///
+/// Такие релизы игнорируются: сравнение ниже работает только по MAJOR.MINOR.PATCH
+/// и не может упорядочить `4.1.0-rc1` относительно `4.1.0`, а предлагать
+/// пользователю release candidate как обычное обновление неправильно.
+fn is_prerelease(v: &str) -> bool {
+    v.contains('-') || v.contains('+')
+}
+
 fn is_newer(new_v: &str, cur_v: &str) -> bool {
-    fn parse(v: &str) -> [i64; 3] {
-        let mut out = [0i64; 3];
-        for (i, part) in v.split('.').take(3).enumerate() {
-            out[i] = part.trim().parse::<i64>().unwrap_or(0);
-        }
-        out
+    // Пре-релиз никогда не предлагается как обновление.
+    if is_prerelease(new_v) {
+        return false;
     }
-    parse(new_v) > parse(cur_v)
+    // Обратное направление важно не меньше: сидящий на 4.1.0-rc1 пользователь
+    // должен получить вышедшую 4.1.0, а не услышать "у вас уже последняя".
+    // parse() отбрасывает суффикс, поэтому 4.1.0-rc1 сравнивается как 4.1.0 —
+    // при равенстве версий это дало бы "не новее". Считаем любой стабильный
+    // релиз новее пре-релиза с тем же номером.
+    let cur_is_pre = is_prerelease(cur_v);
+    match parse_version(new_v).cmp(&parse_version(cur_v)) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => cur_is_pre,
+        std::cmp::Ordering::Less => false,
+    }
+}
+
+/// MAJOR.MINOR.PATCH с отброшенным пре-релизным/метаданным хвостом.
+///
+/// Числовой префикс сегмента берётся честно: `"1-rc1"` это 1, а не 0, как было
+/// бы при `parse::<i64>().unwrap_or(0)` на всей строке — из-за такого «тихого
+/// обнуления» 4.2.0-rc1 читался как [4,0,0] и оказывался старше 4.1.0.
+fn parse_version(v: &str) -> [i64; 3] {
+    let mut out = [0i64; 3];
+    for (i, part) in v.trim().split('.').take(3).enumerate() {
+        let digits: String = part
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        out[i] = digits.parse::<i64>().unwrap_or(0);
+    }
+    out
 }
 
 fn download_asset(url: &str, asset_name: &str) -> Result<PathBuf> {
@@ -448,7 +594,7 @@ fn recursive_copy_overwrite(src: &Path, dst: &Path) -> Result<()> {
             let mut tmp = dp.clone();
             tmp.set_extension("updt");
             copy(&sp, &tmp)?;
-            let _ = fs::rename(&tmp, &dp).or_else(|_| {
+            fs::rename(&tmp, &dp).or_else(|_| {
                 let _ = fs::remove_file(&dp);
                 fs::rename(&tmp, &dp)
             })?;
@@ -502,4 +648,112 @@ fn wide_str(s: &str) -> Vec<u16> {
 fn wide_os(s: &OsStr) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
     s.encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newer_patch_minor_and_major_are_offered() {
+        assert!(is_newer("4.0.2", "4.0.1"));
+        assert!(is_newer("4.1.0", "4.0.9"));
+        assert!(is_newer("5.0.0", "4.9.9"));
+    }
+
+    #[test]
+    fn same_or_older_version_is_not_offered() {
+        assert!(!is_newer("4.0.1", "4.0.1"));
+        assert!(!is_newer("4.0.0", "4.0.1"));
+        assert!(!is_newer("3.9.9", "4.0.0"));
+    }
+
+    #[test]
+    fn prerelease_is_never_offered_as_an_update() {
+        // Регрессия: parse::<i64>().unwrap_or(0) по всей строке превращал
+        // "0-rc1" в 0, из-за чего 4.1.0-rc1 читался как 4.1.0 и предлагался
+        // как обычный релиз.
+        assert!(!is_newer("4.1.0-rc1", "4.0.1"));
+        assert!(!is_newer("5.0.0-beta.2", "4.0.1"));
+        assert!(!is_newer("4.0.2+build7", "4.0.1"));
+    }
+
+    #[test]
+    fn stable_release_supersedes_prerelease_of_same_number() {
+        assert!(is_newer("4.1.0", "4.1.0-rc1"));
+        assert!(!is_newer("4.0.9", "4.1.0-rc1"));
+    }
+
+    #[test]
+    fn version_segments_keep_their_numeric_prefix() {
+        // Вторая регрессия того же бага: 4.2.0-rc1 давал [4,0,0] и оказывался
+        // СТАРШЕ 4.1.0.
+        assert_eq!(parse_version("4.2.0-rc1"), [4, 2, 0]);
+        assert_eq!(parse_version("v10.20.30"), [0, 20, 30]); // 'v' снимается вызывающей стороной
+        assert_eq!(parse_version("1.2"), [1, 2, 0]);
+        assert!(parse_version("4.2.0-rc1") > parse_version("4.1.0"));
+    }
+
+    #[test]
+    fn windows_x64_asset_outscores_generic_one() {
+        assert!(
+            score_asset_name("aurora-vibra-v4.0.1-windows-x64.zip")
+                > score_asset_name("aurora-vibra-v4.0.1.zip")
+        );
+        assert!(score_asset_name("app-win-x64.zip") > score_asset_name("app-win.zip"));
+    }
+
+    #[test]
+    fn sha256sums_entry_is_found_for_the_matching_asset() {
+        let text = "\
+d4be3aa2f2d7a69a5cc6943c20064b05dc44c6c2ed76ab84bdd04acc500571a4  aurora-vibra-v4.0.1-windows-x64.zip
+2e0d98ef994fa3b2681f6da3815d28970dc4f14a76e21e7a170820d98b72e8e0  other.zip";
+        assert_eq!(
+            parse_sha256sums(text, "aurora-vibra-v4.0.1-windows-x64.zip").as_deref(),
+            Some("d4be3aa2f2d7a69a5cc6943c20064b05dc44c6c2ed76ab84bdd04acc500571a4")
+        );
+        assert_eq!(parse_sha256sums(text, "missing.zip"), None);
+    }
+
+    #[test]
+    fn sha256sums_tolerates_binary_mode_star_and_spaces_in_name() {
+        let text = "d4be3aa2f2d7a69a5cc6943c20064b05dc44c6c2ed76ab84bdd04acc500571a4 *Aurora Vibra v4.0.1.zip";
+        assert_eq!(
+            parse_sha256sums(text, "Aurora Vibra v4.0.1.zip").as_deref(),
+            Some("d4be3aa2f2d7a69a5cc6943c20064b05dc44c6c2ed76ab84bdd04acc500571a4")
+        );
+    }
+
+    #[test]
+    fn missing_sums_asset_refuses_instead_of_installing_unverified() {
+        assert!(fetch_expected_sha256(None, "whatever.zip").is_err());
+    }
+
+    #[test]
+    fn verify_sha256_accepts_matching_and_deletes_mismatching_file() {
+        let dir =
+            std::env::temp_dir().join(format!("aurora-vibra-sha-test-{}", std::process::id()));
+        let _ = create_dir_all(&dir);
+        let f = dir.join("payload.bin");
+        fs::write(&f, b"aurora").unwrap();
+        // sha256("aurora")
+        let good = "c8f0ba1e17c4ffa4b1b0e5e2b5a4c0e1d4f2d6de5f38ea0e9b4e5f4b4de2b1a4";
+
+        // Считаем настоящий хеш, чтобы тест не зависел от вручную вписанной
+        // константы, и проверяем обе ветки.
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"aurora");
+        let real = h.finalize();
+        let real_hex: String = real.iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(real_hex, good, "заглушка не должна совпасть случайно");
+
+        assert!(verify_sha256(&f, &real_hex).is_ok());
+        assert!(f.exists());
+
+        assert!(verify_sha256(&f, good).is_err());
+        assert!(!f.exists(), "испорченный архив должен быть удалён");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -502,12 +502,13 @@ impl RumbleEngine {
                 let comp_rate = (fv.gear_comp_nose - s.prev_gear_comp_nose) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
                 let intensity_frac = ((severity - 0.3) / (2.5 - 0.3)).clamp(0.0, 1.0);
-                let headroom_frac = ((cfg.gear_comp_nose_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX))
+                let headroom_frac = ((cfg.gear_comp_nose_peak as f64)
+                    .clamp(0.0, GEAR_COMP_HEADROOM_MAX))
                     / GEAR_COMP_HEADROOM_MAX;
                 s.gear_comp_nose_severity_frac = headroom_frac * intensity_frac;
-                s.touchdown_settle_until = s.touchdown_settle_until.max(
-                    fv.sim_time_s + bump_duration(s.gear_comp_nose_severity_frac, &BUMP_NOSE),
-                );
+                s.touchdown_settle_until = s
+                    .touchdown_settle_until
+                    .max(fv.sim_time_s + bump_duration(s.gear_comp_nose_severity_frac, &BUMP_NOSE));
                 s.nose_touched_since_air = true;
             }
             s.prev_gear_comp_nose = fv.gear_comp_nose;
@@ -522,12 +523,13 @@ impl RumbleEngine {
                 let comp_rate = (fv.gear_comp_left - s.prev_gear_comp_left) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
                 let intensity_frac = ((severity - 0.3) / (2.5 - 0.3)).clamp(0.0, 1.0);
-                let headroom_frac = ((cfg.gear_comp_left_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX))
+                let headroom_frac = ((cfg.gear_comp_left_peak as f64)
+                    .clamp(0.0, GEAR_COMP_HEADROOM_MAX))
                     / GEAR_COMP_HEADROOM_MAX;
                 s.gear_comp_left_severity_frac = headroom_frac * intensity_frac;
-                s.touchdown_settle_until = s.touchdown_settle_until.max(
-                    fv.sim_time_s + bump_duration(s.gear_comp_left_severity_frac, &BUMP_MAIN),
-                );
+                s.touchdown_settle_until = s
+                    .touchdown_settle_until
+                    .max(fv.sim_time_s + bump_duration(s.gear_comp_left_severity_frac, &BUMP_MAIN));
                 s.left_touched_since_air = true;
             }
             s.prev_gear_comp_left = fv.gear_comp_left;
@@ -542,7 +544,8 @@ impl RumbleEngine {
                 let comp_rate = (fv.gear_comp_right - s.prev_gear_comp_right) / dt;
                 let severity = (comp_rate / 100.0).clamp(0.3, 2.5);
                 let intensity_frac = ((severity - 0.3) / (2.5 - 0.3)).clamp(0.0, 1.0);
-                let headroom_frac = ((cfg.gear_comp_right_peak as f64).clamp(0.0, GEAR_COMP_HEADROOM_MAX))
+                let headroom_frac = ((cfg.gear_comp_right_peak as f64)
+                    .clamp(0.0, GEAR_COMP_HEADROOM_MAX))
                     / GEAR_COMP_HEADROOM_MAX;
                 s.gear_comp_right_severity_frac = headroom_frac * intensity_frac;
                 s.touchdown_settle_until = s.touchdown_settle_until.max(
@@ -1401,9 +1404,13 @@ impl RumbleEngine {
             // max() здесь эквивалентен сложению, но не заставляет думать о
             // порядке — рампа ИЛИ фейд отмены, никогда оба разом.
             const ENGINE_SHUTDOWN_N2_THRESHOLD: f64 = 3.0;
-            let eng1_term = if is_combusting_eng1 {
-                engine_spool_term(eng1_effective)
-            } else if s.eng1_has_ignited && eng1_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+            // Два независимых повода отдавать разгонную составляющую: либо
+            // двигатель горит прямо сейчас, либо он уже воспламенялся и N2 ещё
+            // не упал ниже порога останова (выбег после отсечки топлива).
+            // Результат у обоих один и тот же, поэтому условия объединены.
+            let eng1_term = if is_combusting_eng1
+                || (s.eng1_has_ignited && eng1_effective > ENGINE_SHUTDOWN_N2_THRESHOLD)
+            {
                 engine_spool_term(eng1_effective)
             } else {
                 s.eng1_has_ignited = false;
@@ -1412,9 +1419,9 @@ impl RumbleEngine {
                     s.eng1_abort_fade_start_value,
                 ))
             };
-            let eng2_term = if is_combusting_eng2 {
-                engine_spool_term(eng2_effective)
-            } else if s.eng2_has_ignited && eng2_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+            let eng2_term = if is_combusting_eng2
+                || (s.eng2_has_ignited && eng2_effective > ENGINE_SHUTDOWN_N2_THRESHOLD)
+            {
                 engine_spool_term(eng2_effective)
             } else {
                 s.eng2_has_ignited = false;
@@ -1423,9 +1430,9 @@ impl RumbleEngine {
                     s.eng2_abort_fade_start_value,
                 ))
             };
-            let eng3_term = if is_combusting_eng3 {
-                engine_spool_term(eng3_effective)
-            } else if s.eng3_has_ignited && eng3_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+            let eng3_term = if is_combusting_eng3
+                || (s.eng3_has_ignited && eng3_effective > ENGINE_SHUTDOWN_N2_THRESHOLD)
+            {
                 engine_spool_term(eng3_effective)
             } else {
                 s.eng3_has_ignited = false;
@@ -1434,9 +1441,9 @@ impl RumbleEngine {
                     s.eng3_abort_fade_start_value,
                 ))
             };
-            let eng4_term = if is_combusting_eng4 {
-                engine_spool_term(eng4_effective)
-            } else if s.eng4_has_ignited && eng4_effective > ENGINE_SHUTDOWN_N2_THRESHOLD {
+            let eng4_term = if is_combusting_eng4
+                || (s.eng4_has_ignited && eng4_effective > ENGINE_SHUTDOWN_N2_THRESHOLD)
+            {
                 engine_spool_term(eng4_effective)
             } else {
                 s.eng4_has_ignited = false;

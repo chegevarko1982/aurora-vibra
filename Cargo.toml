@@ -1,14 +1,19 @@
 [package]
 name = "aurora_vibra"
-version = "4.0.1"
+version = "4.1.0"
 edition = "2024"
+# edition 2024 требует 1.85, let-chains в src/updater.rs — 1.88.
+rust-version = "1.88"
 build = "src/build.rs"
 default-run = "aurora-vibra"  # Оставляем основное приложение
 description = "Tactile feedback (force feedback / rumble) and telemetry utility for Microsoft Flight Simulator"
 authors = ["chegevarko1982"]
-repository = "https://github.com/chegevarko1982/Aurora_Vibra"
+repository = "https://github.com/chegevarko1982/aurora-vibra"
 license = "MIT"
 readme = "README.md"
+# Бинари из src/bin/ перечислены явно ниже (все под фичей dev-tools) —
+# автообнаружение подцепило бы их без required-features.
+autobins = false
 
 # lib/SimConnect.dll — проприетарный компонент Microsoft (см. THIRD-PARTY-NOTICES.md),
 # его не должно быть в публикуемом архиве крейта. TXT/ — устаревшие копии исходников.
@@ -23,9 +28,73 @@ name = "aurora-vibra"
 path = "src/main.rs"
 required-features = ["app"]
 
+# Диагностические утилиты из src/bin/: ручные стенды для железа (перебор
+# режимов вибромоторов, замеры HID-фреймов, пробы SimConnect). В релиз не
+# входят и в CI не нужны, поэтому спрятаны за отдельной фичей — иначе
+# `cargo build --release --features app` собирал бы их все, включая
+# test_motor_gui на eframe (~7 МБ).
+#
+#     cargo run --features dev-tools --bin test_motor_gui
+[[bin]]
+name = "engine_start_probe"
+path = "src/bin/engine_start_probe.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "ramp_test"
+path = "src/bin/ramp_test.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_gear"
+path = "src/bin/test_gear.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_hold"
+path = "src/bin/test_hold.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_motor_gui"
+path = "src/bin/test_motor_gui.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_spoilers"
+path = "src/bin/test_spoilers.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_throttle_stutter"
+path = "src/bin/test_throttle_stutter.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_throttle_stutter_gui"
+path = "src/bin/test_throttle_stutter_gui.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_touchdown"
+path = "src/bin/test_touchdown.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_vibro"
+path = "src/bin/test_vibro.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "test_vibroTH"
+path = "src/bin/test_vibroTH.rs"
+required-features = ["dev-tools"]
+
 [features]
 default = []
 app = []
+# Ручные диагностические стенды из src/bin/ — см. секции [[bin]] выше.
+dev-tools = []
 
 [dependencies]
 crossbeam-channel = "0.5"
@@ -52,10 +121,21 @@ libloading = "0.8"
 # utils
 anyhow = "1.0"
 thiserror = "1.0"
-reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
+# default-features = false обязательно: с дефолтными фичами reqwest тянет ещё и
+# default-tls (native-tls → hyper-tls → schannel) поверх запрошенного rustls,
+# то есть два TLS-стека в бинаре вместо одного.
+reqwest = { version = "0.11", default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# Проверка SHA-256 скачанного обновления против опубликованного SHA256SUMS.txt
+# (см. src/updater.rs) — этот путь кода при необходимости поднимает права
+# через UAC, так что архив обязан быть проверен до распаковки.
+sha2 = "0.10"
 
 # Win32 API
 once_cell = "1.19"

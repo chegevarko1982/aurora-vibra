@@ -299,10 +299,10 @@ pub fn hid_worker(
             });
 
             logs.push(format!(
-                "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X} {}, if#{}, up=0x{:04X}, u=0x{:04X}, out_len={}, report_id=0x{:02X}) path='{}'",
+                "HID: device OPENED (VID=0x{:04X}, PID=0x{:04X} ({}), if#{}, up=0x{:04X}, u=0x{:04X}, out_len={}, report_id=0x{:02X}) path='{}'",
                 devinfo.vendor_id(),
                 pid,
-                format!("({})", ursa_model_name(pid)),
+                ursa_model_name(pid),
                 devinfo.interface_number(),
                 devinfo.usage_page(),
                 devinfo.usage(),

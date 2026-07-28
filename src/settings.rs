@@ -80,10 +80,10 @@ pub struct SettingsFile {
 fn candidate_paths() -> Vec<PathBuf> {
     let mut v = Vec::new();
 
-    if let Ok(p) = std::env::current_exe() {
-        if let Some(dir) = p.parent() {
-            v.push(dir.join(FILE_NAME));
-        }
+    if let Ok(p) = std::env::current_exe()
+        && let Some(dir) = p.parent()
+    {
+        v.push(dir.join(FILE_NAME));
     }
 
     if let Some(base) = std::env::var_os("LOCALAPPDATA") {
@@ -98,10 +98,10 @@ fn candidate_paths() -> Vec<PathBuf> {
 
 /// Путь, который будет использован при сохранении (первый доступный для записи вариант).
 fn primary_save_path() -> PathBuf {
-    if let Ok(p) = std::env::current_exe() {
-        if let Some(dir) = p.parent() {
-            return dir.join(FILE_NAME);
-        }
+    if let Ok(p) = std::env::current_exe()
+        && let Some(dir) = p.parent()
+    {
+        return dir.join(FILE_NAME);
     }
     let mut p = std::env::temp_dir();
     p.push(FILE_NAME);
@@ -152,8 +152,7 @@ pub fn load() -> Option<SettingsFile> {
 /// Сохраняет набор профилей на диск.
 /// Сначала пробует папку рядом с exe, затем %LOCALAPPDATA%\AuroraVibra.
 pub fn save(file: &SettingsFile) -> std::io::Result<PathBuf> {
-    let json = serde_json::to_string_pretty(file)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(file).map_err(std::io::Error::other)?;
 
     let primary = primary_save_path();
     if std::fs::write(&primary, &json).is_ok() {

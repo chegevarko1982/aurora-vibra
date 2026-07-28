@@ -572,8 +572,9 @@ pub enum UiCmd {
     Quit,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SimStatus {
+    #[default]
     Disconnected,
     Connected,
     InFlight,
@@ -583,10 +584,4 @@ pub enum SimStatus {
     /// молча завершался, а бейдж оставался Disconnected — причина сбоя видна
     /// была только в файле лога, панель которого в релизной сборке скрыта.
     SimConnectMissing,
-}
-
-impl Default for SimStatus {
-    fn default() -> Self {
-        Self::Disconnected
-    }
 }

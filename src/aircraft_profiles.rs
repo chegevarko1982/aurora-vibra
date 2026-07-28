@@ -180,8 +180,10 @@ mod tests {
         // этого борта должно применяться ИМЕННО сохранённое значение — а не
         // повторно накатываемый встроенный оверлей.
         let mut ap = AircraftProfiles::default();
-        let mut custom_cfg = RumbleConfig::default();
-        custom_cfg.engine_idle_n2 = 68.0;
+        let custom_cfg = RumbleConfig {
+            engine_idle_n2: 68.0,
+            ..Default::default()
+        };
         ap.profiles.push(AircraftProfile {
             match_substring: "Fenix A320 CFM56".to_string(),
             config: custom_cfg,
@@ -199,8 +201,10 @@ mod tests {
     #[test]
     fn switching_from_named_profile_to_unmatched_aircraft_uses_default_plus_override() {
         let mut ap = AircraftProfiles::default();
-        let mut custom_cfg = RumbleConfig::default();
-        custom_cfg.engine_idle_n2 = 68.0;
+        let custom_cfg = RumbleConfig {
+            engine_idle_n2: 68.0,
+            ..Default::default()
+        };
         ap.profiles.push(AircraftProfile {
             match_substring: "Fenix A320 CFM56".to_string(),
             config: custom_cfg,

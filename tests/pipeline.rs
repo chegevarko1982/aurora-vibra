@@ -5,6 +5,9 @@ use aurora_vibra::{FlightVars, RumbleConfig, SimStatus};
 
 mod support;
 
+// Порядок аргументов повторяет раскладку elem[] из SimConnect (см. ElemIdx) —
+// именно поэтому их столько и именно в этом порядке.
+#[allow(clippy::too_many_arguments)]
 fn elems_from_flight(
     ias: f64,
     on_ground: f64,

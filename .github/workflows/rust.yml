@@ -76,7 +76,14 @@ jobs:
           Copy-Item $exePath (Join-Path $tmpDir "$($env:BIN_NAME).exe")
           Copy-Item "LICENSE" $tmpDir
           Copy-Item "THIRD-PARTY-NOTICES.md" $tmpDir
-          Copy-Item "README.md" $tmpDir
+          Copy-Item "CHANGELOG.md" $tmpDir
+
+          # README ссылается на assets/aurora-vibra-logo.png, которого в архиве
+          # нет — офлайн это битая картинка в первой же строке. Вырезаем блок с
+          # логотипом при копировании, остальной текст оставляем как есть.
+          $readme = Get-Content "README.md" -Raw
+          $readme = $readme -replace '(?m)^\s*<img src="assets/[^>]*>\s*\r?\n', ''
+          Set-Content -Path (Join-Path $tmpDir "README.md") -Value $readme
 
           Compress-Archive -Path (Join-Path $tmpDir "*") -DestinationPath $zipPath -Force
 
@@ -86,8 +93,51 @@ jobs:
           $sumFile = Join-Path $dist "SHA256SUMS.txt"
           Set-Content -Path $sumFile -Value $sumLine -NoNewline
 
+          # Release notes: секция текущей версии из CHANGELOG.md + постоянный
+          # хвост про проверку контрольной суммы и неподписанный бинарь.
+          # Собираем здесь, потому что джоб release ниже репозиторий не чекаутит.
+          $lines = Get-Content "CHANGELOG.md"
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^##\s+$([regex]::Escape($tag))\s*$") { $start = $i + 1; break }
+          }
+          if ($start -lt 0) {
+            Write-Error "CHANGELOG.md has no '## $tag' section - add it before tagging"
+          }
+          $end = $lines.Count
+          for ($i = $start; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^##\s+') { $end = $i; break }
+          }
+          $section = ($lines[$start..($end - 1)] -join "`n").Trim()
+
+          # Собираем массивом, а не here-string: закрывающая "@ обязана стоять
+          # в нулевой колонке, а внутри YAML-блока это разорвало бы сам блок.
+          $fence = [char]0x60 * 3
+          $tick = [char]0x60
+          $notes = @(
+            $section
+            ''
+            '---'
+            ''
+            '### Verify your download'
+            ''
+            ($fence + 'powershell')
+            ('Get-FileHash -Algorithm SHA256 .\' + $zipName)
+            $fence
+            ''
+            ('Expected: ' + $tick + $hash + $tick + ' (see also ' + $tick + 'SHA256SUMS.txt' + $tick + ' attached to this release).')
+            ''
+            '### Note on SmartScreen'
+            ''
+            'The executable is not code-signed, so Windows SmartScreen may warn on first run'
+            '(**More info -> Run anyway**). Verify the checksum above if in doubt.'
+          ) -join "`n"
+          $notesFile = Join-Path $dist "RELEASE_NOTES.md"
+          Set-Content -Path $notesFile -Value $notes
+
           Write-Host "Created: $zipPath"
           Write-Host "Checksums: $sumFile"
+          Write-Host "Release notes: $notesFile"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -96,6 +146,7 @@ jobs:
           path: |
             dist/*.zip
             dist/SHA256SUMS.txt
+            dist/RELEASE_NOTES.md
           if-no-files-found: error
 
   release:
@@ -116,7 +167,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: "Automated release for ${{ github.ref_name }}"
+          # Заметки собраны в джобе build из секции CHANGELOG.md под этот тег.
+          body_path: dist/RELEASE_NOTES.md
           draft: true                 # <-- important: draft first
           prerelease: false
           generate_release_notes: false

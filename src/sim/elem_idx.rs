@@ -204,9 +204,21 @@ mod tests {
 
     #[test]
     fn defs_names_match_expected_variants() {
-        assert_eq!(ElemIdx::DEFS[ElemIdx::OverspeedWarning as usize].0, "OVERSPEED WARNING");
-        assert_eq!(ElemIdx::DEFS[ElemIdx::FenixOverspeedVmax as usize].0, "L:I_PFD_VMAX");
-        assert_eq!(ElemIdx::DEFS[ElemIdx::PmdgEngineStart1b as usize].0, "L:EngineStart1b_Ext");
-        assert_eq!(ElemIdx::DEFS[ElemIdx::FenixGearNose as usize].0, "L:A320_Gear_Nose");
+        assert_eq!(
+            ElemIdx::DEFS[ElemIdx::OverspeedWarning as usize].0,
+            "OVERSPEED WARNING"
+        );
+        assert_eq!(
+            ElemIdx::DEFS[ElemIdx::FenixOverspeedVmax as usize].0,
+            "L:I_PFD_VMAX"
+        );
+        assert_eq!(
+            ElemIdx::DEFS[ElemIdx::PmdgEngineStart1b as usize].0,
+            "L:EngineStart1b_Ext"
+        );
+        assert_eq!(
+            ElemIdx::DEFS[ElemIdx::FenixGearNose as usize].0,
+            "L:A320_Gear_Nose"
+        );
     }
 }

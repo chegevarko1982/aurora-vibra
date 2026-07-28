@@ -29,6 +29,17 @@ jobs:
       - name: Test (lib + integration)
         run: cargo test --lib --tests --locked
 
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Audit dependencies for known advisories
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -37,12 +48,20 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build app
         run: cargo build --features app --locked
+
+      # ui.rs / tray.rs / updater.rs живут под cfg(all(windows, feature = "app")),
+      # поэтому Linux-джоб выше их не видит вовсе — это единственное место, где
+      # они попадают под линтер.
+      - name: Clippy (Windows + app)
+        run: cargo clippy --all-targets --features app -- -D warnings
 
       - name: Test
         run: cargo test --features app --locked
