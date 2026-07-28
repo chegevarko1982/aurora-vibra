@@ -73,6 +73,8 @@ pub struct Strings {
     pub help_us_text: &'static str,
     pub chk_close_to_tray: &'static str,
     pub hover_close_to_tray: &'static str,
+    pub chk_wt_enabled: &'static str,
+    pub hover_wt_enabled: &'static str,
 
     // --- Aircraft Profiles ---
     pub heading_aircraft_profiles: &'static str,
@@ -297,6 +299,8 @@ YooMoney:
 https://yoomoney.ru/to/410011348629282",
     chk_close_to_tray: "Close to tray",
     hover_close_to_tray: "When enabled, closing the window with the X button hides it to the system tray instead of quitting — the app keeps running in the background. Right-click the tray icon to Stop or Exit.",
+    chk_wt_enabled: "War Thunder",
+    hover_wt_enabled: "Enables War Thunder support: gunfire, taking hits, gear and flaps, engine start. Telemetry comes from the game's official HTTP API on localhost:8111 — turn on \"Local host telemetry\" in the game settings. Work in progress: the switch is saved but nothing is wired up yet.",
 
     heading_aircraft_profiles: "Aircraft Profiles",
     empty_profiles_hint: "No named profiles yet — use the button next to the aircraft name above to create the first one.",
@@ -513,6 +517,8 @@ YooMoney:
 https://yoomoney.ru/to/410011348629282",
     chk_close_to_tray: "Сворачивать в трей",
     hover_close_to_tray: "Если включено, закрытие окна крестиком прячет его в системный трей вместо выхода — приложение продолжает работать в фоне. Правый клик по иконке в трее — Stop или Exit.",
+    chk_wt_enabled: "War Thunder",
+    hover_wt_enabled: "Включает поддержку War Thunder: стрельба, попадания по своему борту, шасси и закрылки, запуск двигателя. Телеметрия берётся из официального HTTP API игры на localhost:8111 — не забудь включить «Локальная телеметрия» в настройках игры. В разработке: переключатель сохраняется, но функционал ещё не подключён.",
 
     heading_aircraft_profiles: "Профили самолётов",
     empty_profiles_hint: "Именных профилей ещё нет — используйте кнопку рядом с названием самолёта наверху, чтобы создать первый.",

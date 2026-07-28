@@ -91,6 +91,8 @@ fn main() -> Result<()> {
     aurora_vibra::settings::set_close_to_tray(close_to_tray);
     let monitor_collapsed = settings_file.monitor_collapsed;
     aurora_vibra::settings::set_monitor_collapsed(monitor_collapsed);
+    let wt_enabled = settings_file.wt_enabled;
+    aurora_vibra::settings::set_wt_enabled(wt_enabled);
     aurora_vibra::settings::set_simconnect_dll_path(settings_file.simconnect_dll_path.clone());
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
@@ -202,6 +204,7 @@ fn main() -> Result<()> {
         monitor_collapsed,
         hold,
         close_to_tray,
+        wt_enabled,
         force_quit: force_quit.clone(),
         show_help: false,
         show_help_us: false,

@@ -246,6 +246,11 @@ pub struct UiState {
     // если только это не настоящий Exit из трея (force_quit), который должен
     // этот перехват обойти. См. UiState::ui() и tray.rs.
     pub close_to_tray: bool,
+    // "War Thunder" (Options menu): включает будущую поддержку WT. Пока только
+    // персистится в SettingsFile — ни один воркер его ещё не читает, движка
+    // для WT нет (см. scratchpad/wt_support_plan.md). Заведён заранее, чтобы
+    // точка входа в UI уже существовала к моменту реализации.
+    pub wt_enabled: bool,
     pub force_quit: Arc<AtomicBool>,
     pub show_help: bool,
     pub show_help_us: bool,
@@ -263,6 +268,7 @@ impl UiState {
     fn save_global_settings(&self) {
         crate::settings::set_close_to_tray(self.close_to_tray);
         crate::settings::set_monitor_collapsed(self.monitor_collapsed);
+        crate::settings::set_wt_enabled(self.wt_enabled);
         let ap = self.aircraft_profiles.lock();
         let _ = crate::settings::save(&crate::settings::SettingsFile {
             default: ap.default.clone(),
@@ -271,6 +277,7 @@ impl UiState {
             close_to_tray: self.close_to_tray,
             simconnect_dll_path: crate::settings::simconnect_dll_path(),
             monitor_collapsed: self.monitor_collapsed,
+            wt_enabled: self.wt_enabled,
         });
     }
 
@@ -846,6 +853,18 @@ impl eframe::App for UiState {
                             if ui
                                 .checkbox(&mut self.close_to_tray, t.chk_close_to_tray)
                                 .on_hover_text(t.hover_close_to_tray)
+                                .changed()
+                            {
+                                self.save_global_settings();
+                            }
+                            ui.separator();
+                            // Точка входа в будущую поддержку War Thunder.
+                            // Намеренно лежит здесь, в Опциях, а не в тулбаре:
+                            // функционала за ним пока нет, флаг только
+                            // сохраняется в SettingsFile (см. UiState::wt_enabled).
+                            if ui
+                                .checkbox(&mut self.wt_enabled, t.chk_wt_enabled)
+                                .on_hover_text(t.hover_wt_enabled)
                                 .changed()
                             {
                                 self.save_global_settings();

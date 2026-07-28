@@ -34,6 +34,22 @@ pub fn set_monitor_collapsed(v: bool) {
     MONITOR_COLLAPSED.store(v, Ordering::Relaxed);
 }
 
+// Тот же приём, что и у CLOSE_TO_TRAY и по той же причине: без глобального
+// зеркала aircraft_profiles::save_active (кнопка Save профиля) собирает
+// SettingsFile без доступа к UiState и молча сбрасывал бы флаг обратно в false.
+static WT_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Включена ли поддержка War Thunder (пункт "War Thunder" в меню Опции).
+/// Пока только персистится и ничего не запускает — переключатель заведён
+/// заранее, под будущий WT-функционал (см. scratchpad/wt_support_plan.md).
+pub fn wt_enabled() -> bool {
+    WT_ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn set_wt_enabled(v: bool) {
+    WT_ENABLED.store(v, Ordering::Relaxed);
+}
+
 // Тот же приём, что и у CLOSE_TO_TRAY: путь к SimConnect.dll, выбранный
 // пользователем вручную, нужен sim::worker::load_simconnect, у которого нет
 // доступа ни к SettingsFile, ни к UiState. Путь, а не флаг, поэтому Mutex.
@@ -72,6 +88,10 @@ pub struct SettingsFile {
     // Свёрнут ли столбец Live Monitor (правая панель). По умолчанию развёрнут —
     // старые файлы без этого поля десериализуются в false.
     pub monitor_collapsed: bool,
+    // Поддержка War Thunder (пункт "War Thunder" в меню Опции). По умолчанию
+    // выключено — старые файлы без этого поля десериализуются в false.
+    // Сам функционал ещё не реализован, флаг заведён заранее.
+    pub wt_enabled: bool,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
@@ -142,6 +162,7 @@ pub fn load() -> Option<SettingsFile> {
                     close_to_tray: false,
                     simconnect_dll_path: None,
                     monitor_collapsed: false,
+                    wt_enabled: false,
                 });
             }
         }
