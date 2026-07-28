@@ -12,13 +12,15 @@ use std::{
     time::Duration,
 };
 
+use windows::Win32::Foundation::HWND;
+
 use crate::{
     ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig,
     SimStatus, UiCmd,
     aircraft_profiles::{self, AircraftProfile, AircraftProfiles},
     i18n::{self, Lang, Strings},
     profiles::ProfileState,
-    tray,
+    tray, updater,
 };
 
 /// Цветовая палитра карточек эффектов и Live Monitor. Раньше цвета были
@@ -745,9 +747,8 @@ impl eframe::App for UiState {
                 ui.separator();
                 ui.add_space(4.0);
 
-                // TODO: кнопка "Check for updates" временно скрыта из тулбара
-                // (функциональность сохранена в updater::spawn_check и в
-                // трей-меню — см. tray.rs), включим обратно позже.
+                // "Check for updates" перенесена в оверфлоу-меню "..." → Options
+                // (см. ниже) — вместо отдельной кнопки в тулбаре.
 
                 // Stop/Resume перенесены в левую колонку навигации, под пункт
                 // Telemetry — см. nav_panel ниже.
@@ -784,6 +785,11 @@ impl eframe::App for UiState {
                                 .changed()
                             {
                                 self.save_global_settings();
+                            }
+                            ui.separator();
+                            if ui.button(t.tray_check_updates).clicked() {
+                                updater::spawn_check(HWND(0), env!("CARGO_PKG_VERSION"));
+                                ui.close();
                             }
                         });
                         ui.label(t.hover_help);
