@@ -79,6 +79,7 @@ pub struct Strings {
     pub empty_profiles_hint: &'static str,
     pub hover_delete_profile: &'static str,
     pub hover_active_profile: &'static str,
+    pub hover_apply_profile: &'static str,
 
     // --- Rumble Effects ---
     pub heading_rumble_effects: &'static str,
@@ -223,6 +224,9 @@ pub struct Strings {
     pub lbl_no_active_effects: &'static str,
     pub hover_monitor_collapse: &'static str,
     pub hover_monitor_expand: &'static str,
+    pub btn_set_n2_idle: &'static str,
+    pub hover_set_n2_idle: &'static str,
+    pub log_n2_idle_set: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -298,6 +302,7 @@ https://yoomoney.ru/to/410011348629282",
     empty_profiles_hint: "No named profiles yet — use the button next to the aircraft name above to create the first one.",
     hover_delete_profile: "Delete profile",
     hover_active_profile: "Currently loaded profile",
+    hover_apply_profile: "Copy this profile's settings into the current config (does not switch which aircraft it's saved under — press Save afterwards to store them for the current aircraft)",
 
     heading_rumble_effects: "Rumble Effects",
 
@@ -435,6 +440,9 @@ https://yoomoney.ru/to/410011348629282",
     lbl_no_active_effects: "No effects active",
     hover_monitor_collapse: "Hide Live Monitor",
     hover_monitor_expand: "Show Live Monitor",
+    btn_set_n2_idle: "(SET)",
+    hover_set_n2_idle: "Set this value minus 1.5% as Engine Idle N2",
+    log_n2_idle_set: "N2 Idle set to {val:.1}% (from Eng1 telemetry - 1.5%)",
 };
 
 pub const RU: Strings = Strings {
@@ -510,6 +518,7 @@ https://yoomoney.ru/to/410011348629282",
     empty_profiles_hint: "Именных профилей ещё нет — используйте кнопку рядом с названием самолёта наверху, чтобы создать первый.",
     hover_delete_profile: "Удалить профиль",
     hover_active_profile: "Загруженный сейчас профиль",
+    hover_apply_profile: "Скопировать настройки этого профиля в текущий конфиг (борт, за которым профиль сохранён, не меняется — после этого нажмите Сохранить, чтобы записать их под текущим самолётом)",
 
     heading_rumble_effects: "Эффекты вибрации",
 
@@ -647,6 +656,9 @@ https://yoomoney.ru/to/410011348629282",
     lbl_no_active_effects: "Нет активных эффектов",
     hover_monitor_collapse: "Скрыть монитор активности",
     hover_monitor_expand: "Показать монитор активности",
+    btn_set_n2_idle: "(SET)",
+    hover_set_n2_idle: "Записать текущее значение минус 1.5% в N2 Холостой%",
+    log_n2_idle_set: "N2 Холостой задан: {val:.1}% (из телеметрии Eng1 - 1.5%)",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {

@@ -1164,6 +1164,7 @@ impl eframe::App for UiState {
                                     ui.label(t.empty_profiles_hint);
                                 }
                                 let mut delete: Option<usize> = None;
+                                let mut apply: Option<usize> = None;
                                 for (i, p) in profiles_snapshot.iter().enumerate() {
                                     ui.horizontal(|ui| {
                                         ui.label(&p.match_substring);
@@ -1176,6 +1177,13 @@ impl eframe::App for UiState {
                                             .on_hover_text(t.hover_active_profile);
                                         }
                                         if ui
+                                            .button("⬇")
+                                            .on_hover_text(t.hover_apply_profile)
+                                            .clicked()
+                                        {
+                                            apply = Some(i);
+                                        }
+                                        if ui
                                             .button("🗑")
                                             .on_hover_text(t.hover_delete_profile)
                                             .clicked()
@@ -1183,6 +1191,16 @@ impl eframe::App for UiState {
                                             delete = Some(i);
                                         }
                                     });
+                                }
+                                if let Some(i) = apply
+                                    && let Some(p) = profiles_snapshot.get(i)
+                                {
+                                    self.config.set(p.config.clone());
+                                    self.profile_state.lock().force_recheck();
+                                    self.logs.push(format!(
+                                        "Aircraft profile: copied settings from '{}' into current config (unsaved)",
+                                        p.match_substring
+                                    ));
                                 }
                                 if let Some(i) = delete {
                                     let title = self.aircraft_title.lock().clone();
@@ -2112,7 +2130,23 @@ impl eframe::App for UiState {
                                                 ui.end_row();
 
                                                 ui.label(t.lbl_n2);
-                                                ui.label(format!("{:.1}%", v.eng1_n2_percent));
+                                                ui.horizontal(|ui| {
+                                                    ui.label(format!("{:.1}%", v.eng1_n2_percent));
+                                                    if ui
+                                                        .small_button(t.btn_set_n2_idle)
+                                                        .on_hover_text(t.hover_set_n2_idle)
+                                                        .clicked()
+                                                    {
+                                                        let new_val =
+                                                            (v.eng1_n2_percent - 1.5).clamp(10.0, 100.0) as f32;
+                                                        self.config.with_mut(|cfg| {
+                                                            cfg.engine_idle_n2 = new_val;
+                                                        });
+                                                        self.logs.push(
+                                                            t.log_n2_idle_set.replace("{val:.1}", &format!("{:.1}", new_val)),
+                                                        );
+                                                    }
+                                                });
                                                 ui.end_row();
 
                                                 ui.label(t.lbl_combustion);
