@@ -203,6 +203,8 @@ fn main() -> Result<()> {
         hold,
         close_to_tray,
         force_quit: force_quit.clone(),
+        show_help: false,
+        show_help_us: false,
         lang,
 
         rx_ui,

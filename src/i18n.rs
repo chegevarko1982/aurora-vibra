@@ -72,6 +72,9 @@ pub struct Strings {
     pub btn_resume: &'static str,
     pub btn_options: &'static str,
     pub hover_help: &'static str,
+    pub help_text: &'static str,
+    pub hover_help_us: &'static str,
+    pub help_us_text: &'static str,
     pub chk_close_to_tray: &'static str,
     pub hover_close_to_tray: &'static str,
 
@@ -244,6 +247,51 @@ pub const EN: Strings = Strings {
     btn_resume: "▶ Resume",
     btn_options: "Options",
     hover_help: "Help",
+    help_text: "Aurora Vibra drives tactile feedback (rumble) on the joystick and throttle (WinWing and compatible): runway-joint thumps on taxi, gear touchdown kick, flap/spoiler vibration, stall and overspeed effects, engine start spool-up. Everything is computed from the aircraft's real telemetry via SimConnect, not from the cockpit switch positions.
+
+## 1. Launch & connection
+The top bar shows the SimConnect link status (Connected/Disconnected/In Flight) and two dots — Sidestick and Throttle — that light up once each physical device is detected. If it says \"SimConnect.dll not found\" next to the status, there's no telemetry to read from; that's not an MSFS problem, restarting the sim won't help (hover it for where to look in AuroraVibra.log).
+
+The current aircraft name next to the dots changes color:
+- white — no saved profile for this aircraft yet, the default set is in use;
+- green — this aircraft has its own saved profile, and it's loaded;
+- blue — the aircraft has built-in custom telemetry handling (PMDG, Fenix A320, MADDOG, Learjet) — effects are tuned to its non-standard SimConnect variables regardless of whether a profile is saved.
+
+## 2. Aircraft profiles
+The app detects the aircraft on every flight load and applies either its named profile (if one was saved before) or the shared default. The \"Aircraft Profiles\" list on the left shows the saved aircraft — click a row to load it, the delete icon removes it.
+
+Workflow: adjust the effects, then click Save to write them as the current aircraft's named profile (if it doesn't have one yet, it's created right there — no separate button needed). The 📌 toggle next to Save also writes the same values as the default, applied to any aircraft without its own profile. Load re-reads the settings file from disk, useful to discard unsaved edits. While there are unsaved changes, the Save button is highlighted in orange.
+
+## 3. Tuning effects
+The middle of the window has 5 sections (buttons on the left): Aerodynamics, Taxi Thump, Engines Start/Stop, Gears Touchdown, Telemetry. Every effect is a card with the same layout:
+- the checkbox on the left enables/disables the effect;
+- the card's border lights up while the effect is actually triggering right now — handy for dialing in the strength in flight without looking away;
+- the intensity slider sets the vibration strength as a percentage;
+- the two icons on the right (joystick/throttle) route the effect to a device — one, both, or neither;
+- some effects have extra fields, e.g. a speed/angle/deployment threshold above which the effect switches on.
+
+Section summary:
+- Aerodynamics — overspeed (threshold read from the SimConnect barber pole, or set manually via Override), background airflow rumble, flap/slat motor buzz while moving, minimum stall shake, spoiler airflow vibration, bank/turbulence shake.
+- Taxi Thump — runway-joint rhythm on taxi: start speed, speed at full frequency, the curve shape of the ramp-up.
+- Engines Start/Stop — starter spool-up plus a fixed ignition kick; N2 idle threshold; 4-engine grouping mode and a hand-swap option for mirrored cockpit layouts.
+- Gears Touchdown — separate impact strength for the nose and each main gear, and how much landing hardness stretches the impact's duration.
+- Telemetry — live aircraft data (airspeed, bank, flap/gear/spoiler position) and engine data (N2, RPM, starter status) for monitoring and profile tuning.
+
+The Reset button at the bottom restores the effects to factory defaults — but only live: nothing is written to disk until Save is pressed, and Load would still bring back the previously saved profile.
+
+## 4. Pause & background
+Stop/Resume in the left column mutes all effects temporarily without touching the settings — handy to kill the rumble for a minute without losing the configuration. The \"Close to tray\" option (\"...\" menu → Options) makes closing the window with the X button hide it to the system tray instead of quitting — the app keeps running in the background. The tray icon offers the same Stop/Resume plus a full Exit.
+
+## 5. Updates
+\"Check for updates…\" in the \"...\" menu → Options runs a one-off version check; if a newer release exists, it offers to install it and restart the app automatically.",
+    hover_help_us: "Donate",
+    help_us_text: "Your support helps keep Aurora Vibra up to date — adding new hardware devices, simulators, and custom aircraft support.
+
+BTC:
+bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5
+
+YooMoney:
+https://yoomoney.ru/to/410011348629282",
     chk_close_to_tray: "Close to tray",
     hover_close_to_tray: "When enabled, closing the window with the X button hides it to the system tray instead of quitting — the app keeps running in the background. Right-click the tray icon to Stop or Exit.",
 
@@ -407,7 +455,52 @@ pub const RU: Strings = Strings {
     btn_stop: "⛔ Стоп",
     btn_resume: "▶ Продолжить",
     btn_options: "Опции",
-    hover_help: "Help",
+    hover_help: "Справка",
+    help_text: "Aurora Vibra отдаёт на джойстик и РУД (WinWing и совместимые) тактильную отдачу: удары стоек ВПП на рулении, отдачу шасси при касании, вибрацию закрылков/спойлеров, эффекты сваливания и превышения скорости, раскрутку двигателя при запуске. Всё считается из реальной телеметрии борта через SimConnect, а не из положения переключателей в кабине.
+
+## 1. Запуск и подключение
+Верхняя панель показывает статус связи с симулятором (Connected/Disconnected/In Flight) и два индикатора — Sidestick и Throttle: горят, когда соответствующее физическое устройство опознано. Если рядом со статусом связи написано «SimConnect.dll не найдена» — телеметрию читать нечем; это не проблема MSFS, перезапуск симулятора не поможет (наведите — там же путь, куда смотреть в AuroraVibra.log).
+
+Название текущего борта рядом с индикаторами меняет цвет:
+- белый — для этого борта ещё нет сохранённого профиля, используется набор по умолчанию;
+- зелёный — для этого борта уже есть свой сохранённый профиль, он и загружен;
+- синий — у борта есть встроенная логика чтения телеметрии (PMDG, Fenix A320, MADDOG, Learjet) — эффекты подстроены под его нестандартные SimConnect-переменные независимо от того, сохранён профиль или нет.
+
+## 2. Профили самолётов
+Приложение само определяет борт при каждой загрузке полёта и подставляет либо его именной профиль (если сохранён раньше), либо общий default. Список «Профили самолётов» слева — это уже сохранённые борта; клик по строке загружает профиль, значок удаления рядом — убирает его.
+
+Рабочий цикл: настроили эффекты → кнопка «Сохранить» записывает их как именной профиль текущего борта (если для него ещё не было профиля — он создаётся тут же, отдельной кнопки для этого не нужно). Флажок 📌 рядом с «Сохранить» дополнительно фиксирует те же значения как default — то, что подставится любому борту без своего профиля. «Загрузить» перечитывает файл настроек с диска, если нужно откатить несохранённые правки. Пока есть несохранённые изменения, кнопка «Сохранить» подсвечивается оранжевым.
+
+## 3. Настройка эффектов
+Средняя часть окна разбита на 5 разделов (кнопки слева): Аэродинамика, Стыки ВПП, Двигатели: Запуск/Останов, Стойки шасси: касание, Телеметрия. Каждый эффект — карточка с одинаковым устройством:
+- чекбокс слева включает/выключает эффект;
+- рамка карточки подсвечивается, когда эффект срабатывает прямо сейчас — удобно подбирать силу вживую, не отрываясь от полёта;
+- слайдер интенсивности задаёт силу вибрации в процентах;
+- две иконки справа (джойстик/РУД) переключают, на какое устройство эффект отправляется — на одно, на оба или ни на одно;
+- у части эффектов есть дополнительные поля — например, порог по скорости/углу/проценту выпуска, после которого эффект включается.
+
+Коротко по разделам:
+- Аэродинамика — превышение скорости (порог берётся из барбер-пола SimConnect либо задаётся вручную флажком Override), фоновая вибрация от воздушного потока, реакция закрылков/предкрылков на движение, минимальный уровень тряски при сваливании, вибрация от выпущенных спойлеров, тряска от крена/турбулентности.
+- Стыки ВПП — ритм ударов от стыков плит на рулении: скорость начала эффекта, скорость выхода на полную частоту, кривизна нарастания ритма.
+- Двигатели: Запуск/Останов — раскрутка стартером плюс фиксированный удар воспламенения; порог холостых оборотов N2; режим для 4-моторных бортов и смена сторон джойстик/РУД под свою посадку в кабине.
+- Стойки шасси: касание — отдельная сила удара для носовой и обеих основных стоек, и насколько жёсткость посадки растягивает удар во времени.
+- Телеметрия — живые параметры борта (скорость, крен, положение закрылков/шасси/спойлеров) и параметры двигателей (N2, обороты, статус стартера) — для контроля и отладки профиля.
+
+Кнопка «Сброс» внизу возвращает эффекты к заводским значениям — но только на лету: пока не нажата «Сохранить», на диск это не пишется, и «Загрузить» вернёт прежний сохранённый профиль.
+
+## 4. Пауза и фон
+«Стоп/Продолжить» в левой колонке временно глушит все эффекты, не трогая настройки — удобно, если нужно на минуту отвлечься от вибрации, не теряя конфигурацию. Опция «Сворачивать в трей» (меню «...» → Опции) делает так, что закрытие окна крестиком прячет его в системный трей вместо выхода — программа продолжает работать в фоне. Через иконку в трее доступны те же Стоп/Продолжить и полный выход.
+
+## 5. Обновления
+Пункт «Проверить обновления…» в меню «...» → Опции запускает разовую проверку версии; при наличии новой — предложит установить и перезапустить приложение автоматически.",
+    hover_help_us: "Поддержать",
+    help_us_text: "Ваша поддержка помогает актуализировать Aurora Vibra — добавлять поддержку новых устройств, симуляторов и кастомных самолётов.
+
+BTC:
+bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5
+
+YooMoney:
+https://yoomoney.ru/to/410011348629282",
     chk_close_to_tray: "Сворачивать в трей",
     hover_close_to_tray: "Если включено, закрытие окна крестиком прячет его в системный трей вместо выхода — приложение продолжает работать в фоне. Правый клик по иконке в трее — Stop или Exit.",
 

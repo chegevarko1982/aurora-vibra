@@ -243,6 +243,8 @@ pub struct UiState {
     // этот перехват обойти. См. UiState::ui() и tray.rs.
     pub close_to_tray: bool,
     pub force_quit: Arc<AtomicBool>,
+    pub show_help: bool,
+    pub show_help_us: bool,
 
     pub rx_ui: Receiver<UiCmd>,
     pub tx_ui: Sender<UiCmd>,
@@ -596,6 +598,55 @@ impl eframe::App for UiState {
 
         let t = self.lang.strings();
 
+        if self.show_help {
+            let mut open = true;
+            egui::Window::new(t.hover_help)
+                .open(&mut open)
+                .default_size(egui::vec2(560.0, 640.0))
+                .collapsible(false)
+                .show(&ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Лёгкая markdown-подобная разметка: "## " -> heading,
+                        // пустая строка -> отступ, всё остальное -> абзац/пункт
+                        // с переносом по ширине окна.
+                        for line in t.help_text.lines() {
+                            if let Some(h) = line.strip_prefix("## ") {
+                                ui.add_space(8.0);
+                                ui.heading(h);
+                                ui.add_space(2.0);
+                            } else if line.is_empty() {
+                                ui.add_space(6.0);
+                            } else {
+                                ui.add(egui::Label::new(line).wrap());
+                            }
+                        }
+                    });
+                });
+            self.show_help = open;
+        }
+
+        if self.show_help_us {
+            let mut open = true;
+            egui::Window::new(t.hover_help_us)
+                .open(&mut open)
+                .default_size(egui::vec2(480.0, 260.0))
+                .collapsible(false)
+                .show(&ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Тот же текст, но каждая строка selectable(true) — адреса
+                        // кошельков и ссылку на YooMoney нужно выделять и копировать.
+                        for line in t.help_us_text.lines() {
+                            if line.is_empty() {
+                                ui.add_space(6.0);
+                            } else {
+                                ui.add(egui::Label::new(line).wrap().selectable(true));
+                            }
+                        }
+                    });
+                });
+            self.show_help_us = open;
+        }
+
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let st = *self.status.lock();
@@ -792,7 +843,14 @@ impl eframe::App for UiState {
                                 ui.close();
                             }
                         });
-                        ui.label(t.hover_help);
+                        if ui.button(t.hover_help).clicked() {
+                            self.show_help = true;
+                            ui.close();
+                        }
+                        if ui.button(t.hover_help_us).clicked() {
+                            self.show_help_us = true;
+                            ui.close();
+                        }
                     });
 
                     let new_lang = if en_btn.clicked() {
