@@ -28,14 +28,42 @@ use crate::EffectsSnapshot;
 use super::aero_profiles::{self, StallProfile};
 use super::vars::WtVars;
 
-/// Жёсткий потолок интенсивности эффекта срыва потока — та же величина, что и
-/// приватная `STALL_CEILING_HARD_CAP` в `crate::rumble` (MSFS-сторона),
-/// продублирована локально, т.к. импортировать приватную константу другого
-/// модуля нельзя. `cfg.stall_ceiling` не может превысить это значение.
-const WT_STALL_CEILING_HARD_CAP: f64 = 10.0;
+/// Жёсткий потолок силы break-импульса (см. `BREAK_IMPULSE_PEAK_MULTIPLIER`
+/// ниже) — единственное, что теперь масштабируется через `ceiling`/
+/// `cfg.stall_ceiling`. Continuous-часть (подход и сам срыв, см.
+/// `StallState::step`) по запросу пользователя всегда идёт по сырой шкале
+/// 0..255 напрямую, потолок её не трогает — тактильное разделение фаз
+/// строится на ХАРАКТЕРЕ сигнала (ровный рост vs пила), а не на громкости.
+const WT_STALL_CEILING_HARD_CAP: f64 = 80.0;
 /// Ширина линейного участка нарастания баффета перед сваливанием (град AoA) —
 /// взято из пользовательского примера ((AoA-15)/4.9 при пороге сваливания 19.9°).
 const PRE_STALL_RAMP_WIDTH_DEG: f64 = 4.9;
+/// Частота пульсации ПОСЛЕ пересечения порога сваливания (Гц) — по живому
+/// тесту нужно чёткое тактильное разделение: на подходе ровный линейный рост
+/// (см. `StallState::step`), а в самом срыве/штопоре — резкая пульсация на
+/// полную мощность (0..255), а не дальнейший плавный рост. Держится ПОКА
+/// самолёт не выйдет из срыва (AoA не опустится ниже порога), не зависит от
+/// глубины срыва. Форма (пауза/скачок, см. STALL_PULSE_DUTY) по живому тесту
+/// подтверждена, эту правку — сжали её вдвое по времени: период 0.4с -> 0.2с
+/// (пауза 0.1с + скачок на 255 на 0.1с).
+const STALL_SAWTOOTH_HZ: f64 = 5.0;
+/// Скважность пульсации в срыве — доля периода (`1 / STALL_SAWTOOTH_HZ`),
+/// на которую мотор ВЫКЛЮЧЕН (пауза), прежде чем резко включиться на полную
+/// мощность. По живому тесту заменили плавный рост 0→255 внутри периода на
+/// чёткий прямоугольный импульс: пауза и работа мотора — поровну (0.5).
+const STALL_PULSE_DUTY: f64 = 0.5;
+/// Длительность гладкого break-импульса ("щелчок" в момент самого отрыва
+/// потока), взводится один раз на восходящем фронте пересечения порога.
+const BREAK_IMPULSE_DURATION_S: f64 = 0.25;
+/// Пиковая сила break-импульса как множитель текущего потолка — чуть выше
+/// continuous-баффета в этот же момент, чтобы ощущаться отдельным резким
+/// событием на фоне нарастающей дрожи.
+const BREAK_IMPULSE_PEAK_MULTIPLIER: f64 = 1.5;
+/// Запас (град AoA) НИЖЕ порога сваливания, на который AoA должен опуститься,
+/// прежде чем break-импульс взведётся заново — без этого в штопоре, где AoA
+/// дрожит прямо у порога, импульс ретриггерится по многу раз в секунду и
+/// смазывается в гул вместо одного чёткого щелчка на отрыве потока.
+const BREAK_REARM_HYSTERESIS_DEG: f64 = 3.0;
 
 /// Минимальный xorshift32 — та же реализация, что и в test_gun1.rs (только
 /// для джиттера амплитуды текстуры, криптостойкость не нужна).
@@ -136,32 +164,48 @@ impl GunState {
 
 // ═══════════════════════════════════════════════════════════════════════
 // Stall/буффет срыва потока — захардкоженный профиль порогов, пока только
-// для Bf 109 F-4 (см. wt_link::aero_profiles). Текстура — рваная/дрожащая
-// (по образцу GunState выше), не гладкая синусоида (как Overspeed на
-// MSFS-стороне): реальный баффет ближе к хаотичной тряске, чем к тону.
-// Гипотеза для живой проверки, не откалиброванный результат — см. план.
+// для Bf 109 F-4 (см. wt_link::aero_profiles). Тактильное разделение фаз —
+// через ХАРАКТЕР сигнала, не через громкость (по живому тесту): на подходе
+// ровная линейная вибрация 0..255 без джиттера, в срыве — прямоугольный
+// импульс с паузой (пауза/работа мотора по 0.5 периода, см. STALL_PULSE_DUTY)
+// 0..255 (см. StallState::step). Гипотеза для живой проверки — см. план.
 // ═══════════════════════════════════════════════════════════════════════
 
 #[derive(Debug)]
 struct StallState {
-    last_cycle_idx: i64,
-    cycle_jitter_mul: f64,
-    rng: Xorshift32,
+    /// Взведён ли break-импульс на следующее пересечение порога снизу вверх.
+    /// Снимается сразу после срабатывания, возвращается только когда AoA
+    /// опустится хотя бы на `BREAK_REARM_HYSTERESIS_DEG` ниже порога — иначе
+    /// в штопоре, где AoA дрожит прямо у порога, импульс ретриггерился бы
+    /// много раз подряд (см. константу выше).
+    break_armed: bool,
+    /// Момент времени взвода текущего break-импульса, `< 0.0` — не взведён.
+    break_impulse_t0: f64,
 }
 
 impl StallState {
-    fn new(salt: u32) -> Self {
+    fn new() -> Self {
         Self {
-            last_cycle_idx: -1,
-            cycle_jitter_mul: 1.0,
-            rng: Xorshift32::seeded(salt),
+            break_armed: true,
+            break_impulse_t0: -1.0,
         }
     }
 
     /// Возвращает интенсивность баффета (0.0, если самолёт вне профиля,
     /// ниже safety cutoff по IAS или AoA ниже начала пред-срывного участка).
+    ///
+    /// Модель — три чётко разделённых ощущения (см. план и живой тест):
+    /// РОВНЫЙ линейный AoA-зависимый рост 0..255 на подходе к срыву, резкий
+    /// break-импульс ровно в момент пересечения порога, и — ПОКА самолёт в
+    /// срыве/штопоре — прямоугольная пульсация пауза/полная мощность (0/255),
+    /// не зависящая от глубины срыва. Разделение — по характеру сигнала
+    /// (ровный рост vs пауза+скачок), обе фазы идут по полной сырой шкале 0..255.
     fn step(&mut self, t: f64, vars: &WtVars, profile: &StallProfile, ceiling: f64) -> f64 {
         if vars.ias_kmh <= profile.ias_safety_cutoff_kmh as f64 {
+            // Состояние break-импульса (armed/t0) НЕ трогаем: это низкий
+            // порог "стоим на месте", кратких провалов IAS в реальном полёте
+            // тут почти не бывает, но если случатся — не хотим ни ложно
+            // пересбрасывать взвод, ни обрубать уже идущий импульс.
             return 0.0; // safety cutoff — не дребезжать на рулёжке/стоянке
         }
 
@@ -174,33 +218,65 @@ impl StallState {
         let stall_aoa = clean - (clean - landing_mid) * flap_frac;
         let pre_stall_start = stall_aoa - PRE_STALL_RAMP_WIDTH_DEG;
 
-        let growth = if vars.aoa_deg >= stall_aoa {
-            1.0
-        } else if vars.aoa_deg > pre_stall_start {
-            (vars.aoa_deg - pre_stall_start) / (stall_aoa - pre_stall_start)
+        let is_stalled = vars.aoa_deg >= stall_aoa;
+        // Взвод break-импульса — с гистерезисом: срабатывает на пересечении
+        // порога снизу вверх, только если был взведён, и сразу снимается.
+        // Возвращается только когда AoA опустится заметно (на
+        // BREAK_REARM_HYSTERESIS_DEG) ниже порога — иначе в штопоре, где AoA
+        // колеблется прямо у порога, импульс ретриггерился бы на каждом
+        // мелком колебании и смазывался в гул вместо одного чёткого щелчка.
+        if vars.aoa_deg < stall_aoa - BREAK_REARM_HYSTERESIS_DEG {
+            self.break_armed = true;
+        }
+        if is_stalled && self.break_armed {
+            self.break_impulse_t0 = t;
+            self.break_armed = false;
+        }
+
+        let ceiling = ceiling.min(WT_STALL_CEILING_HARD_CAP);
+
+        // Break-импульс: гладкая (без jitter) sin-огибающая поверх
+        // continuous-члена, по образцу gear-lock bump — контраст подчёркивает
+        // "вот отдельное резкое событие" ровно на отрыве потока.
+        let break_term = if self.break_impulse_t0 >= 0.0 {
+            let p = (t - self.break_impulse_t0) / BREAK_IMPULSE_DURATION_S;
+            if (0.0..=1.0).contains(&p) {
+                ceiling * BREAK_IMPULSE_PEAK_MULTIPLIER * (PI * p).sin()
+            } else {
+                self.break_impulse_t0 = -1.0;
+                0.0
+            }
         } else {
             0.0
         };
 
-        if growth <= 0.0 {
+        // Continuous-часть — два ПРИНЦИПИАЛЬНО разных режима, не одна общая
+        // кривая (по живому тесту, чтобы разделение фаз ощущалось чётко):
+        let continuous_term = if is_stalled {
+            // В срыве/штопоре — прямоугольная пульсация: пауза (0), затем
+            // резкий скачок на полную мощность (255), НЕ ограниченная
+            // `ceiling` и не зависящая от глубины срыва — держится, пока AoA
+            // не опустится обратно ниже stall_aoa. См. STALL_SAWTOOTH_HZ,
+            // STALL_PULSE_DUTY.
+            let phase = (t * STALL_SAWTOOTH_HZ).fract();
+            if phase < STALL_PULSE_DUTY { 0.0 } else { 255.0 }
+        } else if vars.aoa_deg > pre_stall_start {
+            // На подходе — РОВНАЯ вибрация без джиттера/несущей, линейно
+            // растущая от 0 до 255 напрямую с AoA (не ограничена `ceiling`,
+            // см. константу выше) — контраст с прямоугольной пульсацией в
+            // срыве строится на характере сигнала (гладкий рост vs
+            // пауза+скачок), не на объёме.
+            let pre_progress = (vars.aoa_deg - pre_stall_start) / (stall_aoa - pre_stall_start);
+            pre_progress.clamp(0.0, 1.0) * 255.0
+        } else {
+            0.0
+        };
+
+        if continuous_term <= 0.0 && break_term <= 0.0 {
             return 0.0;
         }
 
-        // ВАЖНО: `ceiling` — как и в MSFS `stall_ceiling` (см. crate::rumble),
-        // это МАЛЕНЬКИЙ потолок в тех же единицах, что и итоговая интенсивность
-        // мотора (0..255), а не проценты от 255 — то есть эффект по дизайну
-        // подаётся как приглушённая, а не полноамплитудная тряска. Число
-        // WT_STALL_CEILING_HARD_CAP=10.0 — консервативная стартовая точка,
-        // требующая перенастройки после живого теста на Bf 109 F-4 (см. план).
-        let ceiling = ceiling.min(WT_STALL_CEILING_HARD_CAP);
-        let floor_ratio = 0.15 + 0.85 * growth;
-        let carrier_hz = 8.0 + growth * 8.0;
-        let cycle_idx = (t * carrier_hz).floor() as i64;
-        if cycle_idx != self.last_cycle_idx {
-            self.last_cycle_idx = cycle_idx;
-            self.cycle_jitter_mul = 0.6 + 0.4 * self.rng.next_unit();
-        }
-        ceiling * floor_ratio * self.cycle_jitter_mul
+        continuous_term + break_term
     }
 }
 
@@ -247,7 +323,7 @@ impl WtRumbleState {
         Self {
             weapon1: GunState::new(0x9E3779B9),
             weapon2: GunState::new(0x85EBCA6B),
-            stall: StallState::new(0xC2B2AE35),
+            stall: StallState::new(),
             last_flaps_pct_rounded: i32::MIN,
             flaps_active_until_t: -1.0,
             gear_initialized: false,
@@ -601,7 +677,7 @@ mod tests {
     fn bf109f4_vars() -> WtVars {
         let mut v = vars();
         v.vehicle_type = "bf-109f-4".to_string();
-        v.ias_kmh = 300.0; // выше ias_safety_cutoff_kmh (120.0)
+        v.ias_kmh = 300.0; // выше ias_safety_cutoff_kmh (40.0)
         v
     }
 
@@ -609,7 +685,7 @@ mod tests {
     fn stall_silent_below_ias_safety_cutoff() {
         let mut engine = WtRumbleState::new();
         let mut v = bf109f4_vars();
-        v.ias_kmh = 100.0; // ниже cutoff 120.0
+        v.ias_kmh = 20.0; // ниже cutoff 40.0
         v.aoa_deg = 25.0; // заведомо выше clean_stall_aoa_deg (19.9)
         let out = engine.step(&v, &cfg(), false);
         assert_eq!(out.joystick_intensity, 0);
@@ -630,30 +706,99 @@ mod tests {
     }
 
     #[test]
-    fn stall_intensity_grows_monotonically_then_caps_at_ceiling() {
+    fn stall_pre_threshold_intensity_grows_linearly_to_255() {
+        // Ниже порога (19.9°) — РОВНЫЙ линейный рост 0..255 напрямую от AoA,
+        // без джиттера/ceiling (по запросу пользователя) — детерминированный,
+        // значения можно проверить точно. Не путать с пилой в срыве (см.
+        // следующий тест) — там тот же диапазон, но другой характер сигнала.
+        let mut engine = WtRumbleState::new();
+        let mut v = bf109f4_vars();
+        v.flaps_pct = 0.0; // stall_aoa=19.9, ramp start=15.0, width=4.9
+        let c = cfg();
+
+        // (aoa, ожидаемая intensity = round((aoa-15.0)/4.9 * 255))
+        for (aoa, expected) in [(15.5, 26u8), (17.0, 104), (18.5, 182), (19.8, 250)] {
+            v.aoa_deg = aoa;
+            let out = engine.step(&v, &c, false);
+            assert_eq!(
+                out.joystick_intensity, expected,
+                "linear ramp mismatch at aoa={aoa}"
+            );
+        }
+    }
+
+    #[test]
+    fn stall_pulse_is_square_wave_half_duty_while_stalled() {
+        // По живому тесту (2026-07-29): вместо плавной пилы — чёткий
+        // прямоугольный импульс: пауза (0) полпериода, затем резкий скачок
+        // на ПОЛНУЮ мощность (255) на вторую половину — не ограничена
+        // ceiling, отдельный контрастный режим от плавного роста на подходе
+        // (см. предыдущий тест). Период 1/STALL_SAWTOOTH_HZ=0.2с, пауза и
+        // работа мотора — ровно по 0.1с (STALL_PULSE_DUTY=0.5).
         let mut engine = WtRumbleState::new();
         let mut v = bf109f4_vars();
         v.flaps_pct = 0.0;
+        v.aoa_deg = 25.0; // заведомо за порогом (19.9)
         let c = cfg();
-        let ceiling_u8 = (c.stall_ceiling.min(10.0)) as u8; // hard cap, см. WT_STALL_CEILING_HARD_CAP
 
-        let mut prev = 0u8;
-        for aoa in [15.5, 17.0, 18.5, 19.9, 25.0] {
-            v.aoa_deg = aoa;
+        // Первый тик взводит и запускает break-импульс (t0=0.0, длится
+        // BREAK_IMPULSE_DURATION_S=0.25с) — он суммируется поверх
+        // continuous-члена, поэтому для чистой проверки square-wave берём
+        // точки заведомо после его затухания.
+        v.t = 0.0;
+        engine.step(&v, &c, false);
+
+        // phase = frac(t*STALL_SAWTOOTH_HZ) < 0.5 -> пауза (0), иначе -> 255.
+        for (t, expected) in [(1.05, 0u8), (1.15, 255), (1.25, 0), (1.35, 255)] {
+            v.t = t;
             let out = engine.step(&v, &c, false);
-            assert!(
-                out.joystick_intensity >= prev,
-                "intensity should not decrease as AoA rises toward stall: aoa={aoa} prev={prev} now={}",
-                out.joystick_intensity
+            assert_eq!(
+                out.joystick_intensity, expected,
+                "square-wave pulse mismatch at t={t}"
             );
-            assert!(
-                out.joystick_intensity <= ceiling_u8 + 1, // округление
-                "intensity must not exceed the hard-capped ceiling: {}",
-                out.joystick_intensity
-            );
-            prev = out.joystick_intensity;
         }
-        assert!(prev > 0, "expected non-zero intensity at/above stall AoA");
+    }
+
+    #[test]
+    fn break_impulse_rearms_only_after_hysteresis_recovery() {
+        // Регрессия на живой баг: в штопоре AoA дрожит прямо у порога
+        // сваливания, и без гистерезиса break-импульс ретриггерился на
+        // каждом мелком колебании вместо одного чёткого щелчка на отрыве.
+        let mut stall = StallState::new();
+        let profile = &aero_profiles::BF_109_F4;
+        let mut v = bf109f4_vars();
+        v.flaps_pct = 0.0; // stall_aoa = 19.9, rearm-порог = 19.9-3.0 = 16.9
+        let ceiling = 30.0;
+
+        v.aoa_deg = 25.0;
+        v.t = 0.0;
+        stall.step(v.t, &v, profile, ceiling);
+        assert_eq!(stall.break_impulse_t0, 0.0, "первое пересечение должно взвести импульс");
+
+        // Колебание у самого порога (внутри окна гистерезиса) — НЕ должно
+        // взводить новый импульс.
+        v.aoa_deg = 18.9; // ниже порога (19.9), но выше rearm-порога (16.9)
+        v.t = 0.05;
+        stall.step(v.t, &v, profile, ceiling);
+        v.aoa_deg = 25.0;
+        v.t = 0.1;
+        stall.step(v.t, &v, profile, ceiling);
+        assert_eq!(
+            stall.break_impulse_t0, 0.0,
+            "повторное пересечение внутри гистерезиса не должно взводить импульс заново"
+        );
+
+        // Явное восстановление ниже rearm-порога — импульс взводится заново.
+        v.aoa_deg = 10.0;
+        v.t = 0.5;
+        stall.step(v.t, &v, profile, ceiling);
+        v.aoa_deg = 25.0;
+        v.t = 0.55;
+        stall.step(v.t, &v, profile, ceiling);
+        assert_eq!(
+            stall.break_impulse_t0, 0.55,
+            "восстановление за гистерезисом должно взводить импульс заново"
+        );
     }
 
     #[test]

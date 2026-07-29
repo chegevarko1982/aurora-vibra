@@ -70,6 +70,14 @@ name = "test_spoilers"
 path = "src/bin/test_spoilers.rs"
 required-features = ["dev-tools"]
 
+# Гоняет реальный wt_link::rumble::WtRumbleState (не переизобретает формулы)
+# по скриптованному профилю AoA — поэтому тянет "app" (там живут
+# aero_profiles/rumble/vars), а не только "dev-tools".
+[[bin]]
+name = "test_stall"
+path = "src/bin/test_stall.rs"
+required-features = ["dev-tools", "app"]
+
 [[bin]]
 name = "test_throttle_stutter"
 path = "src/bin/test_throttle_stutter.rs"

@@ -2129,7 +2129,7 @@ impl eframe::App for UiState {
                                                         ui,
                                                         t.name_wt_stall,
                                                         &mut cfg.wt.stall_ceiling,
-                                                        10.0, // жёсткий потолок — см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
+                                                        80.0, // жёсткий потолок — см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
                                                         &mut stall_enabled,
                                                         active,
                                                         &mut _changed,

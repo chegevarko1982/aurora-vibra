@@ -270,7 +270,7 @@ impl Default for WtConfig {
             gear_transit_enabled: true,
             gear_peak: 110.0,
             stall_enabled: true,
-            stall_ceiling: 10.0, // см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
+            stall_ceiling: 80.0, // см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
             device_targets: WtDeviceTargets::default(),
         }
     }
