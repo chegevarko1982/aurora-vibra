@@ -1,20 +1,24 @@
-//! Реплей реальной записанной сессии War Thunder через новый эффект срыва
-//! потока/сваливания (см. план `cuddly-coalescing-llama.md`, §8.3): проверяет,
-//! что чужой самолёт (Bf 109 E-3, не F-4) НЕ триггерит захардкоженный профиль
-//! `wt_link::aero_profiles::BF_109_F4`, независимо от того, какой AoA он
-//! показывает в записи — эффект должен молчать всю сессию.
+//! Реплей реальной записанной сессии War Thunder через эффект срыва
+//! потока/сваливания (см. план `cuddly-coalescing-llama.md`, §8.3, и
+//! временный fallback в `wt_link::aero_profiles::match_profile`): чужой
+//! самолёт (Bf 109 E-3, не F-4) теперь ОБЯЗАН получить профиль
+//! `BF_109_F4` как универсальный fallback (временное решение — общий
+//! профиль для всех бортов, пока нет отдельных профилей), и эффект может
+//! сработать по его порогам. Проверяем, что реплей проходит без паники и
+//! что fallback-профиль действительно применяется к чужому борту.
 
 #![cfg(feature = "app")]
 
 use std::fs;
 
+use aurora_vibra::wt_link::aero_profiles;
 use aurora_vibra::wt_link::rumble::WtRumbleState;
 use aurora_vibra::wt_link::vars;
 use aurora_vibra::types::WtConfig;
 use serde_json::Value;
 
 #[test]
-fn bf109e3_session_never_triggers_bf109f4_stall_profile() {
+fn bf109e3_session_replays_with_bf109f4_fallback_profile() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/wt_probe_sessions/session_20260728_204134.jsonl"
@@ -54,17 +58,19 @@ fn bf109e3_session_never_triggers_bf109f4_stall_profile() {
         if !wt_vars.vehicle_type.is_empty() {
             vehicle_type_seen = wt_vars.vehicle_type.clone();
         }
-        let out = engine.step(&wt_vars, &cfg, false);
+        // step() must not panic across the whole session with the fallback
+        // profile applied — that's the extent of what this replay checks
+        // (whether stall_active fires depends on the recorded AoA crossing
+        // the F-4 thresholds, which is expected/desired now, not a bug).
+        let _ = engine.step(&wt_vars, &cfg, false);
         ticks_replayed += 1;
-
-        assert!(
-            !out.effects.stall_active,
-            "stall effect fired at t={t} on vehicle_type={:?} (aoa_deg={}, ias_kmh={}) — \
-             BF_109_F4 profile must not match a different aircraft",
-            wt_vars.vehicle_type, wt_vars.aoa_deg, wt_vars.ias_kmh
-        );
     }
 
     assert!(ticks_replayed > 100, "expected a substantial recorded session, got {ticks_replayed} ticks");
     assert_eq!(vehicle_type_seen, "bf-109e-3", "fixture is expected to be the Bf 109 E-3 session");
+    assert_eq!(
+        aero_profiles::match_profile(&vehicle_type_seen),
+        Some(&aero_profiles::BF_109_F4),
+        "bf-109e-3 (not in the profile table) must fall back to BF_109_F4"
+    );
 }
