@@ -337,6 +337,18 @@ const ENGINE_RPM_ACTIVE_EPS: f64 = 2.0;
 /// дальнейшую калибровку по живому тесту (значение подобрано по темпу спада
 /// в записанном логе, не измерено напрямую по картинке в игре).
 const ENGINE_STOP_TRIGGER_RPM: f64 = 15.0;
+/// Окно устаканивания телеметрии после нового захода в бой/респавна —
+/// см. `EngineState::step`, ветка `!self.initialized`. Пока оно не истекло,
+/// любой признак "уже летит" (RPM или убранное шасси) фиксируется
+/// немедленно и окончательно; честный пуск с нуля признаётся только если
+/// ни один признак не сработал за всё это время.
+const ENGINE_SPAWN_SETTLE_WINDOW_S: f64 = 1.0;
+/// Порог "скачка" оборотов (об/мин/с) внутри окна устаканивания спауна —
+/// отличает "телеметрия ещё не устаканилась, борт уже летит" (мгновенный
+/// скачок на полное значение) от честной прокрутки стартером с нуля
+/// (даже самое резкое реальное схватывание — ~570 об/мин/с). С большим
+/// запасом выше любой реальной динамики двигателя.
+const ENGINE_SPAWN_JUMP_RPM_S: f64 = 1000.0;
 /// Сглаживание производной RPM (EMA) — сырые "RPM 1" целые, при опросе 20 Гц
 /// одно округление даёт скачок ~20 об/мин/с шума на пустом месте.
 const ENGINE_DRPM_DT_EMA_ALPHA: f64 = 0.35;
@@ -426,11 +438,17 @@ enum EnginePhase {
 
 #[derive(Debug)]
 struct EngineState {
-    /// Первый тик в бою ещё не обработан — используется, чтобы НЕ принять
-    /// уже работающий на споне двигатель (см. живой лог
-    /// session_20260728_204134.jsonl, первый же тик RPM=2301) за только что
-    /// запущенный.
+    /// Решение "это пуск с нуля или борт уже летит/работает" ещё не принято
+    /// окончательно — используется, чтобы НЕ принять уже работающий на споне
+    /// двигатель (см. живой лог session_20260728_204134.jsonl, первый же тик
+    /// RPM=2301) за только что запущенный. Решение откладывается до конца
+    /// окна устаканивания телеметрии (см. `spawn_deadline`), а не
+    /// принимается по одному-единственному тику — см. шапку раздела.
     initialized: bool,
+    /// `< 0.0` — окно устаканивания телеметрии после нового захода в бой ещё
+    /// не открыто. Иначе — дедлайн (t + ENGINE_SPAWN_SETTLE_WINDOW_S), до
+    /// которого решение "пуск или уже летит" остаётся отложенным.
+    spawn_deadline: f64,
     phase: EnginePhase,
     prev_rpm: f64,
     prev_t: f64,
@@ -446,6 +464,21 @@ struct EngineState {
     /// RPM в момент перехода Run → Coast (единственное место, где нужен
     /// "холостой RPM этого борта" — тут он уже ИЗВЕСТЕН, а не предсказывается).
     rpm_ref: f64,
+    /// `false` — в текущем Run ещё ни разу не видели `power_1_hp` выше
+    /// ENGINE_POWER_OFF_HP, значит переход в Coast по этому полю пока не
+    /// проверяется. Нужно, потому что при тихом усыновлении Run (см.
+    /// `step()`, борт спавнится уже летящим) `power 1, hp` у телеметрии
+    /// борта иногда на пару тиков отстаёт от реальной раскрутки винта и
+    /// читается как 0 — без этой защёлки такой тик мгновенно и ложно
+    /// засчитался бы как "мощность пропала — выбег", хотя борт на самом
+    /// деле продолжает лететь на полном ходу (живой пример —
+    /// session_20260729_202028.jsonl, A6M3 Zero). Взводится в `true` сразу,
+    /// если мощность уже легитимна В МОМЕНТ усыновления (например, честный
+    /// холостой ход, где `power_1_hp` не успевает провиснуть ни на один
+    /// тик) — тогда останов, случившийся сразу же, по-прежнему ловится.
+    /// Честный переход Start → Run (см. `step_start`) эту защёлку не трогает
+    /// — холостые там уже подтверждены стабильностью производной.
+    run_power_confirmed: bool,
     /// `< 0.0` — импульс полной остановки не взведён/уже отыгран.
     stop_pulse_t0: f64,
     last_cycle_idx: i64,
@@ -457,6 +490,7 @@ impl EngineState {
     fn new() -> Self {
         Self {
             initialized: false,
+            spawn_deadline: -1.0,
             phase: EnginePhase::Off,
             prev_rpm: 0.0,
             prev_t: 0.0,
@@ -466,6 +500,7 @@ impl EngineState {
             stable_since: -1.0,
             settle_fade_t0: -1.0,
             rpm_ref: 0.0,
+            run_power_confirmed: false,
             stop_pulse_t0: -1.0,
             last_cycle_idx: i64::MIN,
             cycle_jitter_mul: 1.0,
@@ -473,19 +508,61 @@ impl EngineState {
         }
     }
 
+    /// Сбрасывает детектор пуска к состоянию "решение ещё не принято" —
+    /// вызывается при входе в новую сессию боя (`vars.in_mission`: false →
+    /// true), в т.ч. при респавне на другом борту. Без этого борт,
+    /// заспавнившийся в новом бою с уже работающим двигателем, принял бы его
+    /// за только что заведённый: текущая фаза (Off/Coast) осталась бы с
+    /// прошлого вылета, независимо от того, что реально происходит с новым
+    /// бортом.
+    fn reset_for_new_spawn(&mut self) {
+        self.initialized = false;
+        self.spawn_deadline = -1.0;
+    }
+
     fn step(&mut self, t: f64, vars: &WtVars, peak: f64) -> f64 {
         let rpm = vars.rpm_1;
 
         if !self.initialized {
-            // Первый тик в бою: если двигатель уже крутится — это не пуск,
-            // а борт заспавнился на холостых (или прямо в воздухе). Молчим
-            // и просто запоминаем стартовую точку для будущей производной.
-            self.initialized = true;
-            self.phase = if rpm > ENGINE_RPM_ACTIVE_EPS {
-                EnginePhase::Run
-            } else {
-                EnginePhase::Off
-            };
+            // Решение "пуск с нуля или борт уже летит/работает" по живому
+            // тесту НЕЛЬЗЯ принимать по одному тику: на самом первом ответе
+            // после захода в бой RPM и шасси иногда ещё не устаканились
+            // (борт/техника только грузится), и если оба в этот момент
+            // случайно читаются как "ещё не летит", решение "Off" уже
+            // зафиксировано бы навсегда — а на следующем тике, когда
+            // реальные RPM/шасси придут, Off → Start их уже не перепроверяет
+            // (см. match ниже) и ловит пуск ложно. Поэтому держим окно
+            // ENGINE_SPAWN_SETTLE_WINDOW_S: пока оно не истекло, шасси уже
+            // убранное ИЛИ обороты, появившиеся СКАЧКОМ (не честным разгоном
+            // с нуля — см. ниже), немедленно и окончательно фиксируют "уже
+            // летит" (Run) — жёстко, по требованию пользователя ("если
+            // Gear=0 — эффект не включать"). Только если окно закончилось, а
+            // ни один из признаков ни разу не сработал — фиксируем честный
+            // пуск с нуля (Off).
+            //
+            // "Скачок" — обороты изменились быстрее ENGINE_SPAWN_JUMP_RPM_S
+            // за секунду. Настоящая прокрутка стартером растёт плавно
+            // (~15 об/мин/с в живом логе, самое резкое реальное схватывание —
+            // ~570 об/мин/с), а "телеметрия ещё не устаканилась" всегда даёт
+            // мгновенный скачок на полное значение (напр. 0 → 2021 за один
+            // тик). Без этого различия голый rpm > EPS ловил в ловушку и
+            // честный медленный пуск, случайно начавшийся в первую секунду
+            // после захода в бой (см. тест engine_catch_impulse_fires_once_per_start_cycle).
+            let dt_settle = (t - self.prev_t).max(1e-3);
+            let jump_rpm_s = (rpm - self.prev_rpm).abs() / dt_settle;
+            if self.spawn_deadline < 0.0 {
+                self.spawn_deadline = t + ENGINE_SPAWN_SETTLE_WINDOW_S;
+            }
+            if vars.gear_pct <= GEAR_LOCKED_THRESHOLD_PCT
+                || (rpm > ENGINE_RPM_ACTIVE_EPS && jump_rpm_s > ENGINE_SPAWN_JUMP_RPM_S)
+            {
+                self.initialized = true;
+                self.phase = EnginePhase::Run;
+                self.run_power_confirmed = vars.power_1_hp > ENGINE_POWER_OFF_HP;
+            } else if t >= self.spawn_deadline {
+                self.initialized = true;
+                self.phase = EnginePhase::Off;
+            }
             self.prev_rpm = rpm;
             self.prev_t = t;
             return 0.0;
@@ -499,7 +576,7 @@ impl EngineState {
 
         match self.phase {
             EnginePhase::Off => {
-                if rpm > ENGINE_RPM_ACTIVE_EPS {
+                if rpm > ENGINE_RPM_ACTIVE_EPS && vars.gear_pct > GEAR_LOCKED_THRESHOLD_PCT {
                     self.phase = EnginePhase::Start;
                     self.catch_fired = false;
                     self.catch_pulse_t0 = -1.0;
@@ -509,13 +586,29 @@ impl EngineState {
                     // Не теряем сам тик пересечения нуля — считаем разгон
                     // сразу для него же, а не со следующего опроса.
                     self.step_start(t, peak)
+                } else if rpm > ENGINE_RPM_ACTIVE_EPS {
+                    // Обороты появились, но шасси уже убрано — это не пуск
+                    // на земле (с убранным шасси не заводятся), а телеметрия
+                    // "долетела" уже после того, как окно спауна (см. выше)
+                    // успело закрыться на Off — например, у некоторых бортов
+                    // между входом в бой (valid=true) и реальной передачей
+                    // управления проходит больше секунды в неподвижной
+                    // превью-позе. Тихо принимаем, что мотор уже работал.
+                    self.phase = EnginePhase::Run;
+                    self.run_power_confirmed = vars.power_1_hp > ENGINE_POWER_OFF_HP;
+                    0.0
                 } else {
                     0.0
                 }
             }
             EnginePhase::Start => self.step_start(t, peak),
             EnginePhase::Run => {
-                if vars.power_1_hp <= ENGINE_POWER_OFF_HP {
+                if !self.run_power_confirmed {
+                    if vars.power_1_hp > ENGINE_POWER_OFF_HP {
+                        self.run_power_confirmed = true;
+                    }
+                    0.0
+                } else if vars.power_1_hp <= ENGINE_POWER_OFF_HP {
                     self.phase = EnginePhase::Coast;
                     self.rpm_ref = rpm.max(1.0);
                     self.stop_pulse_t0 = -1.0;
@@ -672,6 +765,12 @@ pub struct WtRumbleState {
     weapon2: GunState,
     stall: StallState,
     engine: EngineState,
+    /// Отслеживает фронт `vars.in_mission` (false → true) — новый заход в
+    /// бой/респавн, ПОСЛЕ которого состояние двигателя с прошлого вылета
+    /// (например, phase=Off, если тот борт успел заглушить мотор) больше не
+    /// действительно: новый борт может спавниться с уже работающим
+    /// двигателем, и это не пуск. См. EngineState::reset_for_new_spawn.
+    engine_was_in_mission: bool,
 
     last_flaps_pct_rounded: i32,
     flaps_active_until_t: f64,
@@ -696,6 +795,7 @@ impl WtRumbleState {
             weapon2: GunState::new(0x85EBCA6B),
             stall: StallState::new(),
             engine: EngineState::new(),
+            engine_was_in_mission: false,
             last_flaps_pct_rounded: i32::MIN,
             flaps_active_until_t: -1.0,
             gear_initialized: false,
@@ -712,6 +812,16 @@ impl WtRumbleState {
 
     pub fn step(&mut self, vars: &WtVars, cfg: &WtConfig, hold: bool) -> RumbleOutput {
         let mut effects = EffectsSnapshot::default();
+
+        // Новый заход в бой (в т.ч. респавн на другом борту) — состояние
+        // двигателя с прошлого вылета не описывает текущий борт, каким бы
+        // оно ни было (Off, Run, Coast). Отслеживаем ДО early-return по
+        // !in_mission/hold, иначе фронт false→true никогда не поймать: пока
+        // не в бою, step() выходит раньше и это поле не обновилось бы.
+        if vars.in_mission && !self.engine_was_in_mission {
+            self.engine.reset_for_new_spawn();
+        }
+        self.engine_was_in_mission = vars.in_mission;
 
         if hold || !vars.in_mission {
             return RumbleOutput {
@@ -772,8 +882,23 @@ impl WtRumbleState {
         // --- Engine Start/Stop ---
         // Моно (см. шапку раздела EngineState выше): одно значение сразу на
         // джойстик и оба мотора РУД — раскладки по двигателям/сторонам нет.
-        let engine_term = if cfg.engine_start_enabled {
+        //
+        // Жёсткое правило по требованию пользователя (после разбора живых
+        // логов 29.07.2026): весь эффект целиком отдаётся, только пока шасси
+        // выпущено — `self.engine.step` всё равно вызывается каждый тик (не
+        // пропускаем), чтобы внутренняя машина состояний (окно устаканивания
+        // спауна, защёлка run_power_confirmed, фаза Coast) не ловила рваный
+        // `dt`/скачок RPM на границе уборки-выпуска шасси — глушится только
+        // возвращаемая амплитуда. Да, это заодно гасит легитимный боевой
+        // выбег (сброс газа/повреждение двигателя в полёте, шасси убрано) —
+        // осознанный компромисс первой версии, можно уточнить позже.
+        let engine_raw = if cfg.engine_start_enabled {
             self.engine.step(t, vars, cfg.engine_start_peak as f64)
+        } else {
+            0.0
+        };
+        let engine_term = if vars.gear_pct > GEAR_LOCKED_THRESHOLD_PCT {
+            engine_raw
         } else {
             0.0
         };
@@ -1294,6 +1419,129 @@ mod tests {
         assert_eq!(out.joystick_intensity, 0);
         assert_eq!(out.throttle_left_intensity, 0);
         assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn engine_no_false_start_on_respawn_after_prior_stop_in_same_session() {
+        // Регрессия: один и тот же WtRumbleState переживает несколько
+        // вылетов подряд (одна сессия воркера). Прошлый вылет закончился
+        // полной остановкой двигателя (phase=Off) — если следующий борт
+        // спавнится в НОВОМ бою уже с работающим двигателем, это не должно
+        // расцениваться как пуск (раньше фаза Off просто продолжалась и
+        // ловила рост RPM как Off → Start).
+        let mut engine = WtRumbleState::new();
+        let c = cfg();
+        let mut t = 0.0;
+
+        // Прошлый вылет: несколько тиков с заглушенным двигателем — сессия
+        // заканчивается в Off, не в Run/Coast.
+        for _ in 0..5 {
+            engine.step(&engine_vars(0.0, 0.0, t), &c, false);
+            t += 0.05;
+        }
+
+        // Вышли из боя (ангар/меню) на несколько тиков.
+        for _ in 0..5 {
+            let mut v = engine_vars(0.0, 0.0, t);
+            v.in_mission = false;
+            engine.step(&v, &c, false);
+            t += 0.05;
+        }
+
+        // Новый бой: другой борт уже с работающим двигателем на споне.
+        let out = engine.step(&engine_vars(595.0, 20.0, t), &c, false);
+        assert_eq!(
+            out.joystick_intensity, 0,
+            "must not treat an already-running engine at new mission spawn as a fresh start"
+        );
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn engine_no_false_start_when_gear_already_retracted_even_if_rpm_reads_zero() {
+        // Страховка от гонки телеметрии: если самый первый ответ игры
+        // пришёл с ещё не заполненным RPM (0), но шасси уже убрано — борт
+        // точно уже в воздухе с работающим двигателем, а не только что
+        // заведён на земле (убранное шасси на земле у поршневого
+        // истребителя не бывает).
+        let mut engine = WtRumbleState::new();
+        let mut v = engine_vars(0.0, 0.0, 0.0);
+        v.gear_pct = 0.0; // убрано
+        let out = engine.step(&v, &cfg(), false);
+        assert_eq!(out.joystick_intensity, 0);
+
+        // Через несколько тиков телеметрия "доезжает" и обороты появляются —
+        // это по-прежнему не должно расцениваться как пуск.
+        for i in 1..10 {
+            let mut v2 = engine_vars(595.0, 20.0, i as f64 * 0.05);
+            v2.gear_pct = 0.0;
+            let out2 = engine.step(&v2, &cfg(), false);
+            assert_eq!(out2.joystick_intensity, 0, "tick {i}");
+        }
+    }
+
+    #[test]
+    fn engine_no_false_start_when_gear_and_rpm_settle_a_few_ticks_after_spawn() {
+        // Основная гонка, из-за которой пуск ловился ложно на живом тесте:
+        // на самом первом тике после захода в бой RPM и шасси иногда ЕЩЁ НЕ
+        // устаканились (техника только грузится) — оба читаются как "ещё не
+        // летит" (rpm=0, gear=100), решение "Off" фиксировалось бы сразу и
+        // навсегда, а через пару тиков, когда приходят настоящие RPM=595 и
+        // gear=0, Off → Start уже не перепроверяет шасси и ловит пуск.
+        // Окно устаканивания (ENGINE_SPAWN_SETTLE_WINDOW_S) должно поймать
+        // это позже пришедшее "уже летит" не хуже, чем самый первый тик.
+        let mut engine = WtRumbleState::new();
+        let c = cfg();
+
+        // Первые два тика — телеметрия ещё не устаканилась.
+        for i in 0..2 {
+            let out = engine.step(&engine_vars(0.0, 0.0, i as f64 * 0.05), &c, false);
+            assert_eq!(out.joystick_intensity, 0, "settling tick {i}");
+        }
+        // С третьего тика приходят реальные значения: борт уже летит.
+        for i in 2..15 {
+            let mut v = engine_vars(595.0, 20.0, i as f64 * 0.05);
+            v.gear_pct = 0.0;
+            let out = engine.step(&v, &c, false);
+            assert_eq!(
+                out.joystick_intensity, 0,
+                "tick {i}: telemetry settling late must not be read as a fresh start"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_genuine_ground_start_still_works_after_spawn_settle_window() {
+        // Окно устаканивания не должно скрывать честный пуск с нуля: если
+        // ни RPM, ни шасси ни разу не показали "уже летит" за всё окно
+        // (двигатель правда выключен на земле, шасси выпущено), по истечении
+        // окна детектор обязан признать Off и по-прежнему ловить реальную
+        // прокрутку стартером.
+        let mut engine = WtRumbleState::new();
+        let c = cfg();
+        let mut t = 0.0;
+
+        // Всё окно устаканивания — двигатель выключен, шасси выпущено.
+        while t < ENGINE_SPAWN_SETTLE_WINDOW_S + 0.2 {
+            let out = engine.step(&engine_vars(0.0, 0.0, t), &c, false);
+            assert_eq!(out.joystick_intensity, 0, "t={t}");
+            t += 0.05;
+        }
+
+        // Теперь честная прокрутка стартером — должна ощущаться как пуск.
+        let mut felt_anything = false;
+        for _ in 0..30 {
+            t += 0.05;
+            let out = engine.step(&engine_vars(t * 15.0, 0.0, t), &c, false);
+            if out.joystick_intensity > 0 {
+                felt_anything = true;
+            }
+        }
+        assert!(
+            felt_anything,
+            "a genuine ground start after the settle window must still produce the start effect"
+        );
     }
 
     #[test]

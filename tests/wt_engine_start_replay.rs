@@ -21,6 +21,16 @@ struct Tick {
 }
 
 fn replay(path: &str) -> Vec<Tick> {
+    replay_with_gear(path, false)
+}
+
+/// `force_gear_retracted` — подменяет `gear_pct` на 0.0 в каждом тике перед
+/// подачей в эффект, не трогая остальную телеметрию. Нужно, чтобы доказать
+/// на реальной записи жёсткое правило "весь эффект пуска/останова молчит,
+/// пока шасси не выпущено" (см. `rumble.rs`, гейт вокруг `engine_term`):
+/// один и тот же честный пуск/выбег, который на настоящих данных (шасси
+/// выпущено) даёт ненулевую амплитуду, с убранным шасси обязан молчать.
+fn replay_with_gear(path: &str, force_gear_retracted: bool) -> Vec<Tick> {
     let raw = fs::read_to_string(path).expect("recorded session fixture must exist");
 
     let cfg = WtConfig::default();
@@ -51,7 +61,10 @@ fn replay(path: &str) -> Vec<Tick> {
             continue;
         }
 
-        let wt_vars = vars::parse(t, &state, &indicators);
+        let mut wt_vars = vars::parse(t, &state, &indicators);
+        if force_gear_retracted {
+            wt_vars.gear_pct = 0.0;
+        }
         let out = engine.step(&wt_vars, &cfg, false);
         ticks.push(Tick {
             t,
@@ -169,5 +182,58 @@ fn other_session_no_false_start_regardless_of_idle_rpm() {
         ticks.iter().filter(|tk| tk.t < 20.0).all(|tk| !tk.engine_active),
         "must not fire a false start at mission spawn (checked well before the real \
          in-flight throttle-cut at t≈20.7s later in this recording)"
+    );
+}
+
+/// Регрессия на живую находку 29.07.2026: A6M3 Zero, респавн в воздухе.
+/// `valid` (=`in_mission`) становится `true` ЗАДОЛГО (t≈113.9с) до реальной
+/// передачи управления (t≈131.9с, RPM мгновенно 0→2021, шасси одновременно
+/// убрано) — всё это время борт висит неподвижно в превью-позе с
+/// заглушенным двигателем. Окно устаканивания спауна (1с) закрывается на
+/// Off ещё в превью, задолго до настоящего "прыжка", поэтому старая
+/// проверка `rpm > EPS` в обычной ветке Off без проверки шасси ловила это
+/// как честный пуск (11.6с ложного разгона на живых данных). Дополнительно,
+/// сразу после такого борта `power 1, hp` держится 0.0 ещё пару тиков
+/// (реальная раскрутка винта телеметрически чуть отстаёт), что без защёлки
+/// `run_power_confirmed` тут же ложно уводило в Coast на весь оставшийся
+/// полёт. Лог также содержит настоящий респавн после сбития (t≈174.0с,
+/// `valid` честно мигает false→true, борт паркуется с заглушенным
+/// двигателем) — эффект обязан остаться тихим и там.
+#[test]
+fn a6m3_zero_airborne_respawn_no_false_start_or_stuck_coast() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wt_probe_sessions/session_20260729_202028.jsonl"
+    );
+    let ticks = replay(path);
+    assert!(ticks.len() > 1000, "expected a substantial recorded session");
+    assert!(
+        ticks.iter().all(|tk| !tk.engine_active),
+        "engine effect must stay silent throughout: engine is already running at the \
+         airborne respawn (t≈131.9s) and stays off during the later post-death respawn \
+         (t≈174.0s) — there is no genuine ground start/stop in this recording"
+    );
+}
+
+/// Жёсткое правило по требованию пользователя (29.07.2026, после разбора
+/// стрельбы/двигателя на A6M3 Zero): весь эффект пуска/останова должен
+/// молчать целиком, пока шасси не выпущено — даже честный пуск/выбег.
+/// Доказывается на РЕАЛЬНОЙ записи с настоящим пуском/выбегом
+/// (`bf109f4_full_start_stop_cycle_matches_expected_windows` подтверждает,
+/// что с настоящим (выпущенным) шасси на этой же сессии эффект отрабатывает
+/// ненулевой амплитудой в окнах 28-33с и 40-57с) — с тем же самым RPM/power,
+/// но шасси принудительно убрано, эффект обязан молчать на всей сессии.
+#[test]
+fn engine_effect_stays_silent_whenever_gear_is_retracted_even_on_genuine_start_stop() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wt_probe_sessions/session_20260729_151535.jsonl"
+    );
+    let ticks = replay_with_gear(path, true);
+    assert!(ticks.len() > 1000, "expected a substantial recorded session");
+    assert!(
+        ticks.iter().all(|tk| !tk.engine_active),
+        "engine effect must be fully gated by gear position — a genuine start/coast with \
+         gear forced retracted must never produce output"
     );
 }

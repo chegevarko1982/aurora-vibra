@@ -20,7 +20,12 @@ pub struct WtVars {
     /// должны молчать, как `FlightVars::paused` в MSFS).
     pub in_mission: bool,
     /// `/indicators`.weapon1 — оружие первой группы стреляет ПРЯМО СЕЙЧАС
-    /// (0.0/1.0 в API, подтверждено живым захватом — см. план).
+    /// (0.0/1.0 в API, подтверждено живым захватом — см. план). На части
+    /// бортов/комплектаций API почему-то отдаёт флаг спуска не в weapon1/2,
+    /// а в weapon3/4 (живая находка 29.07.2026, A6M3 Zero: в `/indicators`
+    /// для этого борта весь полёт нет ключей weapon1/weapon2 вообще, только
+    /// weapon3) — поэтому ниже, в `parse`, они склеены через OR с
+    /// соответствующим "чётным"/"нечётным" полем, а не читаются по одному.
     pub weapon1_firing: bool,
     pub weapon2_firing: bool,
     /// `/state`."flaps, %" — 0..100, как `FlightVars::flaps_pct` в MSFS.
@@ -93,8 +98,8 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
     WtVars {
         t,
         in_mission: state.get("valid").and_then(Value::as_bool).unwrap_or(false),
-        weapon1_firing: as_bool_flag(indicators.get("weapon1")),
-        weapon2_firing: as_bool_flag(indicators.get("weapon2")),
+        weapon1_firing: as_bool_flag(indicators.get("weapon1")) || as_bool_flag(indicators.get("weapon3")),
+        weapon2_firing: as_bool_flag(indicators.get("weapon2")) || as_bool_flag(indicators.get("weapon4")),
         flaps_pct: as_f64(state.get("flaps, %")),
         gear_pct: as_f64(state.get("gear, %")),
         weapon1_ammo: None,
@@ -130,6 +135,23 @@ mod tests {
         assert!(!vars.weapon2_firing);
         assert_eq!(vars.flaps_pct, 33.0);
         assert_eq!(vars.gear_pct, 100.0);
+    }
+
+    #[test]
+    fn falls_back_to_weapon3_4_when_weapon1_2_keys_absent() {
+        // Живая находка 29.07.2026 (A6M3 Zero): `/indicators` для этого борта
+        // весь полёт не содержал ключей weapon1/weapon2 вообще, только
+        // weapon3 — без fallback'а стрельба была бы не видна ни в эффекте,
+        // ни в телеметрии, хотя борт реально стрелял.
+        let indicators = json!({"weapon3": 1.0});
+        let vars = parse(0.0, &json!({}), &indicators);
+        assert!(vars.weapon1_firing);
+        assert!(!vars.weapon2_firing);
+
+        let indicators = json!({"weapon4": 1.0});
+        let vars = parse(0.0, &json!({}), &indicators);
+        assert!(!vars.weapon1_firing);
+        assert!(vars.weapon2_firing);
     }
 
     #[test]
