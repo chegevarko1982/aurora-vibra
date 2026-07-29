@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
+use crate::aircraft_profiles::{self, AircraftProfiles};
+use crate::profiles::ProfileState;
 use crate::wt_link::ammo::AmmoTracker;
 use crate::wt_link::http::WtClient;
 use crate::wt_link::rumble::WtRumbleState;
@@ -40,6 +42,9 @@ pub fn wt_worker(
     effects: EffectsShared,
     hold: Arc<AtomicBool>,
     status: Arc<Mutex<SimStatus>>,
+    aircraft_title: Arc<Mutex<String>>,
+    aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
+    profile_state: Arc<Mutex<ProfileState>>,
 ) {
     logs.push("WT: worker started");
 
@@ -65,6 +70,11 @@ pub fn wt_worker(
                 ammo.reset();
                 client = None;
                 was_enabled = false;
+                // Отдаём табличку с названием борта обратно MSFS-конвейеру —
+                // тот сам выставит её при следующем подключении SimConnect
+                // (см. sim/worker.rs), а до тех пор пусть будет пустой,
+                // а не залипший борт War Thunder.
+                *aircraft_title.lock() = String::new();
             }
             thread::sleep(IDLE_INTERVAL);
             continue;
@@ -118,10 +128,29 @@ pub fn wt_worker(
                 } else {
                     SimStatus::Connected
                 };
-                *last_wt_vars.lock() = Some(wt_vars);
+
+                // Показываем технику War Thunder в том же месте верхней
+                // панели, где MSFS-конвейер показывает aircraft_title (см.
+                // ui.rs) — переиспользуем то же поле и ту же систему
+                // именных профилей (aircraft_profiles::apply_for_aircraft),
+                // а не заводим отдельный WT-only виджет.
+                if wt_vars.in_mission && !wt_vars.vehicle_type.is_empty() {
+                    let changed = *aircraft_title.lock() != wt_vars.vehicle_type;
+                    if changed {
+                        *aircraft_title.lock() = wt_vars.vehicle_type.clone();
+                        aircraft_profiles::apply_for_aircraft(
+                            &mut aircraft_profiles.lock(),
+                            &config,
+                            &mut profile_state.lock(),
+                            &wt_vars.vehicle_type,
+                            &logs,
+                        );
+                    }
+                }
 
                 let cfg_now = config.get().wt;
                 let out = engine.step(&wt_vars, &cfg_now, hold.load(Ordering::Relaxed));
+                *last_wt_vars.lock() = Some(wt_vars);
                 effects.apply_snapshot(&out.effects);
                 let _ = tx_hid.send(HidCmd::SendIntensity {
                     joystick: out.joystick_intensity,

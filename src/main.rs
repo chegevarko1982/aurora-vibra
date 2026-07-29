@@ -149,6 +149,9 @@ fn main() -> Result<()> {
         let effects_c = effects.clone();
         let hold_c = hold.clone();
         let status_c = status.clone();
+        let ac_title = aircraft_title.clone();
+        let aircraft_profiles_c = aircraft_profiles.clone();
+        let profile_state_c = profile_state.clone();
         thread::spawn(move || {
             wt_worker(
                 last_wt_vars_c,
@@ -158,6 +161,9 @@ fn main() -> Result<()> {
                 effects_c,
                 hold_c,
                 status_c,
+                ac_title,
+                aircraft_profiles_c,
+                profile_state_c,
             )
         });
     }

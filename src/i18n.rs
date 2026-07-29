@@ -247,6 +247,8 @@ pub struct Strings {
     pub lbl_wt_weapon1_ammo: &'static str,
     pub lbl_wt_weapon2_ammo: &'static str,
     pub lbl_wt_ammo_unknown: &'static str,
+    pub lbl_wt_vehicle_type: &'static str,
+    pub lbl_wt_vehicle_type_unknown: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -482,6 +484,8 @@ https://yoomoney.ru/to/410011348629282",
     lbl_wt_weapon1_ammo: "Weapon1 ammo",
     lbl_wt_weapon2_ammo: "Weapon2 ammo",
     lbl_wt_ammo_unknown: "— (no counter on this aircraft)",
+    lbl_wt_vehicle_type: "Aircraft",
+    lbl_wt_vehicle_type_unknown: "— (unknown)",
 };
 
 pub const RU: Strings = Strings {
@@ -717,6 +721,8 @@ https://yoomoney.ru/to/410011348629282",
     lbl_wt_weapon1_ammo: "Патроны weapon1",
     lbl_wt_weapon2_ammo: "Патроны weapon2",
     lbl_wt_ammo_unknown: "— (нет счётчика на этом борту)",
+    lbl_wt_vehicle_type: "Самолёт",
+    lbl_wt_vehicle_type_unknown: "— (не определён)",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {

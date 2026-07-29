@@ -3,6 +3,8 @@ use std::sync::{Arc, atomic::AtomicBool};
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
+use crate::aircraft_profiles::AircraftProfiles;
+use crate::profiles::ProfileState;
 use crate::wt_link::vars::WtVars;
 use crate::{ConfigShared, EffectsShared, HidCmd, LogBuffer, SimStatus};
 
@@ -17,6 +19,9 @@ pub fn wt_worker(
     _effects: EffectsShared,
     _hold: Arc<AtomicBool>,
     _status: Arc<Mutex<SimStatus>>,
+    _aircraft_title: Arc<Mutex<String>>,
+    _aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
+    _profile_state: Arc<Mutex<ProfileState>>,
 ) {
     // Non-Windows stub: HID/War Thunder hardware pipeline is unavailable.
 }

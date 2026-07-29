@@ -348,6 +348,7 @@ mod tests {
             gear_pct: 100.0,
             weapon1_ammo: None,
             weapon2_ammo: None,
+            vehicle_type: String::new(),
         }
     }
 

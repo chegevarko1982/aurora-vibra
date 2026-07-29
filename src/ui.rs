@@ -2200,7 +2200,7 @@ impl eframe::App for UiState {
                                 .num_columns(2)
                                 .spacing(Vec2::new(20.0, 4.0))
                                 .show(ui, |ui| {
-                                    let v = *self.last_wt_vars.lock();
+                                    let v = self.last_wt_vars.lock().clone();
                                     match v {
                                         Some(v) => {
                                             let status_text = if !v.in_mission {
@@ -2210,6 +2210,14 @@ impl eframe::App for UiState {
                                             };
                                             ui.label(t.nav_wt);
                                             ui.label(status_text);
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_vehicle_type);
+                                            ui.label(if v.vehicle_type.is_empty() {
+                                                t.lbl_wt_vehicle_type_unknown.to_string()
+                                            } else {
+                                                v.vehicle_type.clone()
+                                            });
                                             ui.end_row();
 
                                             ui.label(t.name_wt_weapon1);

@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 /// Один тик телеметрии War Thunder, разобранный из `/state` + `/indicators`.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct WtVars {
     /// Секунды с начала опроса (аналог `FlightVars::sim_time_s`, но по
     /// wall-clock — у War Thunder нет понятия "время симулятора", см.
@@ -36,6 +36,10 @@ pub struct WtVars {
     /// или оружие ещё не стреляло.
     pub weapon1_ammo: Option<f64>,
     pub weapon2_ammo: Option<f64>,
+    /// `/indicators`.type — название техники (например, "fw190a4"). Пустая
+    /// строка, если поле отсутствует (борт без этой телеметрии/ещё не
+    /// определилось после захода в бой).
+    pub vehicle_type: String,
 }
 
 fn as_bool_flag(v: Option<&Value>) -> bool {
@@ -60,6 +64,11 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
         gear_pct: as_pct(state.get("gear, %")),
         weapon1_ammo: None,
         weapon2_ammo: None,
+        vehicle_type: indicators
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
     }
 }
 
