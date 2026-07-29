@@ -346,6 +346,8 @@ mod tests {
             weapon2_firing: false,
             flaps_pct: 0.0,
             gear_pct: 100.0,
+            weapon1_ammo: None,
+            weapon2_ammo: None,
         }
     }
 

@@ -244,6 +244,9 @@ pub struct Strings {
     pub heading_wt_telemetry: &'static str,
     pub lbl_wt_flaps_pct: &'static str,
     pub lbl_wt_gear_pct: &'static str,
+    pub lbl_wt_weapon1_ammo: &'static str,
+    pub lbl_wt_weapon2_ammo: &'static str,
+    pub lbl_wt_ammo_unknown: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -476,6 +479,9 @@ https://yoomoney.ru/to/410011348629282",
     heading_wt_telemetry: "War Thunder Telemetry",
     lbl_wt_flaps_pct: "Flaps",
     lbl_wt_gear_pct: "Gear",
+    lbl_wt_weapon1_ammo: "Weapon1 ammo",
+    lbl_wt_weapon2_ammo: "Weapon2 ammo",
+    lbl_wt_ammo_unknown: "— (no counter on this aircraft)",
 };
 
 pub const RU: Strings = Strings {
@@ -708,6 +714,9 @@ https://yoomoney.ru/to/410011348629282",
     heading_wt_telemetry: "Телеметрия War Thunder",
     lbl_wt_flaps_pct: "Закрылки",
     lbl_wt_gear_pct: "Шасси",
+    lbl_wt_weapon1_ammo: "Патроны weapon1",
+    lbl_wt_weapon2_ammo: "Патроны weapon2",
+    lbl_wt_ammo_unknown: "— (нет счётчика на этом борту)",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {

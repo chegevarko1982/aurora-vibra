@@ -28,6 +28,14 @@ pub struct WtVars {
     /// `/state`."gear, %" — 0..100, ОДНО значение на весь самолёт (в API
     /// War Thunder нет раздельных стоек, в отличие от MSFS).
     pub gear_pct: f64,
+    /// Остаток патронов, если для этого оружия удалось выучить счётчик
+    /// (см. `wt_link::ammo::AmmoTracker`) — заполняется в `worker.rs`
+    /// ПОСЛЕ `parse`, не самим `parse` (это не поле `/state`/`/indicators`
+    /// напрямую, а результат отдельного адаптивного трекера с состоянием
+    /// на всю сессию, не тик). `None` — борт без телеметрии боеприпасов
+    /// или оружие ещё не стреляло.
+    pub weapon1_ammo: Option<f64>,
+    pub weapon2_ammo: Option<f64>,
 }
 
 fn as_bool_flag(v: Option<&Value>) -> bool {
@@ -50,6 +58,8 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
         weapon2_firing: as_bool_flag(indicators.get("weapon2")),
         flaps_pct: as_pct(state.get("flaps, %")),
         gear_pct: as_pct(state.get("gear, %")),
+        weapon1_ammo: None,
+        weapon2_ammo: None,
     }
 }
 

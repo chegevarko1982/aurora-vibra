@@ -110,6 +110,8 @@ pub fn wt_worker(
                     if ammo.weapon2_empty(&indicators_v) {
                         wt_vars.weapon2_firing = false;
                     }
+                    wt_vars.weapon1_ammo = ammo.weapon1_ammo(&indicators_v);
+                    wt_vars.weapon2_ammo = ammo.weapon2_ammo(&indicators_v);
                 }
                 *status.lock() = if wt_vars.in_mission {
                     SimStatus::InFlight

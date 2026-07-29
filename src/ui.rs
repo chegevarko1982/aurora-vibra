@@ -2216,8 +2216,22 @@ impl eframe::App for UiState {
                                             ui.label(v.weapon1_firing.to_string());
                                             ui.end_row();
 
+                                            ui.label(t.lbl_wt_weapon1_ammo);
+                                            ui.label(match v.weapon1_ammo {
+                                                Some(n) => format!("{n:.0}"),
+                                                None => t.lbl_wt_ammo_unknown.to_string(),
+                                            });
+                                            ui.end_row();
+
                                             ui.label(t.name_wt_weapon2);
                                             ui.label(v.weapon2_firing.to_string());
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_weapon2_ammo);
+                                            ui.label(match v.weapon2_ammo {
+                                                Some(n) => format!("{n:.0}"),
+                                                None => t.lbl_wt_ammo_unknown.to_string(),
+                                            });
                                             ui.end_row();
 
                                             ui.label(t.lbl_wt_flaps_pct);
