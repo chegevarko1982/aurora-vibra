@@ -162,7 +162,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "aurora_vibra"
-version = "4.1.1"
+version = "4.2.0-rc1"
 dependencies = [
  "anyhow",
  "approx",

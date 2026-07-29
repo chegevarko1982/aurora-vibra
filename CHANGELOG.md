@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.2.0-rc1
+
+Release candidate — not distributed through the in-app auto-updater (see note below); download it manually from the GitHub Releases page if you want to test it.
+
+**New:**
+- War Thunder support: live telemetry link driving tactile effects for gunfire (weapon1/weapon2), flaps, landing gear transit, engine start/stop, and an AoA-based stall/airflow-separation buffet
+- Ammo tracking gained a fallback for aircraft that expose no `weapon1..weapon4` keys at all: firing is inferred from a decrease in the sum of ammo-like telemetry fields
+- Active game (MSFS / War Thunder) is now auto-detected and switches the GUI and effect set automatically
+- WinWing Orion joystick/throttle support, plus a second Ursa Minor RUD
+- N2 idle quick-set and "apply to current aircraft" buttons for profiles
+- Active-game indicator in the top bar is now a plain text label ("MSFS"/"WarThunder") instead of an icon
+
+**Notes:**
+- The stall/AoA buffet profile uses real Bf 109 F-4 aerodynamic data and, as a temporary measure, is now applied to every aircraft (previously F-4 only) until per-aircraft profiles are added — expect it to feel wrong on other airframes until then
+
 ## v4.1.1
 
 **Security:**
