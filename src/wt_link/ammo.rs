@@ -33,6 +33,27 @@ use serde_json::Value;
 /// чем убывающий в это время счётчик считается надёжно его собственным.
 const MIN_SOLO_TICKS: u32 = 3;
 
+/// Ключевые слова для отлова "похожих на боеприпасы" полей на бортах, где
+/// `weapon1..weapon4` в `/indicators` не встречаются вообще (см.
+/// `infer_firing_from_ammo_sum`) — шире, чем подтверждённый живыми сессиями
+/// префикс `ammo_counter`, на случай другой раскладки полей на
+/// неисследованных бортах.
+const AMMO_KEYWORDS: [&str; 5] = ["ammo", "bullets", "rounds", "mg", "cannon"];
+/// Патроны убывают целыми числами — этого порога достаточно, чтобы не
+/// принять погрешность округления f64 за реальное расходование.
+const SUM_DECREASE_EPS: f64 = 0.5;
+
+fn is_ammo_like_key(key: &str) -> bool {
+    // Ключи `/indicators` у War Thunder всегда в нижнем snake_case
+    // (подтверждено записанными сессиями) — приведение к нижнему регистру
+    // не нужно и лишь аллоцировало бы новую строку на каждый ключ каждого
+    // тика (~100-200 ключей * 20 Гц).
+    if key.ends_with("_lamp") {
+        return false;
+    }
+    AMMO_KEYWORDS.iter().any(|kw| key.contains(kw))
+}
+
 #[derive(Debug, Default)]
 pub struct AmmoTracker {
     last_values: HashMap<String, f64>,
@@ -40,6 +61,7 @@ pub struct AmmoTracker {
     weapon2_keys: HashSet<String>,
     weapon1_solo_ticks: u32,
     weapon2_solo_ticks: u32,
+    previous_ammo_sum: Option<f64>,
 }
 
 impl AmmoTracker {
@@ -131,6 +153,34 @@ impl AmmoTracker {
 
     pub fn weapon2_ammo(&self, indicators: &Value) -> Option<f64> {
         self.remaining(indicators, &self.weapon2_keys)
+    }
+
+    /// Фолбэк для бортов без единого ключа `weapon1..weapon4` в
+    /// `/indicators`: суммирует все числовые поля, похожие по имени на
+    /// боеприпасы (см. `is_ammo_like_key`), и считает стрельбу по убыванию
+    /// суммы между тиками. Рост суммы (довооружение/респавн) просто
+    /// переустанавливает базу, не сигнализируя стрельбу. Вызывать только
+    /// когда вызывающий код уже убедился, что ни одного триггер-ключа нет.
+    pub fn infer_firing_from_ammo_sum(&mut self, indicators: &Value) -> bool {
+        let Some(obj) = indicators.as_object() else {
+            return false;
+        };
+        let mut sum = 0.0;
+        let mut found_any = false;
+        for (key, value) in obj {
+            if !is_ammo_like_key(key) {
+                continue;
+            }
+            let Some(n) = value.as_f64() else { continue };
+            sum += n;
+            found_any = true;
+        }
+        if !found_any {
+            return false;
+        }
+        let fired = self.previous_ammo_sum.is_some_and(|prev| sum < prev - SUM_DECREASE_EPS);
+        self.previous_ammo_sum = Some(sum);
+        fired
     }
 }
 
@@ -225,5 +275,45 @@ mod tests {
         fire_solo(&mut t, "ammo_counter1", 60.0, MIN_SOLO_TICKS, true, false);
         t.reset();
         assert!(!t.weapon1_empty(&json!({"ammo_counter1": 0})));
+    }
+
+    #[test]
+    fn infer_firing_first_call_only_establishes_baseline() {
+        let mut t = AmmoTracker::new();
+        assert!(!t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 100})));
+    }
+
+    #[test]
+    fn infer_firing_from_ammo_sum_decrease() {
+        let mut t = AmmoTracker::new();
+        t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 100}));
+        assert!(t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 98})));
+    }
+
+    #[test]
+    fn infer_firing_rearm_rebases_without_firing() {
+        let mut t = AmmoTracker::new();
+        t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 10}));
+        // респавн/довооружение — сумма выросла, стрельбы быть не должно
+        assert!(!t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 200})));
+        // и следующий тик сравнивается уже с новой базой (200), а не старой (10):
+        // без изменения от новой базы стрельбы тоже быть не должно
+        assert!(!t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 200})));
+    }
+
+    #[test]
+    fn infer_firing_no_matching_keys_never_fires() {
+        let mut t = AmmoTracker::new();
+        t.infer_firing_from_ammo_sum(&json!({"speed": 500}));
+        assert!(!t.infer_firing_from_ammo_sum(&json!({"speed": 100})));
+    }
+
+    #[test]
+    fn infer_firing_lamp_duplicates_excluded() {
+        let mut t = AmmoTracker::new();
+        // Только `_lamp`-ключ без основного счётчика — не считается вовсе
+        // (found_any остаётся false), а не просто дублирует значение.
+        t.infer_firing_from_ammo_sum(&json!({"ammo_counter1_lamp": 60}));
+        assert!(!t.infer_firing_from_ammo_sum(&json!({"ammo_counter1_lamp": 0})));
     }
 }

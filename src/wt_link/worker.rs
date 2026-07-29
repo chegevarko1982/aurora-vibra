@@ -141,6 +141,20 @@ pub fn wt_worker(
                     }
                     wt_vars.weapon1_ammo = ammo.weapon1_ammo(&indicators_v);
                     wt_vars.weapon2_ammo = ammo.weapon2_ammo(&indicators_v);
+
+                    // Борта без единого ключа weapon1..weapon4 в /indicators
+                    // (не только weapon1/2 отсутствуют, но и weapon3/4 — иначе
+                    // сработал бы OR-фолбэк в vars::parse): тогда стрельбу не
+                    // определить по флагам вообще, и AmmoTracker::observe не
+                    // может ничему обучиться (ему самому нужен истинный
+                    // weapon1_firing/weapon2_firing хотя бы раз). Единственный
+                    // сигнал — убывание суммы всех похожих на боеприпасы полей.
+                    let no_weapon_trigger_keys = ["weapon1", "weapon2", "weapon3", "weapon4"]
+                        .iter()
+                        .all(|k| indicators_v.get(*k).is_none());
+                    if no_weapon_trigger_keys && ammo.infer_firing_from_ammo_sum(&indicators_v) {
+                        wt_vars.weapon1_firing = true;
+                    }
                 }
 
                 if owns {
