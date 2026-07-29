@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
+use crate::wt_link::ammo::AmmoTracker;
 use crate::wt_link::http::WtClient;
 use crate::wt_link::rumble::WtRumbleState;
 use crate::wt_link::vars::{self, WtVars};
@@ -44,6 +45,7 @@ pub fn wt_worker(
 
     let session_start = Instant::now();
     let mut engine = WtRumbleState::new();
+    let mut ammo = AmmoTracker::new();
     let mut client: Option<WtClient> = None;
     let mut was_enabled = false;
 
@@ -60,6 +62,7 @@ pub fn wt_worker(
                     throttle_right: 0,
                 });
                 engine.reset();
+                ammo.reset();
                 client = None;
                 was_enabled = false;
             }
@@ -93,7 +96,21 @@ pub fn wt_worker(
 
         match (state, indicators) {
             (Ok(state_v), Ok(indicators_v)) => {
-                let wt_vars = vars::parse(t, &state_v, &indicators_v);
+                let mut wt_vars = vars::parse(t, &state_v, &indicators_v);
+                if !wt_vars.in_mission {
+                    // В ангаре/меню может смениться борт — забываем, какие
+                    // ammo_counterN относились к weapon1/weapon2 прошлого
+                    // самолёта, чтобы не гейтить по чужой раскладке стволов.
+                    ammo.reset();
+                } else {
+                    ammo.observe(&indicators_v, wt_vars.weapon1_firing, wt_vars.weapon2_firing);
+                    if ammo.weapon1_empty(&indicators_v) {
+                        wt_vars.weapon1_firing = false;
+                    }
+                    if ammo.weapon2_empty(&indicators_v) {
+                        wt_vars.weapon2_firing = false;
+                    }
+                }
                 *status.lock() = if wt_vars.in_mission {
                     SimStatus::InFlight
                 } else {
