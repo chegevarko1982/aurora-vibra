@@ -11,6 +11,8 @@
 pub mod http;
 
 #[cfg(feature = "app")]
+pub mod aero_profiles;
+#[cfg(feature = "app")]
 pub mod ammo;
 #[cfg(feature = "app")]
 pub mod rumble;

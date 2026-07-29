@@ -47,6 +47,19 @@ pub struct WtVars {
     /// `/state`."H, m", переведено в футы — та же причина, что и для
     /// `speed_kt` (единая единица измерения с MSFS-панелью).
     pub altitude_ft: f64,
+    /// `/state`."IAS, km/h", БЕЗ конвертации (в отличие от `speed_kt`) — нужна
+    /// в исходных км/ч для сравнения с порогами `aero_profiles::StallProfile`
+    /// (`ias_safety_cutoff_kmh`), которые заданы в км/ч.
+    pub ias_kmh: f64,
+    /// `/state`."AoA, deg" — угол атаки, для эффекта срыва потока/сваливания
+    /// (см. `wt_link::aero_profiles`, `wt_link::rumble::StallState`).
+    pub aoa_deg: f64,
+    /// `/state`."Wx, deg/s" — угловая скорость по крену (град/с). Единственная
+    /// реально подтверждённая угловая скорость в API War Thunder (нет Wy/Wz) —
+    /// см. память `wt_link_wx_angular_rate_field_found` — потенциальный
+    /// сигнал для будущего детекта штопора, пока только отображается в
+    /// панели телеметрии.
+    pub wx_deg_s: f64,
 }
 
 const KMH_TO_KT: f64 = 1.0 / 1.852;
@@ -81,6 +94,9 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
             .to_string(),
         speed_kt: as_f64(state.get("IAS, km/h")) * KMH_TO_KT,
         altitude_ft: as_f64(state.get("H, m")) * M_TO_FT,
+        ias_kmh: as_f64(state.get("IAS, km/h")),
+        aoa_deg: as_f64(state.get("AoA, deg")),
+        wx_deg_s: as_f64(state.get("Wx, deg/s")),
     }
 }
 
@@ -114,5 +130,26 @@ mod tests {
     fn missing_fields_self_neutralize() {
         let vars = parse(0.0, &json!({}), &json!({}));
         assert_eq!(vars, WtVars::default());
+    }
+
+    #[test]
+    fn parses_aoa_and_ias_from_real_recorded_body() {
+        // Тело реального `/state` из wt_probe_sessions/session_20260728_204134.jsonl
+        // (Bf 109 E-3), строка 9 — используется как фикстура для срыва потока.
+        let state = json!({
+            "AoA, deg": 0.2, "AoS, deg": -0.0, "H, m": 2519, "IAS, km/h": 380,
+            "M": 0.36, "Mfuel, kg": 90, "Mfuel0, kg": 303, "Ny": 1.0,
+            "RPM 1": 2301, "RPM throttle 1, %": 64, "TAS, km/h": 431,
+            "Vy, m/s": 2.2, "Wx, deg/s": -0.0, "aileron, %": -0.0,
+            "efficiency 1, %": 86, "elevator, %": -4, "flaps, %": 0, "gear, %": 0,
+            "magneto 1": 3, "manifold pressure 1, atm": 1.28, "oil temp 1, C": 53,
+            "pitch 1, deg": 36.4, "power 1, hp": 974.2, "radiator 1, %": 0,
+            "rudder, %": -8, "throttle 1, %": 100, "thrust 1, kgs": 535,
+            "valid": true, "water temp 1, C": 55
+        });
+        let vars = parse(0.1, &state, &json!({}));
+        assert_eq!(vars.ias_kmh, 380.0);
+        assert_eq!(vars.aoa_deg, 0.2);
+        assert_eq!(vars.wx_deg_s, -0.0);
     }
 }

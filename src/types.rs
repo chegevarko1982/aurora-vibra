@@ -180,6 +180,7 @@ pub struct EffectDeviceTargets {
 pub struct WtDeviceTargets {
     pub flaps: EffectDeviceTarget,
     pub gear_transit: EffectDeviceTarget,
+    pub stall: EffectDeviceTarget,
 }
 
 /// Параметры генератора "гул с текстурой" для одной группы оружия — перенесены
@@ -215,7 +216,10 @@ impl Default for GunPreset {
 }
 
 /// Настройки этапа 1 поддержки War Thunder (см. план): Weapon1/Weapon2
-/// (стрельба), Flaps, Gear Transit & Doors.
+/// (стрельба), Flaps, Gear Transit & Doors. `stall_*` — эффект срыва
+/// потока/сваливания (см. `wt_link::aero_profiles`/`wt_link::rumble::StallState`),
+/// захардкоженный профиль порогов только для Bf 109 F-4 в v1 — на любом
+/// другом борту эффект молчит независимо от `stall_enabled`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WtConfig {
@@ -227,6 +231,8 @@ pub struct WtConfig {
     pub flaps_peak: f32,
     pub gear_transit_enabled: bool,
     pub gear_peak: f32,
+    pub stall_enabled: bool,
+    pub stall_ceiling: f32,
     pub device_targets: WtDeviceTargets,
 }
 
@@ -263,6 +269,8 @@ impl Default for WtConfig {
             flaps_peak: 153.0, // тот же дефолт, что и MSFS flaps_peak
             gear_transit_enabled: true,
             gear_peak: 110.0,
+            stall_enabled: true,
+            stall_ceiling: 10.0, // см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
             device_targets: WtDeviceTargets::default(),
         }
     }

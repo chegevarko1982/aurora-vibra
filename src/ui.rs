@@ -2113,6 +2113,35 @@ impl eframe::App for UiState {
                                             cfg.wt.weapon2_enabled = enabled;
                                         }
 
+                                        // Stall/буффет срыва потока — v1: только Bf 109 F-4,
+                                        // на остальных бортах эффект молчит (см. hover).
+                                        {
+                                            let mut stall_enabled = cfg.wt.stall_enabled;
+                                            let active =
+                                                self.effects.stall_active.load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(
+                                                col,
+                                                stall_enabled,
+                                                active,
+                                                |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_wt_stall,
+                                                        &mut cfg.wt.stall_ceiling,
+                                                        10.0, // жёсткий потолок — см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
+                                                        &mut stall_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(t.hover_wt_stall),
+                                                        &mut cfg.wt.device_targets.stall,
+                                                        t,
+                                                    );
+                                                },
+                                            );
+                                            cfg.wt.stall_enabled = stall_enabled;
+                                        }
+
                                         // Flaps
                                         {
                                             let mut flaps_enabled = cfg.wt.flaps_enabled;
@@ -2256,6 +2285,14 @@ impl eframe::App for UiState {
 
                                             ui.label(t.lbl_wt_gear_pct);
                                             ui.label(format!("{:.0}", v.gear_pct));
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_aoa_deg);
+                                            ui.label(format!("{:.1}", v.aoa_deg));
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_wx_deg_s);
+                                            ui.label(format!("{:.1}", v.wx_deg_s));
                                             ui.end_row();
                                         }
                                         None => {

@@ -25,7 +25,17 @@ use crate::rumble::RumbleOutput;
 use crate::types::{GunPreset, WtConfig};
 use crate::EffectsSnapshot;
 
+use super::aero_profiles::{self, StallProfile};
 use super::vars::WtVars;
+
+/// Жёсткий потолок интенсивности эффекта срыва потока — та же величина, что и
+/// приватная `STALL_CEILING_HARD_CAP` в `crate::rumble` (MSFS-сторона),
+/// продублирована локально, т.к. импортировать приватную константу другого
+/// модуля нельзя. `cfg.stall_ceiling` не может превысить это значение.
+const WT_STALL_CEILING_HARD_CAP: f64 = 10.0;
+/// Ширина линейного участка нарастания баффета перед сваливанием (град AoA) —
+/// взято из пользовательского примера ((AoA-15)/4.9 при пороге сваливания 19.9°).
+const PRE_STALL_RAMP_WIDTH_DEG: f64 = 4.9;
 
 /// Минимальный xorshift32 — та же реализация, что и в test_gun1.rs (только
 /// для джиттера амплитуды текстуры, криптостойкость не нужна).
@@ -125,6 +135,76 @@ impl GunState {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Stall/буффет срыва потока — захардкоженный профиль порогов, пока только
+// для Bf 109 F-4 (см. wt_link::aero_profiles). Текстура — рваная/дрожащая
+// (по образцу GunState выше), не гладкая синусоида (как Overspeed на
+// MSFS-стороне): реальный баффет ближе к хаотичной тряске, чем к тону.
+// Гипотеза для живой проверки, не откалиброванный результат — см. план.
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug)]
+struct StallState {
+    last_cycle_idx: i64,
+    cycle_jitter_mul: f64,
+    rng: Xorshift32,
+}
+
+impl StallState {
+    fn new(salt: u32) -> Self {
+        Self {
+            last_cycle_idx: -1,
+            cycle_jitter_mul: 1.0,
+            rng: Xorshift32::seeded(salt),
+        }
+    }
+
+    /// Возвращает интенсивность баффета (0.0, если самолёт вне профиля,
+    /// ниже safety cutoff по IAS или AoA ниже начала пред-срывного участка).
+    fn step(&mut self, t: f64, vars: &WtVars, profile: &StallProfile, ceiling: f64) -> f64 {
+        if vars.ias_kmh <= profile.ias_safety_cutoff_kmh as f64 {
+            return 0.0; // safety cutoff — не дребезжать на рулёжке/стоянке
+        }
+
+        let clean = profile.clean_stall_aoa_deg as f64;
+        let landing_mid = (profile.landing_stall_aoa_deg.0 + profile.landing_stall_aoa_deg.1) as f64
+            / 2.0;
+        let flap_frac = (vars.flaps_pct / 100.0).clamp(0.0, 1.0);
+        // Интерполяция порога сваливания между "чистым" крылом (закрылки 0%)
+        // и посадочной конфигурацией (закрылки 100%) по текущим закрылкам.
+        let stall_aoa = clean - (clean - landing_mid) * flap_frac;
+        let pre_stall_start = stall_aoa - PRE_STALL_RAMP_WIDTH_DEG;
+
+        let growth = if vars.aoa_deg >= stall_aoa {
+            1.0
+        } else if vars.aoa_deg > pre_stall_start {
+            (vars.aoa_deg - pre_stall_start) / (stall_aoa - pre_stall_start)
+        } else {
+            0.0
+        };
+
+        if growth <= 0.0 {
+            return 0.0;
+        }
+
+        // ВАЖНО: `ceiling` — как и в MSFS `stall_ceiling` (см. crate::rumble),
+        // это МАЛЕНЬКИЙ потолок в тех же единицах, что и итоговая интенсивность
+        // мотора (0..255), а не проценты от 255 — то есть эффект по дизайну
+        // подаётся как приглушённая, а не полноамплитудная тряска. Число
+        // WT_STALL_CEILING_HARD_CAP=10.0 — консервативная стартовая точка,
+        // требующая перенастройки после живого теста на Bf 109 F-4 (см. план).
+        let ceiling = ceiling.min(WT_STALL_CEILING_HARD_CAP);
+        let floor_ratio = 0.15 + 0.85 * growth;
+        let carrier_hz = 8.0 + growth * 8.0;
+        let cycle_idx = (t * carrier_hz).floor() as i64;
+        if cycle_idx != self.last_cycle_idx {
+            self.last_cycle_idx = cycle_idx;
+            self.cycle_jitter_mul = 0.6 + 0.4 * self.rng.next_unit();
+        }
+        ceiling * floor_ratio * self.cycle_jitter_mul
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Flaps — та же математика, что и MSFS-эффект в crate::rumble (округление
 // до целого %, детект изменения кадр-к-кадру, короткое окно активности,
 // 25 Гц полу-синусный ШИМ, чередование throttle-каналов раз в 500мс).
@@ -144,6 +224,7 @@ const GEAR_LOCKED_THRESHOLD_PCT: f64 = 0.5; // клиренс вокруг 0%/10
 pub struct WtRumbleState {
     weapon1: GunState,
     weapon2: GunState,
+    stall: StallState,
 
     last_flaps_pct_rounded: i32,
     flaps_active_until_t: f64,
@@ -166,6 +247,7 @@ impl WtRumbleState {
         Self {
             weapon1: GunState::new(0x9E3779B9),
             weapon2: GunState::new(0x85EBCA6B),
+            stall: StallState::new(0xC2B2AE35),
             last_flaps_pct_rounded: i32::MIN,
             flaps_active_until_t: -1.0,
             gear_initialized: false,
@@ -219,6 +301,25 @@ impl WtRumbleState {
         joystick += w1_term;
         throttle_left += w2_term;
         throttle_right += w2_term;
+
+        // --- Stall/буффет срыва потока (см. StallState выше) ---
+        // Профиль ищется по имени борта каждый тик — дешёвая операция
+        // (константный список из одного элемента в v1), кэш не нужен.
+        let stall_term = if cfg.stall_enabled {
+            aero_profiles::match_profile(&vars.vehicle_type)
+                .map(|profile| self.stall.step(t, vars, profile, cfg.stall_ceiling as f64))
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        effects.stall_active = stall_term > 0.0;
+        if dt_.stall.enable_joystick {
+            joystick += stall_term;
+        }
+        if dt_.stall.enable_throttle {
+            throttle_left += stall_term;
+            throttle_right += stall_term;
+        }
 
         // --- Flaps ---
         let flaps_pct_rounded = vars.flaps_pct.round() as i32;
@@ -351,6 +452,9 @@ mod tests {
             vehicle_type: String::new(),
             speed_kt: 0.0,
             altitude_ft: 0.0,
+            ias_kmh: 0.0,
+            aoa_deg: 0.0,
+            wx_deg_s: 0.0,
         }
     }
 
@@ -485,6 +589,114 @@ mod tests {
         engine.step(&v, &c, false);
         v.gear_pct = 0.0;
         let out = engine.step(&v, &c, false);
+        assert_eq!(out.joystick_intensity, 0);
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Stall/буффет срыва потока (Bf 109 F-4, см. StallState/aero_profiles).
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn bf109f4_vars() -> WtVars {
+        let mut v = vars();
+        v.vehicle_type = "bf-109f-4".to_string();
+        v.ias_kmh = 300.0; // выше ias_safety_cutoff_kmh (120.0)
+        v
+    }
+
+    #[test]
+    fn stall_silent_below_ias_safety_cutoff() {
+        let mut engine = WtRumbleState::new();
+        let mut v = bf109f4_vars();
+        v.ias_kmh = 100.0; // ниже cutoff 120.0
+        v.aoa_deg = 25.0; // заведомо выше clean_stall_aoa_deg (19.9)
+        let out = engine.step(&v, &cfg(), false);
+        assert_eq!(out.joystick_intensity, 0);
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn stall_silent_below_pre_stall_ramp_start() {
+        let mut engine = WtRumbleState::new();
+        let mut v = bf109f4_vars();
+        v.flaps_pct = 0.0; // чистое крыло: stall_aoa=19.9, ramp start=19.9-4.9=15.0
+        v.aoa_deg = 10.0;
+        let out = engine.step(&v, &cfg(), false);
+        assert_eq!(out.joystick_intensity, 0);
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn stall_intensity_grows_monotonically_then_caps_at_ceiling() {
+        let mut engine = WtRumbleState::new();
+        let mut v = bf109f4_vars();
+        v.flaps_pct = 0.0;
+        let c = cfg();
+        let ceiling_u8 = (c.stall_ceiling.min(10.0)) as u8; // hard cap, см. WT_STALL_CEILING_HARD_CAP
+
+        let mut prev = 0u8;
+        for aoa in [15.5, 17.0, 18.5, 19.9, 25.0] {
+            v.aoa_deg = aoa;
+            let out = engine.step(&v, &c, false);
+            assert!(
+                out.joystick_intensity >= prev,
+                "intensity should not decrease as AoA rises toward stall: aoa={aoa} prev={prev} now={}",
+                out.joystick_intensity
+            );
+            assert!(
+                out.joystick_intensity <= ceiling_u8 + 1, // округление
+                "intensity must not exceed the hard-capped ceiling: {}",
+                out.joystick_intensity
+            );
+            prev = out.joystick_intensity;
+        }
+        assert!(prev > 0, "expected non-zero intensity at/above stall AoA");
+    }
+
+    #[test]
+    fn stall_threshold_interpolates_with_flaps() {
+        // Чистое крыло: stall_aoa=19.9, ramp start=19.9-4.9=15.0 -> при 13.0
+        // ещё тихо. С закрылками 100%: stall_aoa=(15+17)/2=16.0,
+        // ramp start=16.0-4.9=11.1 -> тот же AoA=13.0 уже внутри рампы.
+        let mut engine_clean = WtRumbleState::new();
+        let mut v_clean = bf109f4_vars();
+        v_clean.flaps_pct = 0.0;
+        v_clean.aoa_deg = 13.0;
+        let out_clean = engine_clean.step(&v_clean, &cfg(), false);
+
+        let mut engine_landing = WtRumbleState::new();
+        let mut v_landing = bf109f4_vars();
+        v_landing.flaps_pct = 100.0;
+        v_landing.aoa_deg = 13.0;
+        let out_landing = engine_landing.step(&v_landing, &cfg(), false);
+
+        assert_eq!(out_clean.joystick_intensity, 0);
+        assert!(out_landing.joystick_intensity > 0);
+    }
+
+    #[test]
+    fn stall_disabled_stays_silent_even_past_critical_aoa() {
+        let mut engine = WtRumbleState::new();
+        let mut c = cfg();
+        c.stall_enabled = false;
+        let mut v = bf109f4_vars();
+        v.aoa_deg = 25.0;
+        let out = engine.step(&v, &c, false);
+        assert_eq!(out.joystick_intensity, 0);
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn stall_stays_silent_on_unknown_aircraft() {
+        let mut engine = WtRumbleState::new();
+        let mut v = vars(); // vehicle_type = "" (не в таблице профилей)
+        v.ias_kmh = 300.0;
+        v.aoa_deg = 30.0;
+        let out = engine.step(&v, &cfg(), false);
         assert_eq!(out.joystick_intensity, 0);
         assert_eq!(out.throttle_left_intensity, 0);
         assert_eq!(out.throttle_right_intensity, 0);
