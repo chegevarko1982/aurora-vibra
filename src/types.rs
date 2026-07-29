@@ -440,8 +440,8 @@ pub struct RumbleConfig {
     // этого поля, см. #[serde(default)] на структуре) секция развёрнута.
     pub telemetry_expanded: bool,
 
-    // Настройки этапа 1 поддержки War Thunder (см. settings::wt_enabled —
-    // включение самого режима лежит там, не здесь, т.к. это глобальный
+    // Настройки этапа 1 поддержки War Thunder (см. settings::game_override —
+    // то, какая игра сейчас активна, лежит там, не здесь, т.к. это глобальный
     // переключатель, а не параметр эффекта, привязанный к профилю борта).
     pub wt: WtConfig,
 }
@@ -720,4 +720,26 @@ pub enum SimStatus {
     /// молча завершался, а бейдж оставался Disconnected — причина сбоя видна
     /// была только в файле лога, панель которого в релизной сборке скрыта.
     SimConnectMissing,
+}
+
+/// Какая игра сейчас владеет HID-каналом/GUI. Не дублирует `SimStatus` —
+/// `SimStatus` про "глубину" соединения конкретного конвейера, `ActiveGame`
+/// про то, какая игра активна прямо сейчас (см. `crate::game_state::GameSlot`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ActiveGame {
+    #[default]
+    None,
+    Msfs,
+    Wt,
+}
+
+/// Ручной оверрайд автоопределения (меню Опции). Персистится в SettingsFile,
+/// как `Lang` (см. `i18n.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GameOverride {
+    #[default]
+    Auto,
+    ForceMsfs,
+    ForceWt,
 }

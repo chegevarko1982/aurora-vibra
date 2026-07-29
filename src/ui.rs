@@ -15,8 +15,8 @@ use std::{
 use windows::Win32::Foundation::HWND;
 
 use crate::{
-    ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleConfig,
-    SimStatus, UiCmd,
+    ActiveGame, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, GameOverride, HidCmd,
+    LogBuffer, RumbleConfig, SimStatus, UiCmd,
     aircraft_profiles::{self, AircraftProfile, AircraftProfiles},
     i18n::{self, Lang, Strings},
     profiles::ProfileState,
@@ -91,7 +91,7 @@ pub enum Section {
     Gear,
     Telemetry,
     // War Thunder (этап 1) — единственная секция эффектов, показывается вместо
-    // Rumble/Taxi/Engines/Gear, пока settings::wt_enabled() включён (см.
+    // Rumble/Taxi/Engines/Gear, пока active_game == ActiveGame::Wt (см.
     // nav_panel и dispatch ниже). Telemetry остаётся общей секцией для обоих
     // режимов, но её содержимое переключается на WT-поля.
     Wt,
@@ -169,6 +169,19 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus, t: &Strings) {
             label.on_hover_text(t.hover_simconnect_missing);
         }
     });
+}
+
+/// Иконка активной игры в верхней панели — рядом со status_badge. Молчит
+/// (ничего не рисует), пока ActiveGame::None, поэтому вызывающий код не
+/// оборачивает вызов условием отдельно.
+fn game_badge(ui: &mut egui::Ui, game: ActiveGame, t: &Strings) {
+    let (source, hover): (egui::ImageSource, &str) = match game {
+        ActiveGame::Msfs => (egui::include_image!("../assets/MSFS.png"), t.hover_game_msfs),
+        ActiveGame::Wt => (egui::include_image!("../assets/WT.png"), t.hover_game_wt),
+        ActiveGame::None => return,
+    };
+    let image = egui::Image::new(source).fit_to_exact_size(egui::vec2(20.0, 20.0));
+    ui.add(image).on_hover_text(hover);
 }
 
 fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool, t: &Strings) {
@@ -253,11 +266,15 @@ pub struct UiState {
     // если только это не настоящий Exit из трея (force_quit), который должен
     // этот перехват обойти. См. UiState::ui() и tray.rs.
     pub close_to_tray: bool,
-    // "War Thunder" (Options menu): включает будущую поддержку WT. Пока только
-    // персистится в SettingsFile — ни один воркер его ещё не читает, движка
-    // для WT нет (см. scratchpad/wt_support_plan.md). Заведён заранее, чтобы
-    // точка входа в UI уже существовала к моменту реализации.
-    pub wt_enabled: bool,
+    // Автоопределение активной игры (MSFS/WT) — единый слот владения,
+    // заполняется воркерами (sim::sim_worker/wt_link::wt_worker) через
+    // game_state::GameSlot, читается GUI-потоком каждый кадр. `game_override`
+    // — ручной оверрайд (меню Опции), персистится в SettingsFile.
+    // `last_seen_game` — предыдущее значение active_game, чтобы обнаружить
+    // переход и один раз переключить активную секцию (см. show_main).
+    pub active_game: Arc<Mutex<ActiveGame>>,
+    pub game_override: GameOverride,
+    pub last_seen_game: ActiveGame,
     pub force_quit: Arc<AtomicBool>,
     pub show_help: bool,
     pub show_help_us: bool,
@@ -275,7 +292,7 @@ impl UiState {
     fn save_global_settings(&self) {
         crate::settings::set_close_to_tray(self.close_to_tray);
         crate::settings::set_monitor_collapsed(self.monitor_collapsed);
-        crate::settings::set_wt_enabled(self.wt_enabled);
+        crate::settings::set_game_override(self.game_override);
         let ap = self.aircraft_profiles.lock();
         let _ = crate::settings::save(&crate::settings::SettingsFile {
             default: ap.default.clone(),
@@ -284,7 +301,12 @@ impl UiState {
             close_to_tray: self.close_to_tray,
             simconnect_dll_path: crate::settings::simconnect_dll_path(),
             monitor_collapsed: self.monitor_collapsed,
-            wt_enabled: self.wt_enabled,
+            // wt_enabled — legacy-поле, производное от game_override (см.
+            // комментарий у поля в SettingsFile): единственный источник
+            // истины теперь game_override, wt_enabled существует только для
+            // миграции файлов, сохранённых сборкой до этой фичи.
+            wt_enabled: self.game_override == GameOverride::ForceWt,
+            game_override: self.game_override,
         });
     }
 
@@ -678,6 +700,12 @@ impl eframe::App for UiState {
             ui.horizontal_wrapped(|ui| {
                 let st = *self.status.lock();
                 status_badge(ui, &st, t);
+                // Верхняя панель рисуется раньше блока show_main (где для
+                // шага секций уже читается active_game в отдельную `ag`) —
+                // читаем Mutex здесь же отдельно, а не полагаемся на порядок
+                // между двумя блоками кода (дешёвая lock, не проблема).
+                let top_ag = *self.active_game.lock();
+                game_badge(ui, top_ag, t);
                 ui.separator();
 
                 let controller_ok = self.controller_connected.load(Ordering::Relaxed);
@@ -865,24 +893,33 @@ impl eframe::App for UiState {
                                 self.save_global_settings();
                             }
                             ui.separator();
-                            // Точка входа в будущую поддержку War Thunder.
-                            // Намеренно лежит здесь, в Опциях, а не в тулбаре:
-                            // функционала за ним пока нет, флаг только
-                            // сохраняется в SettingsFile (см. UiState::wt_enabled).
-                            if ui
-                                .checkbox(&mut self.wt_enabled, t.chk_wt_enabled)
-                                .on_hover_text(t.hover_wt_enabled)
-                                .changed()
-                            {
-                                // Секции эффектов MSFS и War Thunder не пересекаются
-                                // (см. Section::Wt) — при переключении режима сразу
-                                // переводим активную секцию, чтобы не остаться на
-                                // скрытой вкладке другого режима.
-                                self.active_section = if self.wt_enabled {
-                                    Section::Wt
-                                } else {
-                                    Section::Rumble
-                                };
+                            // Ручной оверрайд автоопределения активной игры.
+                            // Обычный режим — Auto: какая игра живая, ту и
+                            // показываем (см. переход по ActiveGame в начале
+                            // show_main). Force* прижимает конкретную игру
+                            // независимо от реальной живости другой — сама
+                            // veto-логика живёт в воркерах (sim/worker.rs,
+                            // wt_link/worker.rs), здесь только контрол.
+                            ui.label(t.lbl_game_override);
+                            let mut changed = false;
+                            changed |= ui
+                                .radio_value(&mut self.game_override, GameOverride::Auto, t.opt_game_auto)
+                                .changed();
+                            changed |= ui
+                                .radio_value(
+                                    &mut self.game_override,
+                                    GameOverride::ForceMsfs,
+                                    t.opt_game_force_msfs,
+                                )
+                                .changed();
+                            changed |= ui
+                                .radio_value(
+                                    &mut self.game_override,
+                                    GameOverride::ForceWt,
+                                    t.opt_game_force_wt,
+                                )
+                                .changed();
+                            if changed {
                                 self.save_global_settings();
                             }
                             ui.separator();
@@ -928,6 +965,33 @@ impl eframe::App for UiState {
         let _ = show_debug;
 
         if show_main {
+            // Автоопределение активной игры: как только active_game меняется
+            // (воркеры заявили/освободили GameSlot), один раз переключаем
+            // активную секцию — раньше это делал .changed() у чекбокса WT,
+            // теперь источник истины не пользовательский клик, а сам факт
+            // смены владельца слота.
+            let ag = *self.active_game.lock();
+            if ag != self.last_seen_game {
+                self.active_section = match ag {
+                    ActiveGame::Wt => Section::Wt,
+                    _ => Section::Rumble,
+                };
+                self.last_seen_game = ag;
+            }
+
+            if ag == ActiveGame::None {
+                // Ни одна игра не обнаружена — нейтральный экран ожидания
+                // вместо секций эффектов/nav/Live Monitor (той телеметрии,
+                // которую они показывали бы, всё равно ниоткуда взять).
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(80.0);
+                        ui.heading(t.heading_game_not_detected);
+                        ui.add_space(8.0);
+                        ui.label(t.msg_game_not_detected);
+                    });
+                });
+            } else {
             // Общий снимок "включён/активен" для каждого эффекта — используется и
             // бейджами счётчика в навигации слева, и списком Live Monitor справа,
             // чтобы не считать дважды.
@@ -940,11 +1004,11 @@ impl eframe::App for UiState {
             // (Gear Transit). Используется компактным Live Monitor, чтобы
             // показывать не только "включён/активен", но и реальное число.
             //
-            // War Thunder (wt_enabled): список полностью заменяется на 4
-            // эффекта этого режима — MSFS-эффекты в этот момент не считаются
-            // (см. гейт в sim/worker.rs), показывать их в Live Monitor было бы
-            // вводящим в заблуждение.
-            let rows: Vec<(&str, bool, bool, Option<f32>)> = if self.wt_enabled {
+            // War Thunder (ag == ActiveGame::Wt): список полностью заменяется
+            // на 4 эффекта этого режима — MSFS-эффекты в этот момент не
+            // считаются (см. гейт в sim/worker.rs), показывать их в Live
+            // Monitor было бы вводящим в заблуждение.
+            let rows: Vec<(&str, bool, bool, Option<f32>)> = if ag == ActiveGame::Wt {
                 vec![
                     (
                         t.name_wt_weapon1,
@@ -1069,7 +1133,7 @@ impl eframe::App for UiState {
                         ui.add(egui::Button::selectable(selected, label).wrap())
                             .clicked()
                     };
-                    if self.wt_enabled {
+                    if ag == ActiveGame::Wt {
                         if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
                             self.active_section = Section::Wt;
                         }
@@ -2267,7 +2331,7 @@ impl eframe::App for UiState {
                         ui.add_space(8.0);
                         ui.separator();
 
-                        if self.active_section == Section::Telemetry && self.wt_enabled {
+                        if self.active_section == Section::Telemetry && ag == ActiveGame::Wt {
                             ui.heading(t.heading_wt_telemetry);
                             egui::Grid::new("wt_telemetry")
                                 .num_columns(2)
@@ -2631,6 +2695,7 @@ impl eframe::App for UiState {
                         }
                     });
             });
+            }
         }
 
         #[cfg(debug_assertions)]

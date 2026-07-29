@@ -4,8 +4,9 @@
 #![windows_subsystem = "windows"]
 
 use aurora_vibra::{
-    ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
+    ActiveGame, ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
     aircraft_profiles::AircraftProfiles,
+    game_state::GameSlot,
     hid::hid_worker,
     log::LogBuffer,
     profiles::ProfileState,
@@ -69,6 +70,7 @@ fn main() -> Result<()> {
     let force_quit = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(aurora_vibra::SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
+    let active_game = Arc::new(Mutex::new(ActiveGame::None));
     let logs = LogBuffer::default();
 
     match logs.try_init_file_prefer_exe_dir() {
@@ -93,8 +95,8 @@ fn main() -> Result<()> {
     aurora_vibra::settings::set_close_to_tray(close_to_tray);
     let monitor_collapsed = settings_file.monitor_collapsed;
     aurora_vibra::settings::set_monitor_collapsed(monitor_collapsed);
-    let wt_enabled = settings_file.wt_enabled;
-    aurora_vibra::settings::set_wt_enabled(wt_enabled);
+    let game_override = settings_file.game_override;
+    aurora_vibra::settings::set_game_override(game_override);
     aurora_vibra::settings::set_simconnect_dll_path(settings_file.simconnect_dll_path.clone());
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
@@ -125,6 +127,7 @@ fn main() -> Result<()> {
         let ac_title = aircraft_title.clone();
         let aircraft_profiles_c = aircraft_profiles.clone();
         let profile_state_c = profile_state.clone();
+        let game_c = GameSlot::new(active_game.clone());
         thread::spawn(move || {
             sim_worker(
                 last_vars_c,
@@ -137,6 +140,7 @@ fn main() -> Result<()> {
                 ac_title,
                 aircraft_profiles_c,
                 profile_state_c,
+                game_c,
             )
         });
     }
@@ -152,6 +156,7 @@ fn main() -> Result<()> {
         let ac_title = aircraft_title.clone();
         let aircraft_profiles_c = aircraft_profiles.clone();
         let profile_state_c = profile_state.clone();
+        let game_c = GameSlot::new(active_game.clone());
         thread::spawn(move || {
             wt_worker(
                 last_wt_vars_c,
@@ -164,6 +169,7 @@ fn main() -> Result<()> {
                 ac_title,
                 aircraft_profiles_c,
                 profile_state_c,
+                game_c,
             )
         });
     }
@@ -234,7 +240,9 @@ fn main() -> Result<()> {
         monitor_collapsed,
         hold,
         close_to_tray,
-        wt_enabled,
+        active_game: active_game.clone(),
+        game_override,
+        last_seen_game: ActiveGame::None,
         force_quit: force_quit.clone(),
         show_help: false,
         show_help_us: false,

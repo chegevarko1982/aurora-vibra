@@ -1,8 +1,8 @@
-use crate::{RumbleConfig, aircraft_profiles::AircraftProfile, i18n::Lang};
+use crate::{RumbleConfig, aircraft_profiles::AircraftProfile, i18n::Lang, types::GameOverride};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const FILE_NAME: &str = "AuroraVibra.settings.json";
 
@@ -34,20 +34,30 @@ pub fn set_monitor_collapsed(v: bool) {
     MONITOR_COLLAPSED.store(v, Ordering::Relaxed);
 }
 
-// Тот же приём, что и у CLOSE_TO_TRAY и по той же причине: без глобального
-// зеркала aircraft_profiles::save_active (кнопка Save профиля) собирает
-// SettingsFile без доступа к UiState и молча сбрасывал бы флаг обратно в false.
-static WT_ENABLED: AtomicBool = AtomicBool::new(false);
+// Тот же приём, что и у CURRENT_LANG (i18n.rs) — AtomicU8, а не AtomicBool,
+// потому что GameOverride трёхвариантный. Читается воркерами (sim/worker.rs,
+// wt_link/worker.rs) на каждом тике арбитража — дешёвый enum-матч, не
+// требующий доступа к UiState. Заменяет собой старый WT_ENABLED/wt_enabled()
+// (ручной чекбокс "War Thunder") — единственный источник истины теперь этот
+// 3-вариантный оверрайд, старый bool остался только как поле SettingsFile
+// для миграции (см. migrate_wt_enabled ниже).
+static GAME_OVERRIDE: AtomicU8 = AtomicU8::new(0); // 0=Auto,1=ForceMsfs,2=ForceWt
 
-/// Включена ли поддержка War Thunder (пункт "War Thunder" в меню Опции).
-/// Пока только персистится и ничего не запускает — переключатель заведён
-/// заранее, под будущий WT-функционал (см. scratchpad/wt_support_plan.md).
-pub fn wt_enabled() -> bool {
-    WT_ENABLED.load(Ordering::Relaxed)
+pub fn game_override() -> GameOverride {
+    match GAME_OVERRIDE.load(Ordering::Relaxed) {
+        1 => GameOverride::ForceMsfs,
+        2 => GameOverride::ForceWt,
+        _ => GameOverride::Auto,
+    }
 }
 
-pub fn set_wt_enabled(v: bool) {
-    WT_ENABLED.store(v, Ordering::Relaxed);
+pub fn set_game_override(v: GameOverride) {
+    let raw = match v {
+        GameOverride::Auto => 0,
+        GameOverride::ForceMsfs => 1,
+        GameOverride::ForceWt => 2,
+    };
+    GAME_OVERRIDE.store(raw, Ordering::Relaxed);
 }
 
 // Тот же приём, что и у CLOSE_TO_TRAY: путь к SimConnect.dll, выбранный
@@ -88,10 +98,21 @@ pub struct SettingsFile {
     // Свёрнут ли столбец Live Monitor (правая панель). По умолчанию развёрнут —
     // старые файлы без этого поля десериализуются в false.
     pub monitor_collapsed: bool,
-    // Поддержка War Thunder (пункт "War Thunder" в меню Опции). По умолчанию
-    // выключено — старые файлы без этого поля десериализуются в false.
-    // Сам функционал ещё не реализован, флаг заведён заранее.
+    // Legacy-поле дореализации автоопределения игры: раньше единственный
+    // источник истины для чекбокса "War Thunder" в Опциях. Теперь ПРОИЗВОДНОЕ
+    // от game_override (см. UiState::save_global_settings) — сохраняется как
+    // true тогда и только тогда, когда game_override == ForceWt, — чтобы
+    // миграция ниже в load() срабатывала ровно один раз, для файлов,
+    // сохранённых сборкой ДО этой фичи (где game_override физически
+    // отсутствует в JSON).
     pub wt_enabled: bool,
+    // Ручной оверрайд автоопределения активной игры (меню Опции): Auto —
+    // определять автоматически по живости MSFS/WT, ForceMsfs/ForceWt —
+    // прижать конкретную игру независимо от реальной живости другой.
+    // Старые файлы без этого поля десериализуются в GameOverride::Auto
+    // благодаря #[serde(default)] на всей структуре, миграция ниже поднимает
+    // его в ForceWt, если на диске сохранился старый wt_enabled: true.
+    pub game_override: GameOverride,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
@@ -151,11 +172,12 @@ pub fn load() -> Option<SettingsFile> {
                 continue;
             };
             if value.get("profiles").is_some() {
-                if let Ok(file) = serde_json::from_value::<SettingsFile>(value) {
+                if let Ok(mut file) = serde_json::from_value::<SettingsFile>(value) {
+                    migrate_wt_enabled(&mut file);
                     return Some(file);
                 }
             } else if let Ok(cfg) = serde_json::from_value::<RumbleConfig>(value) {
-                return Some(SettingsFile {
+                let mut file = SettingsFile {
                     default: cfg,
                     profiles: Vec::new(),
                     lang: Lang::default(),
@@ -163,11 +185,28 @@ pub fn load() -> Option<SettingsFile> {
                     simconnect_dll_path: None,
                     monitor_collapsed: false,
                     wt_enabled: false,
-                });
+                    game_override: GameOverride::default(),
+                };
+                migrate_wt_enabled(&mut file);
+                return Some(file);
             }
         }
     }
     None
+}
+
+/// Поднимает старый флаг `wt_enabled: true` (от сборок до автоопределения
+/// игры) в `game_override: ForceWt`. Срабатывает только когда `game_override`
+/// ещё Auto — то есть либо ключа не было в JSON вовсе (старый файл), либо
+/// пользователь никогда не трогал новый 3-way контрол. `wt_enabled` при
+/// сохранении теперь производный от `game_override` (см. комментарий у поля
+/// в SettingsFile), поэтому эта миграция реально применяется только один раз:
+/// как только файл пересохранится, `wt_enabled` и `game_override` синхронно
+/// отражают одно и то же состояние, и повторный запуск этой ветки — no-op.
+fn migrate_wt_enabled(file: &mut SettingsFile) {
+    if file.game_override == GameOverride::Auto && file.wt_enabled {
+        file.game_override = GameOverride::ForceWt;
+    }
 }
 
 /// Сохраняет набор профилей на диск.

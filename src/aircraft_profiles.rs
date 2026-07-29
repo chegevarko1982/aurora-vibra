@@ -141,6 +141,7 @@ pub fn save_active(
         }
         None => ap.default = default_cfg,
     }
+    let game_override = settings::game_override();
     settings::save(&settings::SettingsFile {
         default: ap.default.clone(),
         profiles: ap.profiles.clone(),
@@ -148,7 +149,11 @@ pub fn save_active(
         close_to_tray: settings::close_to_tray(),
         simconnect_dll_path: settings::simconnect_dll_path(),
         monitor_collapsed: settings::monitor_collapsed(),
-        wt_enabled: settings::wt_enabled(),
+        // wt_enabled — производное от game_override, см. комментарий у поля
+        // в SettingsFile (settings.rs): единственный источник истины теперь
+        // game_override, wt_enabled существует только для миграции старых файлов.
+        wt_enabled: game_override == crate::types::GameOverride::ForceWt,
+        game_override,
     })
 }
 

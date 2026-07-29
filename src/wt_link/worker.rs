@@ -1,12 +1,15 @@
 //! Фоновый поток War Thunder (этап 1): опрашивает `/state` + `/indicators`
 //! (localhost:8111, тот же `WtClient`, что и recon-инструмент, см.
 //! `super::http`), считает эффекты через `WtRumbleState::step` и шлёт
-//! `HidCmd` в тот же канал, что и `sim::sim_worker` — оба конвейера
-//! взаимоисключающие (см. `crate::settings::wt_enabled`, гейт в
-//! `sim/worker.rs`), поэтому конкуренции за HID-канал нет.
+//! `HidCmd` в тот же канал, что и `sim::sim_worker`. Оба конвейера
+//! всегда опрашивают свою игру (никакого ручного флага-гейта), а
+//! взаимоисключающее владение HID-каналом/GUI арбитрируется через
+//! `crate::game_state::GameSlot` — липкое владение, первый заявивший игру
+//! владеет ей, пока сам её не отпустит (см. game_state.rs).
 //!
-//! Пока режим не включён — поток спит (без HTTP-запросов) и ничего не шлёт,
-//! точно так же, как MSFS-конвейер не шлёт HID, пока включён этот режим.
+//! Живость WT определяется через `Liveness` по результату опроса
+//! `/state`+`/indicators` — грейс-период переживает кратковременные провалы
+//! (например, долгий чёрный экран загрузки миссии), не отпуская слот сразу.
 
 use std::sync::{
     Arc,
@@ -19,19 +22,25 @@ use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
 use crate::aircraft_profiles::{self, AircraftProfiles};
+use crate::game_state::{GameSlot, Liveness};
 use crate::profiles::ProfileState;
 use crate::wt_link::ammo::AmmoTracker;
 use crate::wt_link::http::WtClient;
 use crate::wt_link::rumble::WtRumbleState;
 use crate::wt_link::vars::{self, WtVars};
-use crate::{ConfigShared, EffectsShared, HidCmd, LogBuffer, SimStatus};
+use crate::{ActiveGame, ConfigShared, EffectsShared, GameOverride, HidCmd, LogBuffer, SimStatus};
 
-/// Ритм опроса /state и /indicators — 20 Гц, как дефолт recon-инструмента
-/// (wt_probe/cli.rs) и как частота отправки HID в hid/worker.rs.
+/// Ритм опроса /state и /indicators, пока WT жив — 20 Гц, как дефолт
+/// recon-инструмента (wt_probe/cli.rs) и как частота отправки HID в
+/// hid/worker.rs.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
-/// Тик "режим выключен" — редкий, никаких сетевых запросов не делает.
-const IDLE_INTERVAL: Duration = Duration::from_millis(250);
+/// Ритм опроса, пока WT ещё не отвечал (или перестал отвечать) — реже, чтобы
+/// не долбить localhost:8111 20 раз в секунду, когда игра не запущена.
+const PROBE_INTERVAL: Duration = Duration::from_millis(1000);
 const HTTP_TIMEOUT: Duration = Duration::from_millis(200);
+/// Тот же грейс-период, что у MSFS-вотчдога (sim/worker.rs) — для
+/// консистентности дебаунса между двумя конвейерами.
+const GRACE_PERIOD: Duration = Duration::from_millis(2500);
 
 #[allow(clippy::too_many_arguments)]
 pub fn wt_worker(
@@ -45,46 +54,22 @@ pub fn wt_worker(
     aircraft_title: Arc<Mutex<String>>,
     aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
     profile_state: Arc<Mutex<ProfileState>>,
+    game: GameSlot,
 ) {
-    logs.push("WT: worker started");
+    logs.push("WT: worker started, polling localhost:8111");
 
     let session_start = Instant::now();
     let mut engine = WtRumbleState::new();
     let mut ammo = AmmoTracker::new();
     let mut client: Option<WtClient> = None;
-    let mut was_enabled = false;
+    let mut liveness = Liveness::new(GRACE_PERIOD);
+    // Зануляем HID/эффекты ровно один раз на переходе владения true→false —
+    // не на каждом тике `!owns` (см. game_state.rs docstring): проигравший
+    // try_claim не шлёт нули каждый тик, чтобы не гоняться наперегонки с
+    // текущим владельцем за один и тот же tx_hid.
+    let mut was_owner = false;
 
     loop {
-        if !crate::settings::wt_enabled() {
-            if was_enabled {
-                logs.push("WT: mode disabled, clearing state");
-                *last_wt_vars.lock() = None;
-                *status.lock() = SimStatus::Disconnected;
-                effects.clear_all();
-                let _ = tx_hid.send(HidCmd::SendIntensity {
-                    joystick: 0,
-                    throttle_left: 0,
-                    throttle_right: 0,
-                });
-                engine.reset();
-                ammo.reset();
-                client = None;
-                was_enabled = false;
-                // Отдаём табличку с названием борта обратно MSFS-конвейеру —
-                // тот сам выставит её при следующем подключении SimConnect
-                // (см. sim/worker.rs), а до тех пор пусть будет пустой,
-                // а не залипший борт War Thunder.
-                *aircraft_title.lock() = String::new();
-            }
-            thread::sleep(IDLE_INTERVAL);
-            continue;
-        }
-
-        if !was_enabled {
-            logs.push("WT: mode enabled, starting to poll localhost:8111");
-            was_enabled = true;
-        }
-
         let c = match &client {
             Some(c) => c.clone(),
             None => match WtClient::new("127.0.0.1", 8111, HTTP_TIMEOUT) {
@@ -103,6 +88,40 @@ pub fn wt_worker(
         let t = session_start.elapsed().as_secs_f64();
         let state = c.state();
         let indicators = c.indicators();
+        let ok = state.is_ok() && indicators.is_ok();
+
+        // Форс-оверрайд встроен в тот же арбитраж, не отдельная ветка: если
+        // пользователь прижал MSFS, WT ведёт себя как "не жив" независимо от
+        // реальной живости — release, не try_claim.
+        let vetoed = crate::settings::game_override() == GameOverride::ForceMsfs;
+        let alive = liveness.observe(ok, Instant::now());
+        let owns = if alive && !vetoed {
+            game.try_claim(ActiveGame::Wt)
+        } else {
+            game.release_if_owned(ActiveGame::Wt);
+            false
+        };
+
+        if was_owner && !owns {
+            logs.push("WT: lost connection, releasing slot");
+            *last_wt_vars.lock() = None;
+            effects.clear_all();
+            let _ = tx_hid.send(HidCmd::SendIntensity {
+                joystick: 0,
+                throttle_left: 0,
+                throttle_right: 0,
+            });
+            engine.reset();
+            ammo.reset();
+            // Отдаём табличку с названием борта обратно MSFS-конвейеру — тот
+            // сам выставит её при следующем подключении SimConnect (см.
+            // sim/worker.rs), а до тех пор пусть будет пустой, а не залипший
+            // борт War Thunder.
+            *aircraft_title.lock() = String::new();
+        } else if owns && !was_owner {
+            logs.push("WT: connection alive, claimed slot");
+        }
+        was_owner = owns;
 
         match (state, indicators) {
             (Ok(state_v), Ok(indicators_v)) => {
@@ -123,55 +142,60 @@ pub fn wt_worker(
                     wt_vars.weapon1_ammo = ammo.weapon1_ammo(&indicators_v);
                     wt_vars.weapon2_ammo = ammo.weapon2_ammo(&indicators_v);
                 }
-                *status.lock() = if wt_vars.in_mission {
-                    SimStatus::InFlight
-                } else {
-                    SimStatus::Connected
-                };
 
-                // Показываем технику War Thunder в том же месте верхней
-                // панели, где MSFS-конвейер показывает aircraft_title (см.
-                // ui.rs) — переиспользуем то же поле и ту же систему
-                // именных профилей (aircraft_profiles::apply_for_aircraft),
-                // а не заводим отдельный WT-only виджет.
-                if wt_vars.in_mission && !wt_vars.vehicle_type.is_empty() {
-                    let changed = *aircraft_title.lock() != wt_vars.vehicle_type;
-                    if changed {
-                        *aircraft_title.lock() = wt_vars.vehicle_type.clone();
-                        aircraft_profiles::apply_for_aircraft(
-                            &mut aircraft_profiles.lock(),
-                            &config,
-                            &mut profile_state.lock(),
-                            &wt_vars.vehicle_type,
-                            &logs,
-                        );
+                if owns {
+                    *status.lock() = if wt_vars.in_mission {
+                        SimStatus::InFlight
+                    } else {
+                        SimStatus::Connected
+                    };
+
+                    // Показываем технику War Thunder в том же месте верхней
+                    // панели, где MSFS-конвейер показывает aircraft_title (см.
+                    // ui.rs) — переиспользуем то же поле и ту же систему
+                    // именных профилей (aircraft_profiles::apply_for_aircraft),
+                    // а не заводим отдельный WT-only виджет.
+                    if wt_vars.in_mission && !wt_vars.vehicle_type.is_empty() {
+                        let changed = *aircraft_title.lock() != wt_vars.vehicle_type;
+                        if changed {
+                            *aircraft_title.lock() = wt_vars.vehicle_type.clone();
+                            aircraft_profiles::apply_for_aircraft(
+                                &mut aircraft_profiles.lock(),
+                                &config,
+                                &mut profile_state.lock(),
+                                &wt_vars.vehicle_type,
+                                &logs,
+                            );
+                        }
                     }
-                }
 
-                let cfg_now = config.get().wt;
-                let out = engine.step(&wt_vars, &cfg_now, hold.load(Ordering::Relaxed));
-                *last_wt_vars.lock() = Some(wt_vars);
-                effects.apply_snapshot(&out.effects);
-                let _ = tx_hid.send(HidCmd::SendIntensity {
-                    joystick: out.joystick_intensity,
-                    throttle_left: out.throttle_left_intensity,
-                    throttle_right: out.throttle_right_intensity,
-                });
+                    let cfg_now = config.get().wt;
+                    let out = engine.step(&wt_vars, &cfg_now, hold.load(Ordering::Relaxed));
+                    *last_wt_vars.lock() = Some(wt_vars);
+                    effects.apply_snapshot(&out.effects);
+                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                        joystick: out.joystick_intensity,
+                        throttle_left: out.throttle_left_intensity,
+                        throttle_right: out.throttle_right_intensity,
+                    });
+                }
             }
             _ => {
                 // Игра не запущена / порт закрыт — то же самое молчание, что
                 // и recon-инструмент показывает как ConnStatus::Disconnected.
-                *status.lock() = SimStatus::Disconnected;
-                *last_wt_vars.lock() = None;
-                effects.clear_all();
-                let _ = tx_hid.send(HidCmd::SendIntensity {
-                    joystick: 0,
-                    throttle_left: 0,
-                    throttle_right: 0,
-                });
+                if owns {
+                    *status.lock() = SimStatus::Disconnected;
+                    *last_wt_vars.lock() = None;
+                    effects.clear_all();
+                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                        joystick: 0,
+                        throttle_left: 0,
+                        throttle_right: 0,
+                    });
+                }
             }
         }
 
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(if alive { POLL_INTERVAL } else { PROBE_INTERVAL });
     }
 }

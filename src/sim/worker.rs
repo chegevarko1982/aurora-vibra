@@ -12,9 +12,10 @@ use libloading::Library;
 use parking_lot::Mutex;
 
 use crate::RumbleEngine;
+use crate::game_state::GameSlot;
 use crate::sim::elem_idx::ElemIdx;
 use crate::sim::parse::{flight_status, parse_main_elems};
-use crate::{ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
+use crate::{ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
 // Имя намеренно совпадает с типом из Win32 SDK — так подписи FFI ниже читаются
@@ -341,6 +342,7 @@ pub fn sim_worker(
     aircraft_title: Arc<Mutex<String>>,
     aircraft_profiles: Arc<Mutex<crate::aircraft_profiles::AircraftProfiles>>,
     profile_state: Arc<Mutex<crate::profiles::ProfileState>>,
+    game: GameSlot,
 ) {
     logs.push("SimConnect: worker started");
 
@@ -375,8 +377,24 @@ pub fn sim_worker(
                 thread::sleep(Duration::from_millis(1000));
                 continue;
             }
-            *status.lock() = SimStatus::Connected;
-            *aircraft_title.lock() = String::new();
+
+            // MSFS считается живой с самого момента успешного Open() (не по
+            // отдельному вотчдогу) — заявляем слот сразу же. Если WT уже
+            // владеет им (липкое владение) или ForceWt-оверрайд запрещает
+            // MSFS — claim не проходит, и ниже мы просто не пишем
+            // status/aircraft_title/телеметрию/HID, пока слот не освободится
+            // (повторные попытки — на каждой итерации внутреннего цикла).
+            let mut owns_slot = if crate::settings::game_override() == crate::GameOverride::ForceWt
+            {
+                game.release_if_owned(ActiveGame::Msfs);
+                false
+            } else {
+                game.try_claim(ActiveGame::Msfs)
+            };
+            if owns_slot {
+                *status.lock() = SimStatus::Connected;
+                *aircraft_title.lock() = String::new();
+            }
 
             let mut in_flight: bool = true;
             let mut rumble_engine = RumbleEngine::new();
@@ -699,18 +717,42 @@ pub fn sim_worker(
                             }
 
                             if sod.dw_request_id == REQ_MAIN {
+                                // Слот мог быть занят WT в момент Open() —
+                                // пробуем повторно на каждом полученном пакете
+                                // телеметрии, чтобы подхватить его, как только
+                                // WT сам его освободит, без переоткрытия
+                                // SimConnect-соединения.
+                                if !owns_slot {
+                                    owns_slot = if crate::settings::game_override()
+                                        == crate::GameOverride::ForceWt
+                                    {
+                                        false
+                                    } else {
+                                        game.try_claim(ActiveGame::Msfs)
+                                    };
+                                    if owns_slot {
+                                        logs.push(
+                                            "SimConnect: claimed game slot".to_string(),
+                                        );
+                                        *status.lock() = SimStatus::Connected;
+                                        *aircraft_title.lock() = String::new();
+                                    }
+                                }
+
                                 main_seen = true;
                                 last_main_rx = Instant::now();
 
                                 if !in_flight {
-                                    *status.lock() = SimStatus::Connected;
-                                    *last_vars.lock() = None;
-                                    let _ = tx_hid.send(HidCmd::SendIntensity {
-                                        joystick: 0,
-                                        throttle_left: 0,
-                                        throttle_right: 0,
-                                    });
-                                    effects.clear_all();
+                                    if owns_slot {
+                                        *status.lock() = SimStatus::Connected;
+                                        *last_vars.lock() = None;
+                                        let _ = tx_hid.send(HidCmd::SendIntensity {
+                                            joystick: 0,
+                                            throttle_left: 0,
+                                            throttle_right: 0,
+                                        });
+                                        effects.clear_all();
+                                    }
                                     continue;
                                 }
 
@@ -762,15 +804,18 @@ pub fn sim_worker(
                                     &title_snapshot,
                                 );
 
-                                *last_vars.lock() = Some(fv);
-                                *status.lock() = flight_status(&fv);
+                                if owns_slot {
+                                    *last_vars.lock() = Some(fv);
+                                    *status.lock() = flight_status(&fv);
+                                }
 
-                                // War Thunder mode (settings::wt_enabled) owns the HID
-                                // channel exclusively while active — see wt_link::worker.
-                                // The two pipelines are mutually exclusive, so the MSFS
-                                // rumble engine is skipped here and the motors are kept
-                                // at zero instead of freezing at their last value.
-                                if crate::settings::wt_enabled() {
+                                // War Thunder может владеть слотом одновременно
+                                // с тем, что MSFS открыт (см. game_state::GameSlot) —
+                                // оба конвейера взаимоисключающие по HID-каналу, так
+                                // что MSFS rumble-движок пропускается, пока слот не
+                                // наш, а моторы держатся на нуле вместо зависания на
+                                // последнем значении.
+                                if !owns_slot {
                                     effects.clear_all();
                                     let _ = tx_hid.send(HidCmd::SendIntensity {
                                         joystick: 0,
@@ -912,14 +957,17 @@ pub fn sim_worker(
             }
 
             let _ = (fns.close)(h_sc);
-            *status.lock() = SimStatus::Disconnected;
-            *aircraft_title.lock() = String::new();
-            *last_vars.lock() = None;
-            let _ = tx_hid.send(HidCmd::SendIntensity {
-                joystick: 0,
-                throttle_left: 0,
-                throttle_right: 0,
-            });
+            if owns_slot {
+                *status.lock() = SimStatus::Disconnected;
+                *aircraft_title.lock() = String::new();
+                *last_vars.lock() = None;
+                let _ = tx_hid.send(HidCmd::SendIntensity {
+                    joystick: 0,
+                    throttle_left: 0,
+                    throttle_right: 0,
+                });
+                game.release_if_owned(ActiveGame::Msfs);
+            }
             thread::sleep(Duration::from_millis(600));
         }
     }
