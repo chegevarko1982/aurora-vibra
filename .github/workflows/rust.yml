@@ -161,6 +161,20 @@ jobs:
           name: windows-x64
           path: dist
 
+      # Тег вида v4.2.0-rc1/-beta1 (наличие "-" после чисел, стандартный
+      # semver pre-release) — такие сборки публикуются как GitHub prerelease
+      # и НЕ становятся /releases/latest, иначе auto-updater (updater.rs,
+      # LATEST_API бьёт именно в /releases/latest) тут же раздал бы RC всем
+      # пользователям как стабильный релиз.
+      - name: Detect pre-release tag
+        id: prerelease
+        run: |
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # 1) Create or update a DRAFT release and upload assets
       - name: Create Draft Release & Upload Assets
         uses: softprops/action-gh-release@v2
@@ -170,21 +184,28 @@ jobs:
           # Заметки собраны в джобе build из секции CHANGELOG.md под этот тег.
           body_path: dist/RELEASE_NOTES.md
           draft: true                 # <-- important: draft first
-          prerelease: false
+          prerelease: ${{ steps.prerelease.outputs.value }}
           generate_release_notes: false
           fail_on_unmatched_files: true
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt
 
-      # 2) Publish the draft so it becomes visible/latest
+      # 2) Publish the draft so it becomes visible. --latest только для
+      # обычных релизов — pre-release не должен становиться /releases/latest
+      # (см. комментарий у Detect pre-release tag выше).
       - name: Publish Draft Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ steps.prerelease.outputs.value }}
         run: |
           set -euo pipefail
           # Ensure the draft exists, then publish it
           gh release view "$TAG" --repo "$REPO" >/dev/null
-          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            gh release edit "$TAG" --repo "$REPO" --draft=false
+          else
+            gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          fi
