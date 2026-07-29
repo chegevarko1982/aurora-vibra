@@ -765,18 +765,32 @@ pub fn sim_worker(
                                 *last_vars.lock() = Some(fv);
                                 *status.lock() = flight_status(&fv);
 
-                                let out = rumble_engine.step(
-                                    &fv,
-                                    &cfg_now,
-                                    config.current_rev(),
-                                    hold.load(Ordering::Relaxed),
-                                );
-                                effects.apply_snapshot(&out.effects);
-                                let _ = tx_hid.send(HidCmd::SendIntensity {
-                                    joystick: out.joystick_intensity,
-                                    throttle_left: out.throttle_left_intensity,
-                                    throttle_right: out.throttle_right_intensity,
-                                });
+                                // War Thunder mode (settings::wt_enabled) owns the HID
+                                // channel exclusively while active — see wt_link::worker.
+                                // The two pipelines are mutually exclusive, so the MSFS
+                                // rumble engine is skipped here and the motors are kept
+                                // at zero instead of freezing at their last value.
+                                if crate::settings::wt_enabled() {
+                                    effects.clear_all();
+                                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                                        joystick: 0,
+                                        throttle_left: 0,
+                                        throttle_right: 0,
+                                    });
+                                } else {
+                                    let out = rumble_engine.step(
+                                        &fv,
+                                        &cfg_now,
+                                        config.current_rev(),
+                                        hold.load(Ordering::Relaxed),
+                                    );
+                                    effects.apply_snapshot(&out.effects);
+                                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                                        joystick: out.joystick_intensity,
+                                        throttle_left: out.throttle_left_intensity,
+                                        throttle_right: out.throttle_right_intensity,
+                                    });
+                                }
                             }
                         }
                         SIMCONNECT_RECV_ID_SYSTEM_STATE => {

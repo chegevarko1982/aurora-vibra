@@ -21,6 +21,7 @@ use crate::{
     i18n::{self, Lang, Strings},
     profiles::ProfileState,
     tray, updater,
+    wt_link::vars::WtVars,
 };
 
 /// Цветовая палитра карточек эффектов и Live Monitor. Раньше цвета были
@@ -89,6 +90,11 @@ pub enum Section {
     Engines,
     Gear,
     Telemetry,
+    // War Thunder (этап 1) — единственная секция эффектов, показывается вместо
+    // Rumble/Taxi/Engines/Gear, пока settings::wt_enabled() включён (см.
+    // nav_panel и dispatch ниже). Telemetry остаётся общей секцией для обоих
+    // режимов, но её содержимое переключается на WT-поля.
+    Wt,
 }
 
 /// Placeholder device glyph kind — see `UiState::device_icon_button`.
@@ -221,6 +227,7 @@ pub struct UiState {
     pub tx_hid: Sender<HidCmd>,
     pub logs: LogBuffer,
     pub last_vars: Arc<Mutex<Option<FlightVars>>>,
+    pub last_wt_vars: Arc<Mutex<Option<WtVars>>>,
 
     pub autoscroll: bool,
     pub last_log_count: usize,
@@ -867,6 +874,15 @@ impl eframe::App for UiState {
                                 .on_hover_text(t.hover_wt_enabled)
                                 .changed()
                             {
+                                // Секции эффектов MSFS и War Thunder не пересекаются
+                                // (см. Section::Wt) — при переключении режима сразу
+                                // переводим активную секцию, чтобы не остаться на
+                                // скрытой вкладке другого режима.
+                                self.active_section = if self.wt_enabled {
+                                    Section::Wt
+                                } else {
+                                    Section::Rumble
+                                };
                                 self.save_global_settings();
                             }
                             ui.separator();
@@ -923,7 +939,40 @@ impl eframe::App for UiState {
             // None — для triggered-по-порогу эффектов без единого "уровня"
             // (Gear Transit). Используется компактным Live Monitor, чтобы
             // показывать не только "включён/активен", но и реальное число.
-            let rows: [(&str, bool, bool, Option<f32>); 11] = [
+            //
+            // War Thunder (wt_enabled): список полностью заменяется на 4
+            // эффекта этого режима — MSFS-эффекты в этот момент не считаются
+            // (см. гейт в sim/worker.rs), показывать их в Live Monitor было бы
+            // вводящим в заблуждение.
+            let rows: Vec<(&str, bool, bool, Option<f32>)> = if self.wt_enabled {
+                vec![
+                    (
+                        t.name_wt_weapon1,
+                        mon.wt.weapon1_enabled,
+                        self.effects.wt_weapon1_active.load(Ordering::Relaxed),
+                        None,
+                    ),
+                    (
+                        t.name_wt_weapon2,
+                        mon.wt.weapon2_enabled,
+                        self.effects.wt_weapon2_active.load(Ordering::Relaxed),
+                        None,
+                    ),
+                    (
+                        t.name_flaps,
+                        mon.wt.flaps_enabled,
+                        self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                        Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                    ),
+                    (
+                        t.lbl_gear_transit,
+                        mon.wt.gear_transit_enabled,
+                        self.effects.gear_transit_active.load(Ordering::Relaxed),
+                        None,
+                    ),
+                ]
+            } else {
+                vec![
                 (
                     t.overspeed_effect_name,
                     mon.overspeed_enabled,
@@ -991,7 +1040,8 @@ impl eframe::App for UiState {
                     self.effects.gear_transit_active.load(Ordering::Relaxed),
                     None,
                 ),
-            ];
+                ]
+            };
             let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
             egui::Panel::left("nav_panel")
                 .resizable(false)
@@ -1007,17 +1057,23 @@ impl eframe::App for UiState {
                         ui.add(egui::Button::selectable(selected, label).wrap())
                             .clicked()
                     };
-                    if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
-                        self.active_section = Section::Rumble;
-                    }
-                    if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
-                        self.active_section = Section::Taxi;
-                    }
-                    if nav_item(ui, self.active_section == Section::Engines, t.nav_engines) {
-                        self.active_section = Section::Engines;
-                    }
-                    if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
-                        self.active_section = Section::Gear;
+                    if self.wt_enabled {
+                        if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
+                            self.active_section = Section::Wt;
+                        }
+                    } else {
+                        if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
+                            self.active_section = Section::Rumble;
+                        }
+                        if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
+                            self.active_section = Section::Taxi;
+                        }
+                        if nav_item(ui, self.active_section == Section::Engines, t.nav_engines) {
+                            self.active_section = Section::Engines;
+                        }
+                        if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
+                            self.active_section = Section::Gear;
+                        }
                     }
                     ui.separator();
                     if ui
@@ -1986,6 +2042,140 @@ impl eframe::App for UiState {
                                     });
                                 }
 
+                                Section::Wt => {
+                                    ui.heading(t.nav_wt);
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
+                                        // Weapon1 — маршрутизация зафиксирована (только
+                                        // джойстик), поэтому здесь нет ни слайдера силы,
+                                        // ни переключателя устройства (см. wt_link::rumble).
+                                        {
+                                            let mut enabled = cfg.wt.weapon1_enabled;
+                                            let active = self
+                                                .effects
+                                                .wt_weapon1_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, enabled, active, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    if ui.checkbox(&mut enabled, "").changed() {
+                                                        _changed = true;
+                                                    }
+                                                    ui.label(
+                                                        RichText::new(t.name_wt_weapon1).strong(),
+                                                    )
+                                                    .on_hover_text(t.hover_wt_weapon1);
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            effect_status_badge(
+                                                                ui, enabled, active, t,
+                                                            );
+                                                        },
+                                                    );
+                                                });
+                                            });
+                                            cfg.wt.weapon1_enabled = enabled;
+                                        }
+
+                                        // Weapon2 — маршрутизация зафиксирована (только
+                                        // РУД, оба мотора).
+                                        {
+                                            let mut enabled = cfg.wt.weapon2_enabled;
+                                            let active = self
+                                                .effects
+                                                .wt_weapon2_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(col, enabled, active, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    if ui.checkbox(&mut enabled, "").changed() {
+                                                        _changed = true;
+                                                    }
+                                                    ui.label(
+                                                        RichText::new(t.name_wt_weapon2).strong(),
+                                                    )
+                                                    .on_hover_text(t.hover_wt_weapon2);
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            effect_status_badge(
+                                                                ui, enabled, active, t,
+                                                            );
+                                                        },
+                                                    );
+                                                });
+                                            });
+                                            cfg.wt.weapon2_enabled = enabled;
+                                        }
+
+                                        // Flaps
+                                        {
+                                            let mut flaps_enabled = cfg.wt.flaps_enabled;
+                                            let active = self
+                                                .effects
+                                                .flaps_bump_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(
+                                                col,
+                                                flaps_enabled,
+                                                active,
+                                                |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_flaps,
+                                                        &mut cfg.wt.flaps_peak,
+                                                        255.0,
+                                                        &mut flaps_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(t.hover_wt_flaps),
+                                                        &mut cfg.wt.device_targets.flaps,
+                                                        t,
+                                                    );
+                                                },
+                                            );
+                                            cfg.wt.flaps_enabled = flaps_enabled;
+                                        }
+
+                                        // Gear Transit & Doors
+                                        {
+                                            let mut gear_transit_enabled =
+                                                cfg.wt.gear_transit_enabled;
+                                            let active = self
+                                                .effects
+                                                .gear_transit_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(
+                                                col,
+                                                gear_transit_enabled,
+                                                active,
+                                                |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.lbl_gear_transit,
+                                                        &mut cfg.wt.gear_peak,
+                                                        255.0,
+                                                        &mut gear_transit_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(t.hover_wt_gear_transit),
+                                                        &mut cfg.wt.device_targets.gear_transit,
+                                                        t,
+                                                    );
+                                                },
+                                            );
+                                            cfg.wt.gear_transit_enabled = gear_transit_enabled;
+                                        }
+                                    });
+                                }
+
                                 Section::Telemetry => {}
                             }
 
@@ -2004,7 +2194,48 @@ impl eframe::App for UiState {
                         ui.add_space(8.0);
                         ui.separator();
 
-                        if self.active_section == Section::Telemetry {
+                        if self.active_section == Section::Telemetry && self.wt_enabled {
+                            ui.heading(t.heading_wt_telemetry);
+                            egui::Grid::new("wt_telemetry")
+                                .num_columns(2)
+                                .spacing(Vec2::new(20.0, 4.0))
+                                .show(ui, |ui| {
+                                    let v = *self.last_wt_vars.lock();
+                                    match v {
+                                        Some(v) => {
+                                            let status_text = if !v.in_mission {
+                                                t.wt_status_menu
+                                            } else {
+                                                t.wt_status_in_battle
+                                            };
+                                            ui.label(t.nav_wt);
+                                            ui.label(status_text);
+                                            ui.end_row();
+
+                                            ui.label(t.name_wt_weapon1);
+                                            ui.label(v.weapon1_firing.to_string());
+                                            ui.end_row();
+
+                                            ui.label(t.name_wt_weapon2);
+                                            ui.label(v.weapon2_firing.to_string());
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_flaps_pct);
+                                            ui.label(format!("{:.0}", v.flaps_pct));
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_gear_pct);
+                                            ui.label(format!("{:.0}", v.gear_pct));
+                                            ui.end_row();
+                                        }
+                                        None => {
+                                            ui.label(t.nav_wt);
+                                            ui.label(t.wt_status_disconnected);
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                        } else if self.active_section == Section::Telemetry {
                             ui.columns(2, |columns| {
                                 // --- Левая колонка: общая телеметрия борта ---
                                 let ui = &mut columns[0];

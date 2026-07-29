@@ -167,6 +167,107 @@ pub struct EffectDeviceTargets {
     pub gear_transit: EffectDeviceTarget,   // Движение стоек + удар дверей на замке
 }
 
+/// Привязка к устройствам для Flaps/Gear Transit & Doors (War Thunder, этап
+/// 1). Weapon1/Weapon2 НЕ входят сюда — их маршрутизация зафиксирована в коде
+/// (`wt_link::rumble`), не настраивается пользователем: weapon1 → только
+/// джойстик, weapon2 → только РУД (оба мотора сразу). Это подтверждено живым
+/// подбором на железе (см. scratchpad-заметки сессии подбора пресетов
+/// стрельбы) — разведение по рукам это и есть смысл эффекта (два разных
+/// орудия должны ощущаться в разных руках), а не предпочтение пользователя,
+/// поэтому чекбоксы тут были бы просто источником путаницы.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WtDeviceTargets {
+    pub flaps: EffectDeviceTarget,
+    pub gear_transit: EffectDeviceTarget,
+}
+
+/// Параметры генератора "гул с текстурой" для одной группы оружия — перенесены
+/// 1:1 из `src/bin/test_gun1.rs` (программный ШИМ на несущей частоте + джиттер
+/// амплитуды за цикл + attack-рампа на передний фронт очереди). Значения по
+/// умолчанию для weapon1/weapon2 — РАЗНЫЕ (см. `WtConfig::default`), подобраны
+/// и подтверждены на живом железе.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GunPreset {
+    pub carrier_freq_hz: f32,
+    pub duty_pct: f32,
+    pub jitter_pct: f32,
+    pub peak: f32,
+    pub floor: f32,
+    pub attack_ms: f32,
+}
+
+impl Default for GunPreset {
+    fn default() -> Self {
+        // Дефолт структуры (используется, только если поле когда-либо
+        // возникнет без явной инициализации) — берём консервативный
+        // weapon1-пресет с пониженной несущей, см. WtConfig::default.
+        Self {
+            carrier_freq_hz: 6.5,
+            duty_pct: 33.0,
+            jitter_pct: 12.0,
+            peak: 255.0,
+            floor: 35.0,
+            attack_ms: 41.0,
+        }
+    }
+}
+
+/// Настройки этапа 1 поддержки War Thunder (см. план): Weapon1/Weapon2
+/// (стрельба), Flaps, Gear Transit & Doors.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WtConfig {
+    pub weapon1_enabled: bool,
+    pub weapon2_enabled: bool,
+    pub weapon1_gun: GunPreset,
+    pub weapon2_gun: GunPreset,
+    pub flaps_enabled: bool,
+    pub flaps_peak: f32,
+    pub gear_transit_enabled: bool,
+    pub gear_peak: f32,
+    pub device_targets: WtDeviceTargets,
+}
+
+impl Default for WtConfig {
+    fn default() -> Self {
+        Self {
+            weapon1_enabled: true,
+            weapon2_enabled: true,
+            // weapon1 — быстрый ствол (текстура пулемёта). Несущая ПОНИЖЕНА
+            // с подобранных на железе 12.5 Гц до 6.5 Гц: 12.5 Гц даёт пик
+            // короче интервала отправки HID (20 Гц/50мс в hid_worker) —
+            // алиасинг через штатный канал. Остальные параметры — как
+            // подобрано вживую (duty/jitter/floor/attack).
+            weapon1_gun: GunPreset {
+                carrier_freq_hz: 6.5,
+                duty_pct: 33.0,
+                jitter_pct: 12.0,
+                peak: 255.0,
+                floor: 35.0,
+                attack_ms: 41.0,
+            },
+            // weapon2 — медленный ствол (текстура авиапушки). 4.3 Гц уже
+            // безопасно проходит через штатный 20 Гц HID-канал без изменений
+            // (период 232.6мс, пик 93мс — с запасом выше порога).
+            weapon2_gun: GunPreset {
+                carrier_freq_hz: 4.3,
+                duty_pct: 40.0,
+                jitter_pct: 3.0,
+                peak: 255.0,
+                floor: 100.0,
+                attack_ms: 22.0,
+            },
+            flaps_enabled: true,
+            flaps_peak: 153.0, // тот же дефолт, что и MSFS flaps_peak
+            gear_transit_enabled: true,
+            gear_peak: 110.0,
+            device_targets: WtDeviceTargets::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RumbleConfig {
@@ -325,6 +426,11 @@ pub struct RumbleConfig {
     // канал (settings.json) — по умолчанию (и для старых settings.json без
     // этого поля, см. #[serde(default)] на структуре) секция развёрнута.
     pub telemetry_expanded: bool,
+
+    // Настройки этапа 1 поддержки War Thunder (см. settings::wt_enabled —
+    // включение самого режима лежит там, не здесь, т.к. это глобальный
+    // переключатель, а не параметр эффекта, привязанный к профилю борта).
+    pub wt: WtConfig,
 }
 
 impl Default for RumbleConfig {
@@ -399,6 +505,8 @@ impl Default for RumbleConfig {
             device_targets: EffectDeviceTargets::default(),
 
             telemetry_expanded: false,
+
+            wt: WtConfig::default(),
         }
     }
 }
@@ -426,6 +534,13 @@ pub struct EffectsSnapshot {
 
     // Engine Spool-up & Ignition status
     pub engine_start_active: bool,
+
+    // War Thunder (этап 1): flaps_bump_active/gear_transit_active выше уже
+    // generic (не завязаны в имени на MSFS) и переиспользуются как есть для
+    // Flaps/Gear Transit & Doors в режиме WT. Weapon1/Weapon2 — новые, своего
+    // аналога в MSFS-наборе effects нет.
+    pub wt_weapon1_active: bool,
+    pub wt_weapon2_active: bool,
 }
 
 #[derive(Debug)]
@@ -517,6 +632,9 @@ pub struct EffectsState {
     pub gear_transit_active: AtomicBool,
 
     pub engine_start_active: AtomicBool,
+
+    pub wt_weapon1_active: AtomicBool,
+    pub wt_weapon2_active: AtomicBool,
 }
 
 pub type EffectsShared = Arc<EffectsState>;
@@ -555,6 +673,11 @@ impl EffectsState {
 
         self.engine_start_active
             .store(snap.engine_start_active, Ordering::Relaxed);
+
+        self.wt_weapon1_active
+            .store(snap.wt_weapon1_active, Ordering::Relaxed);
+        self.wt_weapon2_active
+            .store(snap.wt_weapon2_active, Ordering::Relaxed);
     }
 
     pub fn clear_all(&self) {

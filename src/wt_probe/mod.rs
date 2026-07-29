@@ -7,7 +7,11 @@
 pub mod cli;
 pub mod dashboard;
 pub mod hits;
-pub mod http;
+// http.rs перенесён в crate::wt_link::http — общий и для recon-инструмента
+// (эта фича), и для продового wt_link::worker (feature "app"). Реэкспорт
+// сохраняет прежний путь `wt_probe::http::...`, которым пользуются
+// poller.rs/replay.rs/wt_probe_gui, не дублируя код.
+pub use crate::wt_link::http;
 pub mod interesting;
 pub mod model;
 pub mod poller;

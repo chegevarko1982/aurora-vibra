@@ -229,6 +229,21 @@ pub struct Strings {
     pub btn_set_n2_idle: &'static str,
     pub hover_set_n2_idle: &'static str,
     pub log_n2_idle_set: &'static str,
+
+    // --- War Thunder (этап 1) ---
+    pub nav_wt: &'static str,
+    pub wt_status_disconnected: &'static str,
+    pub wt_status_menu: &'static str,
+    pub wt_status_in_battle: &'static str,
+    pub name_wt_weapon1: &'static str,
+    pub name_wt_weapon2: &'static str,
+    pub hover_wt_weapon1: &'static str,
+    pub hover_wt_weapon2: &'static str,
+    pub hover_wt_flaps: &'static str,
+    pub hover_wt_gear_transit: &'static str,
+    pub heading_wt_telemetry: &'static str,
+    pub lbl_wt_flaps_pct: &'static str,
+    pub lbl_wt_gear_pct: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -447,6 +462,20 @@ https://yoomoney.ru/to/410011348629282",
     btn_set_n2_idle: "(SET)",
     hover_set_n2_idle: "Set this value minus 1.5% as Engine Idle N2",
     log_n2_idle_set: "N2 Idle set to {val:.1}% (from Eng1 telemetry - 1.5%)",
+
+    nav_wt: "War Thunder",
+    wt_status_disconnected: "Disconnected",
+    wt_status_menu: "Hangar / Menu",
+    wt_status_in_battle: "In Battle",
+    name_wt_weapon1: "Weapon 1",
+    name_wt_weapon2: "Weapon 2",
+    hover_wt_weapon1: "First weapon group firing (machine guns) — routed to the joystick only, tuned as a fast-firing texture.",
+    hover_wt_weapon2: "Second weapon group firing (cannons) — routed to both throttle motors only, tuned as a slower, heavier texture. Routing is fixed for both groups (not user-configurable) so they stay distinguishable in different hands.",
+    hover_wt_flaps: "Flaps motor vibration while flaps position is changing.",
+    hover_wt_gear_transit: "Gear motor hum while retracting/extending, plus a lock bump when gear reaches fully up or fully down. War Thunder has no separate landing-gear-door telemetry, so this covers transit + lock only.",
+    heading_wt_telemetry: "War Thunder Telemetry",
+    lbl_wt_flaps_pct: "Flaps",
+    lbl_wt_gear_pct: "Gear",
 };
 
 pub const RU: Strings = Strings {
@@ -665,6 +694,20 @@ https://yoomoney.ru/to/410011348629282",
     btn_set_n2_idle: "(SET)",
     hover_set_n2_idle: "Записать текущее значение минус 1.5% в N2 Холостой%",
     log_n2_idle_set: "N2 Холостой задан: {val:.1}% (из телеметрии Eng1 - 1.5%)",
+
+    nav_wt: "War Thunder",
+    wt_status_disconnected: "Нет соединения",
+    wt_status_menu: "Ангар / Меню",
+    wt_status_in_battle: "В бою",
+    name_wt_weapon1: "Оружие 1",
+    name_wt_weapon2: "Оружие 2",
+    hover_wt_weapon1: "Стрельба первой группы оружия (пулемёты) — маршрутизация только на джойстик, настроена как быстрая текстура огня.",
+    hover_wt_weapon2: "Стрельба второй группы оружия (пушки) — маршрутизация только на РУД (оба мотора), настроена как более медленная и тяжёлая текстура. Маршрутизация обеих групп зафиксирована (не настраивается пользователем), чтобы группы оставались различимы в разных руках.",
+    hover_wt_flaps: "Вибрация моторчика закрылков во время изменения их положения.",
+    hover_wt_gear_transit: "Гул мотора шасси во время уборки/выпуска + удар фиксации, когда шасси приходит в крайнее убранное или выпущенное положение. В API War Thunder нет отдельной телеметрии по створкам шасси, поэтому эффект покрывает только движение + фиксацию.",
+    heading_wt_telemetry: "Телеметрия War Thunder",
+    lbl_wt_flaps_pct: "Закрылки",
+    lbl_wt_gear_pct: "Шасси",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {

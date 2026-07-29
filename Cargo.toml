@@ -51,6 +51,11 @@ path = "src/bin/test_gear.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "test_gun1"
+path = "src/bin/test_gun1.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "test_hold"
 path = "src/bin/test_hold.rs"
 required-features = ["dev-tools"]

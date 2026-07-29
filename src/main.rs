@@ -11,6 +11,7 @@ use aurora_vibra::{
     profiles::ProfileState,
     sim::sim_worker,
     ui::{Tab, UiState},
+    wt_link::{vars::WtVars, wt_worker},
 };
 
 use anyhow::Result;
@@ -62,6 +63,7 @@ fn main() -> Result<()> {
     let controller_connected = Arc::new(AtomicBool::new(false));
     let throttle_connected = Arc::new(AtomicBool::new(false));
     let last_vars = Arc::new(Mutex::new(None::<FlightVars>));
+    let last_wt_vars = Arc::new(Mutex::new(None::<WtVars>));
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
     let force_quit = Arc::new(AtomicBool::new(false));
@@ -139,6 +141,27 @@ fn main() -> Result<()> {
         });
     }
 
+    {
+        let last_wt_vars_c = last_wt_vars.clone();
+        let tx_hid_c = tx_hid.clone();
+        let logs = logs.clone();
+        let cfg = config.clone();
+        let effects_c = effects.clone();
+        let hold_c = hold.clone();
+        let status_c = status.clone();
+        thread::spawn(move || {
+            wt_worker(
+                last_wt_vars_c,
+                tx_hid_c,
+                logs,
+                cfg,
+                effects_c,
+                hold_c,
+                status_c,
+            )
+        });
+    }
+
     // Без явной иконки eframe подставляет свою иконку-заглушку ("e" на чёрном
     // фоне, см. eframe::native::epi_integration::load_default_egui_icon) поверх
     // иконки, зашитой в ресурсы .exe — поэтому грузим свою явно.
@@ -189,6 +212,7 @@ fn main() -> Result<()> {
         tx_hid: tx_hid.clone(),
         logs: logs.clone(),
         last_vars,
+        last_wt_vars,
 
         autoscroll: true,
         last_log_count: 0,
