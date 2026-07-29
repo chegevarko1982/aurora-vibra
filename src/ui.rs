@@ -171,17 +171,20 @@ fn status_badge(ui: &mut egui::Ui, status: &SimStatus, t: &Strings) {
     });
 }
 
-/// Иконка активной игры в верхней панели — рядом со status_badge. Молчит
-/// (ничего не рисует), пока ActiveGame::None, поэтому вызывающий код не
-/// оборачивает вызов условием отдельно.
+/// Текстовая метка активной игры в верхней панели — рядом со status_badge.
+/// Раньше рисовала иконку (assets/MSFS.png, assets/WT.png), заменено на
+/// простой текст по требованию пользователя. Молчит (ничего не рисует),
+/// пока ActiveGame::None, поэтому вызывающий код не оборачивает вызов
+/// условием отдельно. Названия брендов не переводятся (см. hover_game_msfs/
+/// hover_game_wt — уже одинаковы в обеих локалях), поэтому текст меток тоже
+/// захардкожен, а не заведён в i18n.
 fn game_badge(ui: &mut egui::Ui, game: ActiveGame, t: &Strings) {
-    let (source, hover): (egui::ImageSource, &str) = match game {
-        ActiveGame::Msfs => (egui::include_image!("../assets/MSFS.png"), t.hover_game_msfs),
-        ActiveGame::Wt => (egui::include_image!("../assets/WT.png"), t.hover_game_wt),
+    let (text, hover): (&str, &str) = match game {
+        ActiveGame::Msfs => ("MSFS", t.hover_game_msfs),
+        ActiveGame::Wt => ("WarThunder", t.hover_game_wt),
         ActiveGame::None => return,
     };
-    let image = egui::Image::new(source).fit_to_exact_size(egui::vec2(20.0, 20.0));
-    ui.add(image).on_hover_text(hover);
+    ui.label(RichText::new(text).strong()).on_hover_text(hover);
 }
 
 fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool, t: &Strings) {
