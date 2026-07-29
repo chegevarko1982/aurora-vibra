@@ -249,6 +249,8 @@ pub struct Strings {
     pub lbl_wt_ammo_unknown: &'static str,
     pub lbl_wt_vehicle_type: &'static str,
     pub lbl_wt_vehicle_type_unknown: &'static str,
+    pub lbl_wt_speed_kt: &'static str,
+    pub lbl_wt_altitude_ft: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -486,6 +488,8 @@ https://yoomoney.ru/to/410011348629282",
     lbl_wt_ammo_unknown: "— (no counter on this aircraft)",
     lbl_wt_vehicle_type: "Aircraft",
     lbl_wt_vehicle_type_unknown: "— (unknown)",
+    lbl_wt_speed_kt: "Speed (kt)",
+    lbl_wt_altitude_ft: "Altitude (ft)",
 };
 
 pub const RU: Strings = Strings {
@@ -723,6 +727,8 @@ https://yoomoney.ru/to/410011348629282",
     lbl_wt_ammo_unknown: "— (нет счётчика на этом борту)",
     lbl_wt_vehicle_type: "Самолёт",
     lbl_wt_vehicle_type_unknown: "— (не определён)",
+    lbl_wt_speed_kt: "Скорость (узлы)",
+    lbl_wt_altitude_ft: "Высота (футы)",
 };
 
 pub fn upd_body_up_to_date(lang: Lang, version: &str) -> String {

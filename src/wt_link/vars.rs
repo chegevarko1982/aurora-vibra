@@ -40,13 +40,23 @@ pub struct WtVars {
     /// строка, если поле отсутствует (борт без этой телеметрии/ещё не
     /// определилось после захода в бой).
     pub vehicle_type: String,
+    /// `/state`."IAS, km/h", переведено в узлы — для отображения в панели
+    /// телеметрии рядом с остальными полями, которые уже в узлах (см.
+    /// `FlightVars::airspeed_indicated` в MSFS-конвейере).
+    pub speed_kt: f64,
+    /// `/state`."H, m", переведено в футы — та же причина, что и для
+    /// `speed_kt` (единая единица измерения с MSFS-панелью).
+    pub altitude_ft: f64,
 }
+
+const KMH_TO_KT: f64 = 1.0 / 1.852;
+const M_TO_FT: f64 = 3.280_839_895_013_123;
 
 fn as_bool_flag(v: Option<&Value>) -> bool {
     v.and_then(Value::as_f64).unwrap_or(0.0) > 0.5
 }
 
-fn as_pct(v: Option<&Value>) -> f64 {
+fn as_f64(v: Option<&Value>) -> f64 {
     v.and_then(Value::as_f64).unwrap_or(0.0)
 }
 
@@ -60,8 +70,8 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
         in_mission: state.get("valid").and_then(Value::as_bool).unwrap_or(false),
         weapon1_firing: as_bool_flag(indicators.get("weapon1")),
         weapon2_firing: as_bool_flag(indicators.get("weapon2")),
-        flaps_pct: as_pct(state.get("flaps, %")),
-        gear_pct: as_pct(state.get("gear, %")),
+        flaps_pct: as_f64(state.get("flaps, %")),
+        gear_pct: as_f64(state.get("gear, %")),
         weapon1_ammo: None,
         weapon2_ammo: None,
         vehicle_type: indicators
@@ -69,6 +79,8 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        speed_kt: as_f64(state.get("IAS, km/h")) * KMH_TO_KT,
+        altitude_ft: as_f64(state.get("H, m")) * M_TO_FT,
     }
 }
 
@@ -88,6 +100,14 @@ mod tests {
         assert!(!vars.weapon2_firing);
         assert_eq!(vars.flaps_pct, 33.0);
         assert_eq!(vars.gear_pct, 100.0);
+    }
+
+    #[test]
+    fn converts_speed_and_altitude_units() {
+        let state = json!({"IAS, km/h": 370.4, "H, m": 1000.0});
+        let vars = parse(0.0, &state, &json!({}));
+        assert!((vars.speed_kt - 200.0).abs() < 0.01);
+        assert!((vars.altitude_ft - 3280.84).abs() < 0.01);
     }
 
     #[test]

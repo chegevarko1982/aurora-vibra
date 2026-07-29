@@ -349,6 +349,8 @@ mod tests {
             weapon1_ammo: None,
             weapon2_ammo: None,
             vehicle_type: String::new(),
+            speed_kt: 0.0,
+            altitude_ft: 0.0,
         }
     }
 

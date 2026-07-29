@@ -2220,6 +2220,14 @@ impl eframe::App for UiState {
                                             });
                                             ui.end_row();
 
+                                            ui.label(t.lbl_wt_speed_kt);
+                                            ui.label(format!("{:.0}", v.speed_kt));
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_altitude_ft);
+                                            ui.label(format!("{:.0}", v.altitude_ft));
+                                            ui.end_row();
+
                                             ui.label(t.name_wt_weapon1);
                                             ui.label(v.weapon1_firing.to_string());
                                             ui.end_row();
