@@ -181,6 +181,7 @@ pub struct WtDeviceTargets {
     pub flaps: EffectDeviceTarget,
     pub gear_transit: EffectDeviceTarget,
     pub stall: EffectDeviceTarget,
+    pub engine_start: EffectDeviceTarget,
 }
 
 /// Параметры генератора "гул с текстурой" для одной группы оружия — перенесены
@@ -233,6 +234,8 @@ pub struct WtConfig {
     pub gear_peak: f32,
     pub stall_enabled: bool,
     pub stall_ceiling: f32,
+    pub engine_start_enabled: bool,
+    pub engine_start_peak: f32,
     pub device_targets: WtDeviceTargets,
 }
 
@@ -271,6 +274,8 @@ impl Default for WtConfig {
             gear_peak: 110.0,
             stall_enabled: true,
             stall_ceiling: 80.0, // см. WT_STALL_CEILING_HARD_CAP в wt_link/rumble.rs
+            engine_start_enabled: true,
+            engine_start_peak: 200.0,
             device_targets: WtDeviceTargets::default(),
         }
     }

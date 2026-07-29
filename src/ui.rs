@@ -970,6 +970,18 @@ impl eframe::App for UiState {
                         self.effects.gear_transit_active.load(Ordering::Relaxed),
                         None,
                     ),
+                    (
+                        t.name_wt_stall,
+                        mon.wt.stall_enabled,
+                        self.effects.stall_active.load(Ordering::Relaxed),
+                        Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                    ),
+                    (
+                        t.name_wt_engine_start,
+                        mon.wt.engine_start_enabled,
+                        self.effects.engine_start_active.load(Ordering::Relaxed),
+                        Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                    ),
                 ]
             } else {
                 vec![
@@ -2202,6 +2214,38 @@ impl eframe::App for UiState {
                                             );
                                             cfg.wt.gear_transit_enabled = gear_transit_enabled;
                                         }
+
+                                        // Engine Start/Stop — моно (без раскладки по
+                                        // двигателям/сторонам), см. hover.
+                                        {
+                                            let mut engine_start_enabled =
+                                                cfg.wt.engine_start_enabled;
+                                            let active = self
+                                                .effects
+                                                .engine_start_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(
+                                                col,
+                                                engine_start_enabled,
+                                                active,
+                                                |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_wt_engine_start,
+                                                        &mut cfg.wt.engine_start_peak,
+                                                        255.0,
+                                                        &mut engine_start_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(t.hover_wt_engine_start),
+                                                        &mut cfg.wt.device_targets.engine_start,
+                                                        t,
+                                                    );
+                                                },
+                                            );
+                                            cfg.wt.engine_start_enabled = engine_start_enabled;
+                                        }
                                     });
                                 }
 
@@ -2293,6 +2337,10 @@ impl eframe::App for UiState {
 
                                             ui.label(t.lbl_wt_wx_deg_s);
                                             ui.label(format!("{:.1}", v.wx_deg_s));
+                                            ui.end_row();
+
+                                            ui.label(t.lbl_wt_rpm1);
+                                            ui.label(format!("{:.0}", v.rpm_1));
                                             ui.end_row();
                                         }
                                         None => {

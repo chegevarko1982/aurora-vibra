@@ -60,6 +60,18 @@ pub struct WtVars {
     /// сигнал для будущего детекта штопора, пока только отображается в
     /// панели телеметрии.
     pub wx_deg_s: f64,
+    /// `/state`."RPM 1" — обороты первого (и по факту единственного значимого
+    /// для тактильного отклика, см. `wt_link::rumble::EngineState`) двигателя.
+    /// Эффект пуска/останова моно — самолёты с несколькими двигателями
+    /// запускают их синхронно, поэтому RPM 2/3/4 не читаем.
+    pub rpm_1: f64,
+    /// `/state`."power 1, hp" — используется только как булев гейт "мотор
+    /// реально даёт тягу прямо сейчас" (>0) для отличения устойчивого
+    /// холостого хода от выбега после команды "стоп": в обоих случаях RPM
+    /// положительный и падает к концу, а вот мощность падает в 0.0 мгновенно
+    /// в момент останова (см. живой лог `wt_probe_sessions/session_20260729_151535.jsonl`,
+    /// t=39.60с — RPM ещё 485, power уже 0.0).
+    pub power_1_hp: f64,
 }
 
 const KMH_TO_KT: f64 = 1.0 / 1.852;
@@ -97,6 +109,8 @@ pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
         ias_kmh: as_f64(state.get("IAS, km/h")),
         aoa_deg: as_f64(state.get("AoA, deg")),
         wx_deg_s: as_f64(state.get("Wx, deg/s")),
+        rpm_1: as_f64(state.get("RPM 1")),
+        power_1_hp: as_f64(state.get("power 1, hp")),
     }
 }
 
@@ -151,5 +165,7 @@ mod tests {
         assert_eq!(vars.ias_kmh, 380.0);
         assert_eq!(vars.aoa_deg, 0.2);
         assert_eq!(vars.wx_deg_s, -0.0);
+        assert_eq!(vars.rpm_1, 2301.0);
+        assert_eq!(vars.power_1_hp, 974.2);
     }
 }

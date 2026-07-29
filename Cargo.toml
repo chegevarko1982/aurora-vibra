@@ -78,6 +78,14 @@ name = "test_stall"
 path = "src/bin/test_stall.rs"
 required-features = ["dev-tools", "app"]
 
+# Гоняет реальный wt_link::rumble::WtRumbleState по скриптованному профилю
+# RPM 1, воспроизводящему живой лог пуск/останов — та же причина, что и у
+# test_stall, тянет "app".
+[[bin]]
+name = "test_engine_start"
+path = "src/bin/test_engine_start.rs"
+required-features = ["dev-tools", "app"]
+
 [[bin]]
 name = "test_throttle_stutter"
 path = "src/bin/test_throttle_stutter.rs"

@@ -281,6 +281,376 @@ impl StallState {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Engine Start/Stop — пуск и останов двигателя. Эффект МОНО: читаем только
+// "RPM 1", раскладки по двигателям/сторонам нет — многомоторные борта
+// запускают моторы синхронно (подтверждено пользователем), поэтому один
+// сигнал идёт сразу на джойстик и оба мотора РУД. На устойчиво работающем
+// двигателе эффект молчит (только транзиенты пуска/останова, по запросу
+// пользователя) — постоянный фоновый гул тут не строим.
+//
+// Форма разобрана по живому логу полного цикла пуск→останов:
+// wt_probe_sessions/session_20260729_151535.jsonl (Bf 109 F-4, 20 Гц):
+//   0.00–27.90с  двигатель заглушен, RPM=0
+//  27.90–30.25с  прокрутка стартером, ~15 об/мин/с
+//  30.30–30.45с  СХВАТЫВАНИЕ, скачок ~570 об/мин/с (RPM 35→120)
+//  30.45–33.25с  неровная раскрутка/флейр (RPM 120→485, манифолд "дышит")
+//  33.25–39.55с  устойчивые холостые (RPM≈485, power≈1.3 л.с.)
+//  39.60с        команда "стоп": power → 0.0, RPM ещё 485
+//  39.60–57.80с  выбег винта, ПОЧТИ ЛИНЕЙНЫЙ спад (~26 об/мин/с), RPM→0
+//
+// Ключевое инженерное решение — НЕ пытаться заранее знать "холостые обороты
+// этого борта" (они разные: 485 в этой сессии, 595 в другой): во время
+// разгона частота/амплитуда ведутся от МОДУЛЯ производной RPM (насколько
+// резво крутится двигатель прямо сейчас), а не от доли неизвестного заранее
+// целевого RPM. Это одновременно снимает проблему разных бортов и даёт
+// естественно попадающую в фазы кривую: полка на 120 об/мин (drpm/dt≈0)
+// сама даёт минимум частоты/амплитуды, не требуя отдельного состояния.
+// На выбеге, наоборот, `rpm_ref` уже ИЗВЕСТЕН (это RPM в момент, когда
+// `power 1, hp` упал в ноль) — там частота/амплитуда честно ведутся долей
+// rpm/rpm_ref. Все частоты капнуты 6.5 Гц — тот же потолок Найквиста, что и
+// у несущей weapon1 (см. шапку файла): HID отправляет 20 Гц/50мс, пик короче
+// интервала отправки алиасится.
+//
+// Амплитуда выбега ЛИНЕЙНО затухает до нуля вместе с частотой — оба
+// параметра честно ведутся долей `rpm/rpm_ref`. v1 держала амплитуду почти
+// постоянной (0.35-0.60 от peak, чтобы не уйти ниже порога страгивания
+// ERM-моторов) и несла спад только частотой — по живому тесту на железе это
+// ощущалось как "останов не удался", сам выбег не чувствовался (см. правку
+// v2). В конце выбега винт получает ДВА отдельных рывка подряд, не один
+// импульс — по тому же живому тесту нужно однозначно читаемое "вот винт
+// встал". Триггер этой пары — НЕ ENGINE_RPM_ACTIVE_EPS (см. ниже), а
+// отдельный ENGINE_STOP_TRIGGER_RPM: по живому тесту пара била с опозданием
+// ~500мс относительно того момента, когда винт визуально уже выглядел
+// остановившимся — RPM 1 в игре ещё какое-то время честно тикает единицами
+// (см. хвост живого лога: 20→15→10→5→0 об/мин занимает ~0.8с), но глазом на
+// таких оборотах вращение уже неотличимо от полной остановки. Порог 15
+// об/мин даёт паре сработать примерно на 500-600мс раньше буквального нуля
+// (при типичном темпе выбега ~26 об/мин/с в хвосте), синхронно с картинкой.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Порог "двигатель реально крутится хоть как-то" — используется для
+/// детекта пуска (Off → Start) и как нижняя граница continuous-текстуры
+/// выбега. НЕ используется для триггера финальной пары рывков — см.
+/// ENGINE_STOP_TRIGGER_RPM выше.
+const ENGINE_RPM_ACTIVE_EPS: f64 = 2.0;
+/// Порог "винт выглядит остановившимся" — см. шапку раздела. Кандидат на
+/// дальнейшую калибровку по живому тесту (значение подобрано по темпу спада
+/// в записанном логе, не измерено напрямую по картинке в игре).
+const ENGINE_STOP_TRIGGER_RPM: f64 = 15.0;
+/// Сглаживание производной RPM (EMA) — сырые "RPM 1" целые, при опросе 20 Гц
+/// одно округление даёт скачок ~20 об/мин/с шума на пустом месте.
+const ENGINE_DRPM_DT_EMA_ALPHA: f64 = 0.35;
+/// "Полная шкала" производной RPM для нормировки частоты/амплитуды разгона —
+/// подобрана так, чтобы пик схватывания (~570 об/мин/с по логу) уверенно
+/// насыщал кривую в 1.0, а медленная прокрутка (~15 об/мин/с) была у нижней
+/// границы. Кандидат на калибровку на живом железе (см. план).
+const ENGINE_DRPM_DT_FULL_SCALE: f64 = 300.0;
+/// Порог производной RPM, взводящий одиночный импульс "схватывания" —
+/// с запасом выше прокрутки (~20 об/мин/с) и ниже реального скачка (>200
+/// об/мин/с по логу).
+const ENGINE_CATCH_DRPM_DT: f64 = 150.0;
+const ENGINE_CATCH_IMPULSE_DURATION_S: f64 = 0.30;
+/// Импульс схватывания — на полную силу (см. решение пользователя: "чем
+/// передавать замедление/ускорение" — частота; но само схватывание должно
+/// ощущаться отдельным чётким ударом, не частью плавной кривой).
+const ENGINE_CATCH_IMPULSE_PEAK_FRAC: f64 = 1.0;
+const ENGINE_START_FREQ_MIN_HZ: f64 = 1.5;
+const ENGINE_START_FREQ_MAX_HZ: f64 = 6.5;
+const ENGINE_START_AMP_MIN: f64 = 0.35;
+const ENGINE_START_AMP_MAX: f64 = 0.85;
+/// Порог "производная почти нулевая" — используется и для короткой полки
+/// прокрутки на 120 об/мин (не должна ложно засчитаться как "вышли на
+/// холостые"), и для реального выхода на холостые.
+const ENGINE_SETTLE_DRPM_DT_EPS: f64 = 15.0;
+/// Окно стабильности перед тем, как считать "двигатель вышел на холостые".
+/// НАМЕРЕННО больше самой долгой промежуточной полки разгона по живому логу
+/// (0.9с на 120 об/мин) — иначе эта полка сама себя гасит как "холостые" и
+/// съедает флейр (32.30–33.25с, самую заметную часть раскрутки).
+const ENGINE_SETTLE_STABLE_WINDOW_S: f64 = 1.2;
+const ENGINE_SETTLE_FADE_S: f64 = 0.8;
+const ENGINE_CLIMB_JITTER: f64 = 0.4;
+/// Мощность, ниже которой считаем "двигатель больше не тянет" — переход в
+/// выбег. На живых холостых `power 1, hp` держится 1.3–1.4, к нулю падает
+/// РОВНО в момент команды "стоп" (см. шапку раздела) — порог 0.5 берёт это
+/// с запасом, не дребезжа на самих холостых.
+const ENGINE_POWER_OFF_HP: f64 = 0.5;
+const ENGINE_COAST_FREQ_MIN_HZ: f64 = 0.8;
+const ENGINE_COAST_FREQ_MAX_HZ: f64 = 6.0;
+/// v2 (по живому тесту): амплитуда выбега честно доходит до нуля — раньше
+/// держали пол в 0.35 из опасения уйти ниже порога страгивания ERM, но на
+/// железе это читалось как "выбег не чувствуется", а не как "тише".
+const ENGINE_COAST_AMP_MIN: f64 = 0.0;
+const ENGINE_COAST_AMP_MAX: f64 = 0.60;
+const ENGINE_COAST_JITTER_MAX: f64 = 0.25;
+/// Длительность КАЖДОГО из двух рывков полной остановки винта (не одного
+/// импульса — см. шапку раздела).
+const ENGINE_STOP_IMPULSE_DURATION_S: f64 = 0.15;
+/// Пауза между первым и вторым рывком.
+const ENGINE_STOP_IMPULSE_GAP_S: f64 = 0.15;
+const ENGINE_STOP_IMPULSE_PEAK_FRAC: f64 = 0.55;
+
+// Проверка потолка Найквиста — на этапе компиляции, а не в рантайм-тесте
+// (см. ту же границу 6.5 Гц у несущей weapon1, шапка файла).
+const _: () = assert!(ENGINE_START_FREQ_MAX_HZ <= 6.5);
+const _: () = assert!(ENGINE_COAST_FREQ_MAX_HZ <= 6.5);
+
+fn lerp(a: f64, b: f64, frac: f64) -> f64 {
+    a + (b - a) * frac.clamp(0.0, 1.0)
+}
+
+/// Асимметричный пилообразный импульс (быстрая атака 25% периода, долгий
+/// спад 75%) — та же форма, что у поршневого кранча в MSFS-движке
+/// (`crate::rumble`, PISTON_CRANK), переиспользована здесь как текстура
+/// "толчок от цилиндра", а не гладкая синусоида.
+fn engine_pulse_shape(t: f64, freq_hz: f64) -> f64 {
+    let freq = freq_hz.max(0.1);
+    let phase = (t * freq).rem_euclid(1.0);
+    if phase < 0.25 {
+        phase / 0.25
+    } else {
+        (1.0 - (phase - 0.25) / 0.75).max(0.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnginePhase {
+    /// Двигатель заглушен, RPM около нуля — эффект молчит.
+    Off,
+    /// Прокрутка стартером → схватывание → раскрутка до холостых.
+    Start,
+    /// Устойчиво работает — эффект молчит (только транзиенты).
+    Run,
+    /// Выбег винта после команды "стоп" (RPM падает, мощности уже нет).
+    Coast,
+}
+
+#[derive(Debug)]
+struct EngineState {
+    /// Первый тик в бою ещё не обработан — используется, чтобы НЕ принять
+    /// уже работающий на споне двигатель (см. живой лог
+    /// session_20260728_204134.jsonl, первый же тик RPM=2301) за только что
+    /// запущенный.
+    initialized: bool,
+    phase: EnginePhase,
+    prev_rpm: f64,
+    prev_t: f64,
+    drpm_dt_smoothed: f64,
+    catch_fired: bool,
+    /// `< 0.0` — импульс схватывания не взведён/уже отыгран.
+    catch_pulse_t0: f64,
+    /// `< 0.0` — производная сейчас не в пределах ENGINE_SETTLE_DRPM_DT_EPS
+    /// непрерывно; иначе — момент, с которого началась стабильность.
+    stable_since: f64,
+    /// `< 0.0` — плавный уход в тишину после выхода на холостые ещё не начат.
+    settle_fade_t0: f64,
+    /// RPM в момент перехода Run → Coast (единственное место, где нужен
+    /// "холостой RPM этого борта" — тут он уже ИЗВЕСТЕН, а не предсказывается).
+    rpm_ref: f64,
+    /// `< 0.0` — импульс полной остановки не взведён/уже отыгран.
+    stop_pulse_t0: f64,
+    last_cycle_idx: i64,
+    cycle_jitter_mul: f64,
+    rng: Xorshift32,
+}
+
+impl EngineState {
+    fn new() -> Self {
+        Self {
+            initialized: false,
+            phase: EnginePhase::Off,
+            prev_rpm: 0.0,
+            prev_t: 0.0,
+            drpm_dt_smoothed: 0.0,
+            catch_fired: false,
+            catch_pulse_t0: -1.0,
+            stable_since: -1.0,
+            settle_fade_t0: -1.0,
+            rpm_ref: 0.0,
+            stop_pulse_t0: -1.0,
+            last_cycle_idx: i64::MIN,
+            cycle_jitter_mul: 1.0,
+            rng: Xorshift32::seeded(0xC2B2_AE35),
+        }
+    }
+
+    fn step(&mut self, t: f64, vars: &WtVars, peak: f64) -> f64 {
+        let rpm = vars.rpm_1;
+
+        if !self.initialized {
+            // Первый тик в бою: если двигатель уже крутится — это не пуск,
+            // а борт заспавнился на холостых (или прямо в воздухе). Молчим
+            // и просто запоминаем стартовую точку для будущей производной.
+            self.initialized = true;
+            self.phase = if rpm > ENGINE_RPM_ACTIVE_EPS {
+                EnginePhase::Run
+            } else {
+                EnginePhase::Off
+            };
+            self.prev_rpm = rpm;
+            self.prev_t = t;
+            return 0.0;
+        }
+
+        let dt = (t - self.prev_t).max(1e-3);
+        let drpm_dt = (rpm - self.prev_rpm) / dt;
+        self.drpm_dt_smoothed += ENGINE_DRPM_DT_EMA_ALPHA * (drpm_dt - self.drpm_dt_smoothed);
+        self.prev_rpm = rpm;
+        self.prev_t = t;
+
+        match self.phase {
+            EnginePhase::Off => {
+                if rpm > ENGINE_RPM_ACTIVE_EPS {
+                    self.phase = EnginePhase::Start;
+                    self.catch_fired = false;
+                    self.catch_pulse_t0 = -1.0;
+                    self.stable_since = -1.0;
+                    self.settle_fade_t0 = -1.0;
+                    self.last_cycle_idx = i64::MIN;
+                    // Не теряем сам тик пересечения нуля — считаем разгон
+                    // сразу для него же, а не со следующего опроса.
+                    self.step_start(t, peak)
+                } else {
+                    0.0
+                }
+            }
+            EnginePhase::Start => self.step_start(t, peak),
+            EnginePhase::Run => {
+                if vars.power_1_hp <= ENGINE_POWER_OFF_HP {
+                    self.phase = EnginePhase::Coast;
+                    self.rpm_ref = rpm.max(1.0);
+                    self.stop_pulse_t0 = -1.0;
+                    self.last_cycle_idx = i64::MIN;
+                    // Аналогично: тик, на котором мощность обнулилась, уже
+                    // считаем выбегом, а не тратим впустую на переключение.
+                    self.step_coast(t, rpm, peak)
+                } else {
+                    0.0
+                }
+            }
+            EnginePhase::Coast => self.step_coast(t, rpm, peak),
+        }
+    }
+
+    /// Прокрутка → схватывание → раскрутка до холостых. Частота/амплитуда
+    /// ведутся от МОДУЛЯ сглаженной производной RPM (см. шапку раздела),
+    /// импульс схватывания — отдельный одиночный полусинус поверх кривой.
+    fn step_start(&mut self, t: f64, peak: f64) -> f64 {
+        if !self.catch_fired && self.drpm_dt_smoothed > ENGINE_CATCH_DRPM_DT {
+            self.catch_fired = true;
+            self.catch_pulse_t0 = t;
+        }
+
+        let ratio = (self.drpm_dt_smoothed.abs() / ENGINE_DRPM_DT_FULL_SCALE).clamp(0.0, 1.0);
+        let freq = lerp(ENGINE_START_FREQ_MIN_HZ, ENGINE_START_FREQ_MAX_HZ, ratio);
+        let amp = lerp(ENGINE_START_AMP_MIN, ENGINE_START_AMP_MAX, ratio);
+
+        let stable = self.drpm_dt_smoothed.abs() < ENGINE_SETTLE_DRPM_DT_EPS;
+        if stable {
+            if self.stable_since < 0.0 {
+                self.stable_since = t;
+            }
+        } else {
+            self.stable_since = -1.0;
+            self.settle_fade_t0 = -1.0;
+        }
+        if self.settle_fade_t0 < 0.0
+            && self.stable_since >= 0.0
+            && t - self.stable_since >= ENGINE_SETTLE_STABLE_WINDOW_S
+        {
+            self.settle_fade_t0 = t;
+        }
+
+        let cycle_idx = gun_cycle_index(t, freq);
+        if cycle_idx != self.last_cycle_idx {
+            self.last_cycle_idx = cycle_idx;
+            self.cycle_jitter_mul = 1.0 + ENGINE_CLIMB_JITTER * (self.rng.next_unit() * 2.0 - 1.0);
+        }
+
+        let climb_term = engine_pulse_shape(t, freq) * amp * peak * self.cycle_jitter_mul.max(0.0);
+
+        let continuous_term = if self.settle_fade_t0 >= 0.0 {
+            let p = (t - self.settle_fade_t0) / ENGINE_SETTLE_FADE_S;
+            if p >= 1.0 {
+                self.phase = EnginePhase::Run;
+                0.0
+            } else {
+                climb_term * (1.0 - p)
+            }
+        } else {
+            climb_term
+        };
+
+        let catch_term = if self.catch_pulse_t0 >= 0.0 {
+            let p = (t - self.catch_pulse_t0) / ENGINE_CATCH_IMPULSE_DURATION_S;
+            if (0.0..=1.0).contains(&p) {
+                peak * ENGINE_CATCH_IMPULSE_PEAK_FRAC * (PI * p).sin()
+            } else {
+                self.catch_pulse_t0 = -1.0;
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        (continuous_term + catch_term).clamp(0.0, 255.0)
+    }
+
+    /// Выбег винта: частота ведётся долей `rpm/rpm_ref` (в отличие от
+    /// разгона, тут целевой RPM уже известен — захвачен в момент перехода
+    /// Run → Coast), амплитуда линейно затухает до нуля той же долей.
+    /// Финальная пара рывков взводится на ENGINE_STOP_TRIGGER_RPM (винт
+    /// визуально уже стоит), а не на буквальном RPM≈0 — см. шапку раздела.
+    fn step_coast(&mut self, t: f64, rpm: f64, peak: f64) -> f64 {
+        let mut term = 0.0;
+
+        if rpm > ENGINE_STOP_TRIGGER_RPM {
+            let ratio = (rpm / self.rpm_ref).clamp(0.0, 1.0);
+            let freq = lerp(ENGINE_COAST_FREQ_MIN_HZ, ENGINE_COAST_FREQ_MAX_HZ, ratio);
+            let amp = lerp(ENGINE_COAST_AMP_MIN, ENGINE_COAST_AMP_MAX, ratio);
+            let jitter_mag = ENGINE_COAST_JITTER_MAX * (1.0 - ratio);
+
+            let cycle_idx = gun_cycle_index(t, freq);
+            if cycle_idx != self.last_cycle_idx {
+                self.last_cycle_idx = cycle_idx;
+                self.cycle_jitter_mul = 1.0 + jitter_mag * (self.rng.next_unit() * 2.0 - 1.0);
+            }
+
+            term = engine_pulse_shape(t, freq) * amp * peak * self.cycle_jitter_mul.max(0.0);
+        } else if self.stop_pulse_t0 < 0.0 {
+            self.stop_pulse_t0 = t;
+        }
+
+        if self.stop_pulse_t0 >= 0.0 {
+            let elapsed = t - self.stop_pulse_t0;
+            match engine_stop_double_jerk_shape(elapsed) {
+                Some(shape) => term += peak * ENGINE_STOP_IMPULSE_PEAK_FRAC * shape,
+                None => self.phase = EnginePhase::Off,
+            }
+        }
+
+        term.clamp(0.0, 255.0)
+    }
+}
+
+/// Огибающая финального "винт встал" — ДВА одинаковых полусинусных рывка
+/// подряд с паузой между ними (не один импульс, см. шапку раздела: по
+/// живому тесту двойной толчок читается однозначно, а один — смазанно).
+/// `None` — окно обоих рывков закончилось, останов эффекта.
+fn engine_stop_double_jerk_shape(elapsed: f64) -> Option<f64> {
+    let d = ENGINE_STOP_IMPULSE_DURATION_S;
+    let gap = ENGINE_STOP_IMPULSE_GAP_S;
+    if elapsed < d {
+        Some((PI * (elapsed / d)).sin())
+    } else if elapsed < d + gap {
+        Some(0.0)
+    } else if elapsed < 2.0 * d + gap {
+        Some((PI * ((elapsed - d - gap) / d)).sin())
+    } else {
+        None
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Flaps — та же математика, что и MSFS-эффект в crate::rumble (округление
 // до целого %, детект изменения кадр-к-кадру, короткое окно активности,
 // 25 Гц полу-синусный ШИМ, чередование throttle-каналов раз в 500мс).
@@ -301,6 +671,7 @@ pub struct WtRumbleState {
     weapon1: GunState,
     weapon2: GunState,
     stall: StallState,
+    engine: EngineState,
 
     last_flaps_pct_rounded: i32,
     flaps_active_until_t: f64,
@@ -324,6 +695,7 @@ impl WtRumbleState {
             weapon1: GunState::new(0x9E3779B9),
             weapon2: GunState::new(0x85EBCA6B),
             stall: StallState::new(),
+            engine: EngineState::new(),
             last_flaps_pct_rounded: i32::MIN,
             flaps_active_until_t: -1.0,
             gear_initialized: false,
@@ -395,6 +767,23 @@ impl WtRumbleState {
         if dt_.stall.enable_throttle {
             throttle_left += stall_term;
             throttle_right += stall_term;
+        }
+
+        // --- Engine Start/Stop ---
+        // Моно (см. шапку раздела EngineState выше): одно значение сразу на
+        // джойстик и оба мотора РУД — раскладки по двигателям/сторонам нет.
+        let engine_term = if cfg.engine_start_enabled {
+            self.engine.step(t, vars, cfg.engine_start_peak as f64)
+        } else {
+            0.0
+        };
+        effects.engine_start_active = engine_term > 0.0;
+        if dt_.engine_start.enable_joystick {
+            joystick += engine_term;
+        }
+        if dt_.engine_start.enable_throttle {
+            throttle_left += engine_term;
+            throttle_right += engine_term;
         }
 
         // --- Flaps ---
@@ -531,6 +920,8 @@ mod tests {
             ias_kmh: 0.0,
             aoa_deg: 0.0,
             wx_deg_s: 0.0,
+            rpm_1: 0.0,
+            power_1_hp: 0.0,
         }
     }
 
@@ -845,5 +1236,119 @@ mod tests {
         assert_eq!(out.joystick_intensity, 0);
         assert_eq!(out.throttle_left_intensity, 0);
         assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    // --- Engine Start/Stop ---
+
+    fn engine_vars(rpm: f64, power: f64, t: f64) -> WtVars {
+        let mut v = vars();
+        v.t = t;
+        v.rpm_1 = rpm;
+        v.power_1_hp = power;
+        v
+    }
+
+    #[test]
+    fn engine_silent_when_disabled() {
+        let mut engine = WtRumbleState::new();
+        let mut c = cfg();
+        c.engine_start_enabled = false;
+        let v = engine_vars(0.0, 0.0, 0.0);
+        let out = engine.step(&v, &c, false);
+        assert_eq!(out.joystick_intensity, 0);
+        // Даже если бы отслеживалось состояние — с выключенным cfg молчит и
+        // на резком скачке оборотов.
+        let v2 = engine_vars(400.0, 0.0, 0.5);
+        let out2 = engine.step(&v2, &c, false);
+        assert_eq!(out2.joystick_intensity, 0);
+        assert_eq!(out2.throttle_left_intensity, 0);
+        assert_eq!(out2.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn engine_silent_on_steady_idle() {
+        let mut engine = WtRumbleState::new();
+        let c = cfg();
+        // Первый тик — уже в холостых (борт заспавнился с работающим
+        // двигателем), не пуск.
+        let out = engine.step(&engine_vars(500.0, 20.0, 0.0), &c, false);
+        assert_eq!(out.joystick_intensity, 0);
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+        // Несколько тиков спустя обороты и мощность стабильны — тишина.
+        for i in 1..20 {
+            let out = engine.step(&engine_vars(500.0, 20.0, i as f64 * 0.05), &c, false);
+            assert_eq!(out.joystick_intensity, 0, "tick {i}");
+            assert_eq!(out.throttle_left_intensity, 0, "tick {i}");
+        }
+    }
+
+    #[test]
+    fn engine_no_false_start_on_first_tick_with_high_rpm() {
+        // Регрессия: борт может заспавниться в бою с уже раскрученным
+        // двигателем (см. session_20260728_204134.jsonl — первый же тик
+        // RPM=2301). Наивный детектор "RPM ушёл с нуля" не должен принять
+        // это за только что запущенный двигатель.
+        let mut engine = WtRumbleState::new();
+        let out = engine.step(&engine_vars(2301.0, 974.2, 0.0), &cfg(), false);
+        assert_eq!(out.joystick_intensity, 0);
+        assert_eq!(out.throttle_left_intensity, 0);
+        assert_eq!(out.throttle_right_intensity, 0);
+    }
+
+    #[test]
+    fn engine_catch_impulse_fires_once_per_start_cycle() {
+        let mut state = EngineState::new();
+        // Инициализация "с нуля" (борт заглушен).
+        state.step(0.0, &engine_vars(0.0, 0.0, 0.0), 255.0);
+
+        // Прокрутка стартером — медленный рост, как в живом логе (t=27.9..30.25с).
+        let mut t = 0.05;
+        let mut rpm = 0.0;
+        while rpm < 35.0 {
+            rpm += 1.0;
+            state.step(t, &engine_vars(rpm, 0.0, t), 255.0);
+            t += 0.05;
+        }
+        assert!(
+            !state.catch_fired,
+            "не должен сработать на медленной прокрутке"
+        );
+
+        // Резкий скачок (воспламенение) — имитация t=30.30..30.45 из лога.
+        for rpm in [46.0, 68.0, 90.0, 120.0] {
+            state.step(t, &engine_vars(rpm, 0.0, t), 255.0);
+            t += 0.05;
+        }
+        assert!(
+            state.catch_fired,
+            "должен взвестись на резком скачке оборотов"
+        );
+        let fired_at = state.catch_pulse_t0;
+        assert!(fired_at >= 0.0);
+
+        // Дальнейшие скачки в той же сессии не переустанавливают импульс —
+        // "схватывание" происходит один раз за цикл пуска.
+        for rpm in [150.0, 200.0, 300.0] {
+            state.step(t, &engine_vars(rpm, 0.0, t), 255.0);
+            t += 0.05;
+        }
+        assert_eq!(state.catch_pulse_t0, fired_at);
+    }
+
+    #[test]
+    fn engine_coast_uses_captured_rpm_ref_not_hardcoded_idle() {
+        // Разные борты имеют разные холостые (485 в одной сессии, 595 в
+        // другой) — эффект не должен зависеть от захардкоженного значения.
+        let mut state = EngineState::new();
+        state.step(0.0, &engine_vars(595.0, 20.0, 0.0), 255.0);
+        // Питание пропадает — переход в выбег, rpm_ref захватывается ЖИВЫМ
+        // значением оборотов, а не константой.
+        let out = state.step(0.05, &engine_vars(595.0, 0.0, 0.05), 255.0);
+        assert_eq!(state.phase, EnginePhase::Coast);
+        assert_eq!(state.rpm_ref, 595.0);
+        // На первом тике выбега обороты ещё равны rpm_ref — коэффициент 1.0,
+        // сигнал не молчит (частота/амплитуда на максимуме выбега).
+        assert!(out > 0.0);
     }
 }
