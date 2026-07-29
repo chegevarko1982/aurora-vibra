@@ -9,8 +9,10 @@ use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
 use crate::hid::protocol::{
-    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_simapp_vibe_frame,
-    build_throttle_vibe_frame, is_ursa_minor_joystick, is_ursa_minor_throttle, ursa_model_name,
+    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_orion_joystick_vibe_frame,
+    build_orion_throttle_vibe_frames, build_simapp_vibe_frame, build_throttle_vibe_frame,
+    is_orion_joystick, is_orion_throttle, is_supported_joystick, is_supported_throttle,
+    is_ursa_minor_throttle, ursa_model_name,
 };
 use crate::hid::win32::hid_query_caps_from_path;
 use crate::{HidCmd, LogBuffer};
@@ -96,7 +98,34 @@ fn hid_send_out(
             continue;
         }
 
-        let frame = build_simapp_vibe_frame(d.pid, d.report_id, d.out_len, joystick_intensity);
+        if is_orion_throttle(d.pid) {
+            // Orion Throttle Base II не адресует моторы отдельно (см.
+            // build_orion_throttle_vibe_frames) — оба командных пакета несут
+            // одну и ту же интенсивность, поэтому берём максимум из
+            // раздельно посчитанных RumbleEngine значений, чтобы не терять пики.
+            let combined = throttle_left_intensity.max(throttle_right_intensity);
+            let frames = build_orion_throttle_vibe_frames(d.report_id, d.out_len, combined);
+            let mut frame_ok = 0usize;
+            let mut frame_fail = 0usize;
+            for frame in &frames {
+                match d.dev.write(frame) {
+                    Ok(n) if n == frame.len() => frame_ok += 1,
+                    _ => frame_fail += 1,
+                }
+            }
+            ok += frame_ok;
+            fail += frame_fail;
+            if frame_fail > 0 {
+                failed_paths.push(d.path.clone());
+            }
+            continue;
+        }
+
+        let frame = if is_orion_joystick(d.pid) {
+            build_orion_joystick_vibe_frame(d.report_id, d.out_len, joystick_intensity)
+        } else {
+            build_simapp_vibe_frame(d.pid, d.report_id, d.out_len, joystick_intensity)
+        };
         match d.dev.write(&frame) {
             Ok(n) => {
                 if n == frame.len() {
@@ -146,8 +175,8 @@ fn prune_failed_devices(
             true
         }
     });
-    let joystick_present = devices.iter().any(|d| is_ursa_minor_joystick(d.pid));
-    let throttle_present = devices.iter().any(|d| is_ursa_minor_throttle(d.pid));
+    let joystick_present = devices.iter().any(|d| is_supported_joystick(d.pid));
+    let throttle_present = devices.iter().any(|d| is_supported_throttle(d.pid));
     controller_connected.store(joystick_present, Ordering::Relaxed);
     throttle_connected.store(throttle_present, Ordering::Relaxed);
 }
@@ -268,12 +297,12 @@ pub fn hid_worker(
 
             let pid = devinfo.product_id();
             // VID 0x4098 у WinWing общий для разных линеек устройств (МФД,
-            // панели и т.д.), не только для нашего джойстика/РУД. Открываем и
-            // отслеживаем ТОЛЬКО распознанные PID — иначе посторонний прибор
-            // того же производителя ошибочно считался бы подключённым
-            // джойстиком (см. is_ursa_minor_joystick ниже) и получал бы
-            // вибро-фреймы, ему не предназначенные.
-            if !is_ursa_minor_joystick(pid) && !is_ursa_minor_throttle(pid) {
+            // панели и т.д.), не только для наших джойстика/РУД (Ursa Minor
+            // и Orion). Открываем и отслеживаем ТОЛЬКО распознанные PID —
+            // иначе посторонний прибор того же производителя ошибочно
+            // считался бы подключённым джойстиком (см. is_supported_joystick
+            // ниже) и получал бы вибро-фреймы, ему не предназначенные.
+            if !is_supported_joystick(pid) && !is_supported_throttle(pid) {
                 continue;
             }
             let (out_len, report_id) =
@@ -328,8 +357,8 @@ pub fn hid_worker(
             last_missing_log = Instant::now();
         }
 
-        let joystick_present = devices.iter().any(|d| is_ursa_minor_joystick(d.pid));
-        let throttle_present = devices.iter().any(|d| is_ursa_minor_throttle(d.pid));
+        let joystick_present = devices.iter().any(|d| is_supported_joystick(d.pid));
+        let throttle_present = devices.iter().any(|d| is_supported_throttle(d.pid));
         controller_connected.store(joystick_present, Ordering::Relaxed);
         throttle_connected.store(throttle_present, Ordering::Relaxed);
         last_scan = Instant::now();

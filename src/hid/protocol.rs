@@ -12,6 +12,20 @@ pub const WW_PID_URSA_MINOR_SPACE_R: u16 = 0xBC2C;
 // вибромоторами (левый/правый), адресуемыми одним и тем же HID-репортом
 // через разные значения байта адреса мотора (см. THROTTLE_MOTOR_LEFT/RIGHT).
 pub const WW_PID_URSA_MINOR_THROTTLE: u16 = 0xB920;
+// "URSA MINOR 32 Throttle Metal R" — второй физический блок РУД той же
+// линейки (напр. отдельные квадранты капитана/второго пилота), не связан с
+// L/R джойстика. Протокол идентичен WW_PID_URSA_MINOR_THROTTLE: тот же
+// фиксированный identifierByte (0x10) и те же адреса моторов — подтверждено
+// по исходникам rswilem/winctrl-xplane-plugin, product-ursa-minor-throttle.h
+// (ProductUrsaMinorThrottle::ThrottleIdentifierByte не зависит от PID).
+pub const WW_PID_URSA_MINOR_THROTTLE_R: u16 = 0xB930;
+
+// Линейка WINWING Orion (Joystick Base II / Throttle Base II) — отдельное от
+// Ursa Minor семейство устройств с другим протоколом вибрации (см.
+// build_orion_joystick_vibe_frame / build_orion_throttle_vibe_frames).
+// Источник: rswilem/winctrl-xplane-plugin, usbdevice.cpp — USBDevice::Device().
+pub const WW_PID_ORION_JOYSTICK: u16 = 0xBEA8; // Orion Joystick Base II + JGRIP-F16
+pub const WW_PID_ORION_THROTTLE: u16 = 0xBD64; // Orion Throttle Base II + F15EX HANDLE L/R
 
 // Адреса моторов в протоколе Throttle (buf[7] в 14-байтовом Output Report).
 pub const THROTTLE_MOTOR_LEFT: u8 = 0x0E;
@@ -26,13 +40,35 @@ pub fn ursa_model_name(pid: u16) -> &'static str {
         WW_PID_URSA_MINOR_SPACE_L => "URSA MINOR SPACE L",
         WW_PID_URSA_MINOR_SPACE_R => "URSA MINOR SPACE R",
         WW_PID_URSA_MINOR_THROTTLE => "URSA MINOR THROTTLE",
+        WW_PID_URSA_MINOR_THROTTLE_R => "URSA MINOR THROTTLE R",
+        WW_PID_ORION_JOYSTICK => "ORION JOYSTICK",
+        WW_PID_ORION_THROTTLE => "ORION THROTTLE",
         _ => "UNKNOWN",
     }
 }
 
-/// РУД (WINCTRL URSA MINOR Throttle) — отдельное устройство, не джойстик.
+/// РУД линейки Ursa Minor (оба физических блока, L и R) — отдельное
+/// устройство, не джойстик.
 pub fn is_ursa_minor_throttle(pid: u16) -> bool {
-    pid == WW_PID_URSA_MINOR_THROTTLE
+    matches!(pid, WW_PID_URSA_MINOR_THROTTLE | WW_PID_URSA_MINOR_THROTTLE_R)
+}
+
+pub fn is_orion_joystick(pid: u16) -> bool {
+    pid == WW_PID_ORION_JOYSTICK
+}
+
+pub fn is_orion_throttle(pid: u16) -> bool {
+    pid == WW_PID_ORION_THROTTLE
+}
+
+/// Любой поддерживаемый джойстик (sidestick), Ursa Minor или Orion.
+pub fn is_supported_joystick(pid: u16) -> bool {
+    is_ursa_minor_joystick(pid) || is_orion_joystick(pid)
+}
+
+/// Любой поддерживаемый РУД (throttle), Ursa Minor или Orion.
+pub fn is_supported_throttle(pid: u16) -> bool {
+    is_ursa_minor_throttle(pid) || is_orion_throttle(pid)
 }
 
 pub fn is_ursa_minor_left(pid: u16) -> bool {
@@ -79,12 +115,21 @@ pub fn channel_byte_for_pid(pid: u16) -> u8 {
     }
 }
 
-pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
-    let handed_selector = channel_byte_for_pid(pid);
-
+/// Общий каркас для все Joystick-подобных вибро-фреймов WinWing: только
+/// identifier_byte (адрес стороны/устройства) и motor_code (адрес мотора)
+/// отличаются между Ursa Minor и Orion — остальные байты фиксированы у
+/// обеих линеек (см. build_simapp_vibe_frame / build_orion_joystick_vibe_frame
+/// / build_orion_throttle_vibe_frames).
+fn build_joystick_vibe_frame_raw(
+    identifier_byte: u8,
+    motor_code: u8,
+    report_id: u8,
+    out_len: u16,
+    intensity: u8,
+) -> Vec<u8> {
     let body: [u8; 13] = [
-        handed_selector,
-        0xBF,
+        identifier_byte,
+        motor_code,
         0x00,
         0x00,
         0x03,
@@ -109,6 +154,32 @@ pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity:
     let copy_len = body.len().min(len.saturating_sub(1));
     buf[1..1 + copy_len].copy_from_slice(&body[..copy_len]);
     buf
+}
+
+pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
+    build_joystick_vibe_frame_raw(channel_byte_for_pid(pid), 0xBF, report_id, out_len, intensity)
+}
+
+/// Orion Joystick Base II (+ JGRIP-F16, PID 0xBEA8). identifier_byte и
+/// motor_code здесь фиксированы (0x01 / 0x00) — в отличие от Ursa Minor, у
+/// Orion нет отдельных L/R PID для стороны, база одна на весь джойстик.
+/// Источник: rswilem/winctrl-xplane-plugin, product-joystick.cpp —
+/// USBDevice::Device() case 0xBEA8.
+pub fn build_orion_joystick_vibe_frame(report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
+    build_joystick_vibe_frame_raw(0x01, 0x00, report_id, out_len, intensity)
+}
+
+/// Orion Throttle Base II (+ F15EX HANDLE L/R, PID 0xBD64). У этой линейки
+/// нет отдельного адреса мотора в байте (как THROTTLE_MOTOR_LEFT/RIGHT у
+/// Ursa Minor) — вместо этого одна и та же интенсивность пишется в ДВА
+/// разных командных байта (0xBF и 0xCF) при фиксированном identifier_byte
+/// 0x01. Источник: rswilem/winctrl-xplane-plugin, product-orion-throttle.cpp —
+/// ProductOrionThrottle::setVibration().
+pub fn build_orion_throttle_vibe_frames(report_id: u8, out_len: u16, intensity: u8) -> [Vec<u8>; 2] {
+    [
+        build_joystick_vibe_frame_raw(0x01, 0xBF, report_id, out_len, intensity),
+        build_joystick_vibe_frame_raw(0x01, 0xCF, report_id, out_len, intensity),
+    ]
 }
 
 /// Собирает Output Report для WINCTRL URSA MINOR Throttle (РУД).
@@ -255,5 +326,51 @@ mod tests {
     #[test]
     fn throttle_zero_out_len_returns_empty_buffer() {
         assert!(build_throttle_vibe_frame(0x02, 0, THROTTLE_MOTOR_LEFT, 0x80).is_empty());
+    }
+
+    #[test]
+    fn ursa_minor_throttle_r_is_recognized_as_throttle() {
+        assert!(is_ursa_minor_throttle(WW_PID_URSA_MINOR_THROTTLE_R));
+        assert_eq!(
+            ursa_model_name(WW_PID_URSA_MINOR_THROTTLE_R),
+            "URSA MINOR THROTTLE R"
+        );
+    }
+
+    #[test]
+    fn orion_joystick_frame_matches_golden_bytes() {
+        // Golden bytes из product-joystick.cpp (rswilem/winctrl-xplane-plugin):
+        // identifierByte=0x01, motorCode=0x00, фиксированные для Orion.
+        let frame = build_orion_joystick_vibe_frame(0x02, 14, 0x19);
+        assert_eq!(
+            frame,
+            vec![0x02, 0x01, 0x00, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn orion_throttle_frames_match_golden_bytes() {
+        // Golden bytes из product-orion-throttle.cpp: два фрейма, командные
+        // байты 0xBF и 0xCF, одна и та же интенсивность в обоих.
+        let [frame_bf, frame_cf] = build_orion_throttle_vibe_frames(0x02, 14, 0x7F);
+        assert_eq!(
+            frame_bf,
+            vec![0x02, 0x01, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x7F, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            frame_cf,
+            vec![0x02, 0x01, 0xCF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x7F, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn supported_predicates_cover_both_families() {
+        assert!(is_supported_joystick(WW_PID_URSA_MINOR_AIRBUS_L));
+        assert!(is_supported_joystick(WW_PID_ORION_JOYSTICK));
+        assert!(is_supported_throttle(WW_PID_URSA_MINOR_THROTTLE));
+        assert!(is_supported_throttle(WW_PID_URSA_MINOR_THROTTLE_R));
+        assert!(is_supported_throttle(WW_PID_ORION_THROTTLE));
+        assert!(!is_supported_joystick(WW_PID_ORION_THROTTLE));
+        assert!(!is_supported_throttle(WW_PID_ORION_JOYSTICK));
     }
 }
