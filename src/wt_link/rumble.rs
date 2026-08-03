@@ -880,19 +880,22 @@ impl WtRumbleState {
             throttle_right += stall_term;
         }
 
-        // --- Overspeed (Vne) ---
+        // --- Overspeed (Vne / Vfe) ---
         // Порог берётся точным совпадением по имени борта из таблицы
         // overspeed_profiles (см. модуль) — в отличие от stall, фолбэка на
         // "усреднённый" борт нет: таблица покрывает практически весь ростер,
-        // отсутствие записи = эффект молчит.
+        // отсутствие записи = эффект молчит. Если выпущены закрылки,
+        // действующий предел ужесточается до их собственного порога
+        // разрушения (см. overspeed_profiles::effective_limit_kmh) — без
+        // отдельного тумблера, это то же превышение скорости, просто с
+        // более строгим порогом. Шасси в этот предел НЕ входит — у него
+        // отдельный эффект Gear overspeed ниже (другое окно нарастания,
+        // свой тумблер).
         let overspeed_term = if cfg.overspeed_enabled {
-            overspeed_profiles::vne_kmh_for(&vars.vehicle_type)
-                .map(|vne| {
-                    overspeed_profiles::intensity(
-                        vars.ias_kmh,
-                        vne as f64,
-                        cfg.overspeed_ceiling as f64,
-                    )
+            let base_vne = overspeed_profiles::vne_kmh_for(&vars.vehicle_type);
+            overspeed_profiles::effective_limit_kmh(&vars.vehicle_type, base_vne, vars.flaps_pct)
+                .map(|limit| {
+                    overspeed_profiles::intensity(vars.ias_kmh, limit as f64, cfg.overspeed_ceiling as f64)
                 })
                 .unwrap_or(0.0)
         } else {
@@ -905,6 +908,36 @@ impl WtRumbleState {
         if dt_.overspeed.enable_throttle {
             throttle_left += overspeed_term;
             throttle_right += overspeed_term;
+        }
+
+        // --- Gear overspeed (Vlo) ---
+        // Отдельный от общего Vne-эффекта: срабатывает только пока шасси
+        // выпущено (>0.5%, тот же клиренс, что у GEAR_LOCKED_THRESHOLD_PCT),
+        // порог — собственная скорость разрушения шасси борта, окно
+        // нарастания шире (20 км/ч по требованию пользователя, вместо 10
+        // у общего Vne).
+        let gear_overspeed_term = if cfg.gear_overspeed_enabled
+            && vars.gear_pct > GEAR_LOCKED_THRESHOLD_PCT
+        {
+            overspeed_profiles::gear_kmh_for(&vars.vehicle_type)
+                .map(|limit| {
+                    overspeed_profiles::gear_intensity(
+                        vars.ias_kmh,
+                        limit as f64,
+                        cfg.gear_overspeed_ceiling as f64,
+                    )
+                })
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        effects.wt_gear_overspeed_active = gear_overspeed_term > 0.0;
+        if dt_.gear_overspeed.enable_joystick {
+            joystick += gear_overspeed_term;
+        }
+        if dt_.gear_overspeed.enable_throttle {
+            throttle_left += gear_overspeed_term;
+            throttle_right += gear_overspeed_term;
         }
 
         // --- Engine Start/Stop ---

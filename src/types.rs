@@ -183,6 +183,7 @@ pub struct WtDeviceTargets {
     pub stall: EffectDeviceTarget,
     pub engine_start: EffectDeviceTarget,
     pub overspeed: EffectDeviceTarget,
+    pub gear_overspeed: EffectDeviceTarget,
 }
 
 /// Параметры генератора "гул с текстурой" для одной группы оружия — перенесены
@@ -239,6 +240,8 @@ pub struct WtConfig {
     pub engine_start_peak: f32,
     pub overspeed_enabled: bool,
     pub overspeed_ceiling: f32,
+    pub gear_overspeed_enabled: bool,
+    pub gear_overspeed_ceiling: f32,
     pub device_targets: WtDeviceTargets,
 }
 
@@ -281,6 +284,8 @@ impl Default for WtConfig {
             engine_start_peak: 200.0,
             overspeed_enabled: true,
             overspeed_ceiling: 80.0, // тот же потолок по умолчанию, что у stall_ceiling
+            gear_overspeed_enabled: true,
+            gear_overspeed_ceiling: 80.0,
             device_targets: WtDeviceTargets::default(),
         }
     }
@@ -560,6 +565,7 @@ pub struct EffectsSnapshot {
     pub wt_weapon1_active: bool,
     pub wt_weapon2_active: bool,
     pub wt_overspeed_active: bool,
+    pub wt_gear_overspeed_active: bool,
 }
 
 #[derive(Debug)]
@@ -655,6 +661,7 @@ pub struct EffectsState {
     pub wt_weapon1_active: AtomicBool,
     pub wt_weapon2_active: AtomicBool,
     pub wt_overspeed_active: AtomicBool,
+    pub wt_gear_overspeed_active: AtomicBool,
 }
 
 pub type EffectsShared = Arc<EffectsState>;
@@ -700,6 +707,8 @@ impl EffectsState {
             .store(snap.wt_weapon2_active, Ordering::Relaxed);
         self.wt_overspeed_active
             .store(snap.wt_overspeed_active, Ordering::Relaxed);
+        self.wt_gear_overspeed_active
+            .store(snap.wt_gear_overspeed_active, Ordering::Relaxed);
     }
 
     pub fn clear_all(&self) {

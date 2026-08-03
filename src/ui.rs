@@ -2270,6 +2270,38 @@ impl eframe::App for UiState {
                                             cfg.wt.overspeed_enabled = overspeed_enabled;
                                         }
 
+                                        // Gear overspeed — отдельный от Vne-эффекта, окно 20 км/ч,
+                                        // порог из той же таблицы data/flap_gear_break.csv.
+                                        {
+                                            let mut gear_overspeed_enabled =
+                                                cfg.wt.gear_overspeed_enabled;
+                                            let active = self
+                                                .effects
+                                                .wt_gear_overspeed_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(
+                                                col,
+                                                gear_overspeed_enabled,
+                                                active,
+                                                |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_wt_gear_overspeed,
+                                                        &mut cfg.wt.gear_overspeed_ceiling,
+                                                        80.0,
+                                                        &mut gear_overspeed_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(t.hover_wt_gear_overspeed),
+                                                        &mut cfg.wt.device_targets.gear_overspeed,
+                                                        t,
+                                                    );
+                                                },
+                                            );
+                                            cfg.wt.gear_overspeed_enabled = gear_overspeed_enabled;
+                                        }
+
                                         // Flaps
                                         {
                                             let mut flaps_enabled = cfg.wt.flaps_enabled;
