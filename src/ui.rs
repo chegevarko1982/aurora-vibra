@@ -182,6 +182,7 @@ fn game_badge(ui: &mut egui::Ui, game: ActiveGame, t: &Strings) {
     let (text, hover): (&str, &str) = match game {
         ActiveGame::Msfs => ("MSFS", t.hover_game_msfs),
         ActiveGame::Wt => ("WarThunder", t.hover_game_wt),
+        ActiveGame::Xplane => ("X-Plane", t.hover_game_xp),
         ActiveGame::None => return,
     };
     ui.label(RichText::new(text).strong()).on_hover_text(hover);
@@ -938,6 +939,13 @@ impl eframe::App for UiState {
                                     &mut self.game_override,
                                     GameOverride::ForceWt,
                                     t.opt_game_force_wt,
+                                )
+                                .changed();
+                            changed |= ui
+                                .radio_value(
+                                    &mut self.game_override,
+                                    GameOverride::ForceXplane,
+                                    t.opt_game_force_xp,
                                 )
                                 .changed();
                             if changed {

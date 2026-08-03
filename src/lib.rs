@@ -29,6 +29,12 @@ pub mod wt_probe;
 #[cfg(any(feature = "app", feature = "wt-probe"))]
 pub mod wt_link;
 
+// Продовый конвейер телеметрии+эффектов X-Plane 12 (этап 1, см.
+// xp_link/mod.rs). В отличие от wt_link, разведывательного бинарника для
+// X-Plane пока нет — весь модуль нужен только основному приложению.
+#[cfg(feature = "app")]
+pub mod xp_link;
+
 pub use log::LogBuffer;
 pub use rumble::RumbleEngine;
 pub use types::*; // Делаем структуру доступной для worker.rs через crate::RumbleEngine

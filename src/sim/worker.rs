@@ -379,13 +379,12 @@ pub fn sim_worker(
             }
 
             // MSFS считается живой с самого момента успешного Open() (не по
-            // отдельному вотчдогу) — заявляем слот сразу же. Если WT уже
-            // владеет им (липкое владение) или ForceWt-оверрайд запрещает
-            // MSFS — claim не проходит, и ниже мы просто не пишем
+            // отдельному вотчдогу) — заявляем слот сразу же. Если WT/X-Plane
+            // уже владеет им (липкое владение) или форс-оверрайд другой игры
+            // запрещает MSFS — claim не проходит, и ниже мы просто не пишем
             // status/aircraft_title/телеметрию/HID, пока слот не освободится
             // (повторные попытки — на каждой итерации внутреннего цикла).
-            let mut owns_slot = if crate::settings::game_override() == crate::GameOverride::ForceWt
-            {
+            let mut owns_slot = if crate::settings::game_override().vetoes(ActiveGame::Msfs) {
                 game.release_if_owned(ActiveGame::Msfs);
                 false
             } else {
@@ -724,7 +723,7 @@ pub fn sim_worker(
                                 // SimConnect-соединения.
                                 if !owns_slot {
                                     owns_slot = if crate::settings::game_override()
-                                        == crate::GameOverride::ForceWt
+                                        .vetoes(ActiveGame::Msfs)
                                     {
                                         false
                                     } else {

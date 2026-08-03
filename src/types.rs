@@ -749,6 +749,7 @@ pub enum ActiveGame {
     None,
     Msfs,
     Wt,
+    Xplane,
 }
 
 /// Ручной оверрайд автоопределения (меню Опции). Персистится в SettingsFile,
@@ -760,4 +761,62 @@ pub enum GameOverride {
     Auto,
     ForceMsfs,
     ForceWt,
+    ForceXplane,
+}
+
+impl GameOverride {
+    /// true, если пользователь вручную прижал ДРУГУЮ игру — тогда этот
+    /// конвейер обязан вести себя как «не жив» независимо от реальной
+    /// живости, то есть release_if_owned вместо try_claim.
+    ///
+    /// Метод, а не парные сравнения по месту в каждом воркере: с тремя
+    /// играми таких сравнений стало бы девять (3 оверрайда × 3 игры), а
+    /// добавление четвёртой игры потребовало бы правки во всех воркерах
+    /// разом. Централизованная таблица меняется в одном месте.
+    pub fn vetoes(self, who: ActiveGame) -> bool {
+        match self {
+            GameOverride::Auto => false,
+            GameOverride::ForceMsfs => who != ActiveGame::Msfs,
+            GameOverride::ForceWt => who != ActiveGame::Wt,
+            GameOverride::ForceXplane => who != ActiveGame::Xplane,
+        }
+    }
+}
+
+#[cfg(test)]
+mod game_override_tests {
+    use super::*;
+
+    #[test]
+    fn auto_never_vetoes() {
+        for who in [
+            ActiveGame::None,
+            ActiveGame::Msfs,
+            ActiveGame::Wt,
+            ActiveGame::Xplane,
+        ] {
+            assert!(!GameOverride::Auto.vetoes(who));
+        }
+    }
+
+    #[test]
+    fn force_msfs_vetoes_others_only() {
+        assert!(!GameOverride::ForceMsfs.vetoes(ActiveGame::Msfs));
+        assert!(GameOverride::ForceMsfs.vetoes(ActiveGame::Wt));
+        assert!(GameOverride::ForceMsfs.vetoes(ActiveGame::Xplane));
+    }
+
+    #[test]
+    fn force_wt_vetoes_others_only() {
+        assert!(!GameOverride::ForceWt.vetoes(ActiveGame::Wt));
+        assert!(GameOverride::ForceWt.vetoes(ActiveGame::Msfs));
+        assert!(GameOverride::ForceWt.vetoes(ActiveGame::Xplane));
+    }
+
+    #[test]
+    fn force_xplane_vetoes_others_only() {
+        assert!(!GameOverride::ForceXplane.vetoes(ActiveGame::Xplane));
+        assert!(GameOverride::ForceXplane.vetoes(ActiveGame::Msfs));
+        assert!(GameOverride::ForceXplane.vetoes(ActiveGame::Wt));
+    }
 }

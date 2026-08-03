@@ -35,18 +35,20 @@ pub fn set_monitor_collapsed(v: bool) {
 }
 
 // Тот же приём, что и у CURRENT_LANG (i18n.rs) — AtomicU8, а не AtomicBool,
-// потому что GameOverride трёхвариантный. Читается воркерами (sim/worker.rs,
-// wt_link/worker.rs) на каждом тике арбитража — дешёвый enum-матч, не
-// требующий доступа к UiState. Заменяет собой старый WT_ENABLED/wt_enabled()
-// (ручной чекбокс "War Thunder") — единственный источник истины теперь этот
-// 3-вариантный оверрайд, старый bool остался только как поле SettingsFile
-// для миграции (см. migrate_wt_enabled ниже).
-static GAME_OVERRIDE: AtomicU8 = AtomicU8::new(0); // 0=Auto,1=ForceMsfs,2=ForceWt
+// потому что GameOverride четырёхвариантный. Читается воркерами
+// (sim/worker.rs, wt_link/worker.rs, а с этапа 3 — и xp_link/worker.rs) на
+// каждом тике арбитража — дешёвый enum-матч, не требующий доступа к UiState.
+// Заменяет собой старый WT_ENABLED/wt_enabled() (ручной чекбокс "War
+// Thunder") — единственный источник истины теперь этот оверрайд, старый bool
+// остался только как поле SettingsFile для миграции (см. migrate_wt_enabled
+// ниже).
+static GAME_OVERRIDE: AtomicU8 = AtomicU8::new(0); // 0=Auto,1=ForceMsfs,2=ForceWt,3=ForceXplane
 
 pub fn game_override() -> GameOverride {
     match GAME_OVERRIDE.load(Ordering::Relaxed) {
         1 => GameOverride::ForceMsfs,
         2 => GameOverride::ForceWt,
+        3 => GameOverride::ForceXplane,
         _ => GameOverride::Auto,
     }
 }
@@ -56,6 +58,7 @@ pub fn set_game_override(v: GameOverride) {
         GameOverride::Auto => 0,
         GameOverride::ForceMsfs => 1,
         GameOverride::ForceWt => 2,
+        GameOverride::ForceXplane => 3,
     };
     GAME_OVERRIDE.store(raw, Ordering::Relaxed);
 }

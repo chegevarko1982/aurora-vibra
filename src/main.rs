@@ -13,6 +13,7 @@ use aurora_vibra::{
     sim::sim_worker,
     ui::{Tab, UiState},
     wt_link::{vars::WtVars, wt_worker},
+    xp_link::xp_worker,
 };
 
 use anyhow::Result;
@@ -178,6 +179,43 @@ fn main() -> Result<()> {
                 profile_state_c,
                 game_c,
                 recording_c,
+            )
+        });
+    }
+
+    {
+        // X-Plane переиспользует ОБЩИЙ с MSFS `last_vars` (не заводит свой,
+        // в отличие от WT выше) — оба конвейера производят один и тот же тип
+        // `crate::FlightVars` (см. xp_link::vars::to_flight_vars) и питают им
+        // один и тот же `RumbleEngine`, а владеть HID-каналом/GUI одновременно
+        // они всё равно не могут (см. `crate::game_state::GameSlot` — липкое
+        // владение), так что коллизии записи в один Mutex не возникает: в
+        // каждый момент времени только владелец слота пишет в `last_vars`,
+        // остальные конвейеры зануляют его же при потере владения.
+        let last_vars_c = last_vars.clone();
+        let tx_hid_c = tx_hid.clone();
+        let logs = logs.clone();
+        let cfg = config.clone();
+        let effects_c = effects.clone();
+        let hold_c = hold.clone();
+        let status_c = status.clone();
+        let ac_title = aircraft_title.clone();
+        let aircraft_profiles_c = aircraft_profiles.clone();
+        let profile_state_c = profile_state.clone();
+        let game_c = GameSlot::new(active_game.clone());
+        thread::spawn(move || {
+            xp_worker(
+                last_vars_c,
+                tx_hid_c,
+                logs,
+                cfg,
+                effects_c,
+                hold_c,
+                status_c,
+                ac_title,
+                aircraft_profiles_c,
+                profile_state_c,
+                game_c,
             )
         });
     }

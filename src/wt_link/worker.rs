@@ -30,7 +30,7 @@ use crate::wt_link::recorder::SessionRecorder;
 use crate::wt_link::rumble::WtRumbleState;
 use crate::wt_link::vars::{self, WtVars};
 use crate::wt_link::weapon_profiles;
-use crate::{ActiveGame, ConfigShared, EffectsShared, GameOverride, HidCmd, LogBuffer, SimStatus};
+use crate::{ActiveGame, ConfigShared, EffectsShared, HidCmd, LogBuffer, SimStatus};
 
 /// Ритм опроса /state и /indicators, пока WT жив — 20 Гц, как дефолт
 /// recon-инструмента (wt_probe/cli.rs) и как частота отправки HID в
@@ -95,9 +95,10 @@ pub fn wt_worker(
         let ok = state.is_ok() && indicators.is_ok();
 
         // Форс-оверрайд встроен в тот же арбитраж, не отдельная ветка: если
-        // пользователь прижал MSFS, WT ведёт себя как "не жив" независимо от
-        // реальной живости — release, не try_claim.
-        let vetoed = crate::settings::game_override() == GameOverride::ForceMsfs;
+        // пользователь прижал другую игру (MSFS или X-Plane), WT ведёт себя
+        // как "не жив" независимо от реальной живости — release, не
+        // try_claim. См. GameOverride::vetoes в types.rs.
+        let vetoed = crate::settings::game_override().vetoes(ActiveGame::Wt);
         let alive = liveness.observe(ok, Instant::now());
         let owns = if alive && !vetoed {
             game.try_claim(ActiveGame::Wt)
