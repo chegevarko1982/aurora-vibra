@@ -1,5 +1,26 @@
 # Changelog
 
+## v4.3.0-rc1
+
+Release candidate — not distributed through the in-app auto-updater; download it manually from the GitHub Releases page if you want to test it.
+
+**New:**
+- **X-Plane 12 support.** A third simulator link, alongside MSFS and War Thunder. Telemetry arrives over X-Plane's built-in RREF protocol on UDP port 49000 — no plugin, no SDK, nothing copied into `Resources/plugins`. X-Plane drives the same eleven effects and the same settings as MSFS: it is wired in as a second telemetry source for the existing effects engine, not as a separate feature set, so anything tuned for one simulator carries across to the other.
+- Active-game detection and the manual override in **Options** now cover three simulators instead of two.
+- X-Plane runs a self-check a few seconds after the first telemetry arrives and logs every dataref that never reported a value — X-Plane silently ignores subscriptions to names it does not know, which would otherwise surface only as an effect that quietly never fires.
+- War Thunder: new **Overspeed (Vne)** effect, driven by a per-vehicle Vne table covering ~1300 vehicles, with the threshold lowered according to flap position.
+- War Thunder: **Gear Overspeed** split out as its own effect with an independent (narrower) speed window, so exceeding Vlo is felt distinctly from exceeding Vne.
+- War Thunder: built-in session recorder (**Options → record session**) captures raw telemetry for tuning and regression tests without running the separate `wt_probe` tool.
+
+**Fixes:**
+- War Thunder: on aircraft with no usable `weapon1..4` trigger keys, the ammo-based firing fallback always reported Weapon 1, leaving the second weapon group silent on aircraft carrying two ammunition types. The fallback now clusters counters into the two weapon groups independently.
+- War Thunder: rocket fire is routed to both weapon effects rather than one.
+- The non-Windows build was broken: `sim::sim_worker`'s stub signature had drifted from the Windows version and was missing its `GameSlot` parameter. This affected contributors and the Docker development image, not the shipped Windows build.
+
+**Notes:**
+- X-Plane support has **not yet been validated against a running simulator**. The dataref names and the landing-gear compression constant are best-effort and expected to need adjustment — this is the main reason this build is a release candidate. MSFS and War Thunder code paths are untouched by the X-Plane work.
+- The stall/AoA buffet profile for War Thunder still uses Bf 109 F-4 aerodynamic data applied to every aircraft, pending per-aircraft profiles.
+
 ## v4.2.0-rc1
 
 Release candidate — not distributed through the in-app auto-updater (see note below); download it manually from the GitHub Releases page if you want to test it.

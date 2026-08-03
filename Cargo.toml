@@ -1,12 +1,12 @@
 [package]
 name = "aurora_vibra"
-version = "4.2.0-rc1"
+version = "4.3.0-rc1"
 edition = "2024"
 # edition 2024 требует 1.85, let-chains в src/updater.rs — 1.88.
 rust-version = "1.88"
 build = "src/build.rs"
 default-run = "aurora-vibra"  # Оставляем основное приложение
-description = "Tactile feedback (force feedback / rumble) and telemetry utility for Microsoft Flight Simulator"
+description = "Tactile feedback (force feedback / rumble) and telemetry utility for Microsoft Flight Simulator, X-Plane 12 and War Thunder"
 authors = ["chegevarko1982"]
 repository = "https://github.com/chegevarko1982/aurora-vibra"
 license = "MIT"
