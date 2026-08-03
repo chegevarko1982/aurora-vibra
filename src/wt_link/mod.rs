@@ -17,6 +17,8 @@ pub mod aero_profiles;
 #[cfg(feature = "app")]
 pub mod ammo;
 #[cfg(feature = "app")]
+pub mod overspeed_profiles;
+#[cfg(feature = "app")]
 pub mod recorder;
 #[cfg(feature = "app")]
 pub mod rumble;

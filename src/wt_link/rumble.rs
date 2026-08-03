@@ -26,6 +26,7 @@ use crate::types::{GunPreset, WtConfig};
 use crate::EffectsSnapshot;
 
 use super::aero_profiles::{self, StallProfile};
+use super::overspeed_profiles;
 use super::vars::WtVars;
 
 /// Жёсткий потолок силы break-импульса (см. `BREAK_IMPULSE_PEAK_MULTIPLIER`
@@ -877,6 +878,33 @@ impl WtRumbleState {
         if dt_.stall.enable_throttle {
             throttle_left += stall_term;
             throttle_right += stall_term;
+        }
+
+        // --- Overspeed (Vne) ---
+        // Порог берётся точным совпадением по имени борта из таблицы
+        // overspeed_profiles (см. модуль) — в отличие от stall, фолбэка на
+        // "усреднённый" борт нет: таблица покрывает практически весь ростер,
+        // отсутствие записи = эффект молчит.
+        let overspeed_term = if cfg.overspeed_enabled {
+            overspeed_profiles::vne_kmh_for(&vars.vehicle_type)
+                .map(|vne| {
+                    overspeed_profiles::intensity(
+                        vars.ias_kmh,
+                        vne as f64,
+                        cfg.overspeed_ceiling as f64,
+                    )
+                })
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        effects.wt_overspeed_active = overspeed_term > 0.0;
+        if dt_.overspeed.enable_joystick {
+            joystick += overspeed_term;
+        }
+        if dt_.overspeed.enable_throttle {
+            throttle_left += overspeed_term;
+            throttle_right += overspeed_term;
         }
 
         // --- Engine Start/Stop ---

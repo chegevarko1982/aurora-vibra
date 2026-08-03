@@ -2239,6 +2239,37 @@ impl eframe::App for UiState {
                                             cfg.wt.stall_enabled = stall_enabled;
                                         }
 
+                                        // Overspeed (Vne) — таблица порогов на ~1300 бортов,
+                                        // см. wt_link::overspeed_profiles.
+                                        {
+                                            let mut overspeed_enabled = cfg.wt.overspeed_enabled;
+                                            let active = self
+                                                .effects
+                                                .wt_overspeed_active
+                                                .load(Ordering::Relaxed);
+                                            let col = &mut *ui;
+                                            UiState::effect_card(
+                                                col,
+                                                overspeed_enabled,
+                                                active,
+                                                |ui| {
+                                                    UiState::effect_row_percent_hinted(
+                                                        ui,
+                                                        t.name_wt_overspeed,
+                                                        &mut cfg.wt.overspeed_ceiling,
+                                                        80.0,
+                                                        &mut overspeed_enabled,
+                                                        active,
+                                                        &mut _changed,
+                                                        Some(t.hover_wt_overspeed),
+                                                        &mut cfg.wt.device_targets.overspeed,
+                                                        t,
+                                                    );
+                                                },
+                                            );
+                                            cfg.wt.overspeed_enabled = overspeed_enabled;
+                                        }
+
                                         // Flaps
                                         {
                                             let mut flaps_enabled = cfg.wt.flaps_enabled;
