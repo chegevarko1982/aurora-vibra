@@ -17,9 +17,13 @@ pub mod aero_profiles;
 #[cfg(feature = "app")]
 pub mod ammo;
 #[cfg(feature = "app")]
+pub mod recorder;
+#[cfg(feature = "app")]
 pub mod rumble;
 #[cfg(feature = "app")]
 pub mod vars;
+#[cfg(feature = "app")]
+pub mod weapon_profiles;
 
 #[cfg(all(windows, feature = "app"))]
 mod worker;

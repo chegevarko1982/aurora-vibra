@@ -24,6 +24,7 @@ pub fn wt_worker(
     _aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
     _profile_state: Arc<Mutex<ProfileState>>,
     _game: GameSlot,
+    _recording: Arc<AtomicBool>,
 ) {
     // Non-Windows stub: HID/War Thunder hardware pipeline is unavailable.
 }

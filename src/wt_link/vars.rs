@@ -24,8 +24,20 @@ pub struct WtVars {
     /// бортов/комплектаций API почему-то отдаёт флаг спуска не в weapon1/2,
     /// а в weapon3/4 (живая находка 29.07.2026, A6M3 Zero: в `/indicators`
     /// для этого борта весь полёт нет ключей weapon1/weapon2 вообще, только
-    /// weapon3) — поэтому ниже, в `parse`, они склеены через OR с
-    /// соответствующим "чётным"/"нечётным" полем, а не читаются по одному.
+    /// weapon3) — поэтому ниже, в `parse`, weapon3 склеен через OR с weapon1,
+    /// а weapon4 — с weapon2.
+    ///
+    /// `weapon3` дополнительно склеен через OR ещё и в `weapon2_firing`
+    /// (не только в `weapon1_firing`) — по наблюдению пользователя это слот
+    /// ракет, а не альтернативный канал пулемётов/пушки; при пуске ракет
+    /// хотим сразу оба тактильных эффекта (джойстик + оба мотора throttle,
+    /// см. `rumble.rs`), а не только тот, что обычно достаётся weapon1.
+    /// Подтверждённого записью случая с реальным пуском ракет пока нет
+    /// (см. `wt_probe_sessions/session_20260803_095526.jsonl`, p-47d-28:
+    /// weapon3 присутствовал, но за сессию ни разу не сработал) — если
+    /// окажется, что на каком-то борту weapon3 на деле несёт обычный
+    /// пулемётный/пушечный сигнал (как этот же приём уже используется для
+    /// weapon1 на A6M3), эта строка ошибочно задвоит эффект туда же.
     pub weapon1_firing: bool,
     pub weapon2_firing: bool,
     /// `/state`."flaps, %" — 0..100, как `FlightVars::flaps_pct` в MSFS.
@@ -95,11 +107,16 @@ fn as_f64(v: Option<&Value>) -> f64 {
 /// самонейтрализуется в 0.0/false — тот же приём, что и в MSFS-парсинге
 /// (sim/parse.rs) для L-var'ов, которых нет на конкретном борту.
 pub fn parse(t: f64, state: &Value, indicators: &Value) -> WtVars {
+    // weapon3 = ракеты (см. doc-комментарий у WtVars::weapon1_firing) — идёт
+    // сразу в оба флага, поэтому считаем один раз.
+    let rockets_firing = as_bool_flag(indicators.get("weapon3"));
     WtVars {
         t,
         in_mission: state.get("valid").and_then(Value::as_bool).unwrap_or(false),
-        weapon1_firing: as_bool_flag(indicators.get("weapon1")) || as_bool_flag(indicators.get("weapon3")),
-        weapon2_firing: as_bool_flag(indicators.get("weapon2")) || as_bool_flag(indicators.get("weapon4")),
+        weapon1_firing: as_bool_flag(indicators.get("weapon1")) || rockets_firing,
+        weapon2_firing: as_bool_flag(indicators.get("weapon2"))
+            || as_bool_flag(indicators.get("weapon4"))
+            || rockets_firing,
         flaps_pct: as_f64(state.get("flaps, %")),
         gear_pct: as_f64(state.get("gear, %")),
         weapon1_ammo: None,
@@ -138,19 +155,25 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_weapon3_4_when_weapon1_2_keys_absent() {
-        // Живая находка 29.07.2026 (A6M3 Zero): `/indicators` для этого борта
-        // весь полёт не содержал ключей weapon1/weapon2 вообще, только
-        // weapon3 — без fallback'а стрельба была бы не видна ни в эффекте,
-        // ни в телеметрии, хотя борт реально стрелял.
-        let indicators = json!({"weapon3": 1.0});
-        let vars = parse(0.0, &json!({}), &indicators);
-        assert!(vars.weapon1_firing);
-        assert!(!vars.weapon2_firing);
-
+    fn falls_back_to_weapon4_when_weapon2_key_absent() {
         let indicators = json!({"weapon4": 1.0});
         let vars = parse(0.0, &json!({}), &indicators);
         assert!(!vars.weapon1_firing);
+        assert!(vars.weapon2_firing);
+    }
+
+    #[test]
+    fn weapon3_rockets_trigger_both_weapon1_and_weapon2_effects() {
+        // weapon3 = ракеты (пользовательское наблюдение, не датамайн): пуск
+        // ракет должен давать оба тактильных эффекта разом (джойстик +
+        // оба мотора throttle, см. rumble.rs), а не только тот, что обычно
+        // достаётся weapon1. Это заодно сохраняет старое поведение A6M3
+        // (живая находка 29.07.2026: у этого борта нет ключей weapon1/2
+        // вообще, только weapon3) — там weapon3 всегда стоит на 0.0, так что
+        // задвоение эффекта для него на практике не наблюдается.
+        let indicators = json!({"weapon3": 1.0});
+        let vars = parse(0.0, &json!({}), &indicators);
+        assert!(vars.weapon1_firing);
         assert!(vars.weapon2_firing);
     }
 

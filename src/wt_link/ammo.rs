@@ -24,6 +24,41 @@
 //! в 1 тик счётчик пушки (ammo_counter1/4) ошибочно приписывался
 //! пулемётам (weapon1), хотя те в этот момент не стреляли; порог в 3 тика
 //! эту сессию учит чисто (weapon1→{counter2,3}, weapon2→{counter1,4}).
+//!
+//! ## Fallback для бортов без единого ключа `weapon1..weapon4`
+//!
+//! На части бортов (подтверждено записями) API вообще не шлёт ни одного
+//! булевого ключа `weapon1..weapon4` — единственный сигнал стрельбы это
+//! убывание похожих на боеприпасы полей (`infer_firing_from_ammo_sum`).
+//! Учитель `weapon1_keys`/`weapon2_keys` выше для этой ветки не годится
+//! в принципе: он заполняется в `observe()` по соло-тикам от УЖЕ готовых
+//! булевых флагов `weapon1_firing`/`weapon2_firing`, а раз таких ключей в
+//! API нет, эти флаги никогда не становятся `true`, и счётчики соло-тиков
+//! (`weapon1_solo_ticks`/`weapon2_solo_ticks`) никогда не растут.
+//!
+//! Поэтому `infer_firing_from_ammo_sum` ведёт свой собственный, полностью
+//! автономный 2-кластерный учитель — без внешней истины о том, кто
+//! стреляет, определяем это по паттерну совместного убывания ключей друг с
+//! другом. Первое же убывание любых полей сразу (без задержки — иначе
+//! борт с одним-единственным типом боеприпасов вообще никогда бы не
+//! репортил стрельбу) становится "базовым" кластером (`fallback_bucket_a`,
+//! репортится как weapon1 по умолчанию). Если позже появляется набор
+//! ключей, убывающий БЕЗ участия базового кластера несколько тиков подряд
+//! (`MIN_SOLO_TICKS`, тот же порог и то же обоснование, что выше), это
+//! закрепляется как второй кластер (`fallback_bucket_b`, weapon2). Ключи,
+//! убывающие ВМЕСТЕ с уже известным кластером, сразу присоединяются к нему
+//! (тот же ствол/группа стволов), а не считаются кандидатом на отдельное
+//! оружие.
+//!
+//! `set_weapon_capacity_hint` — необязательная подсказка ожидаемой ёмкости
+//! боекомплекта по борту (из статической таблицы `weapon_profiles`,
+//! перенесённой из датамайн-CSV). Она НЕ создаёт кластеры и не подменяет
+//! живой сигнал — только один раз, когда оба кластера уже сформированы,
+//! выбирает, какой из них назвать weapon1, а какой weapon2, по ближайшему
+//! совпадению стартовой суммы кластера с ожидаемой ёмкостью. На бортах без
+//! единого поля боеприпасов вообще (например, известный пробел телеметрии
+//! A6M3 Zero) кластеры не формируются никогда — никакая CSV-подсказка это
+//! не исправит, сигнала для неё просто нет.
 
 use std::collections::{HashMap, HashSet};
 
@@ -54,7 +89,16 @@ fn is_ammo_like_key(key: &str) -> bool {
     AMMO_KEYWORDS.iter().any(|kw| key.contains(kw))
 }
 
-#[derive(Debug, Default)]
+/// Результат `infer_firing_from_ammo_sum` за один тик — оба поля
+/// независимы и могут быть `true` одновременно (игрок реально жмёт оба
+/// спуска разом, это подтверждено записанными сессиями).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FallbackFiring {
+    pub weapon1: bool,
+    pub weapon2: bool,
+}
+
+#[derive(Debug)]
 pub struct AmmoTracker {
     last_values: HashMap<String, f64>,
     weapon1_keys: HashSet<String>,
@@ -62,6 +106,51 @@ pub struct AmmoTracker {
     weapon1_solo_ticks: u32,
     weapon2_solo_ticks: u32,
     previous_ammo_sum: Option<f64>,
+
+    // Состояние автономного 2-кластерного учителя fallback-ветки
+    // (`infer_firing_from_ammo_sum`) — намеренно отдельное от полей выше,
+    // чтобы не путать два независимых механизма (см. doc-комментарий
+    // модуля).
+    fallback_last_values: HashMap<String, f64>,
+    fallback_bucket_a: HashSet<String>,
+    fallback_bucket_b: HashSet<String>,
+    fallback_pending: HashSet<String>,
+    fallback_pending_ticks: u32,
+    fallback_bucket_a_starting_total: Option<f64>,
+    fallback_bucket_b_starting_total: Option<f64>,
+    /// Какой из двух кластеров сейчас репортится как weapon1. По умолчанию
+    /// `true` (кластер A = weapon1, "первый увиденный" — соглашение,
+    /// сохраняющее старое мгновенное поведение для борта с одним типом
+    /// боеприпасов). Меняется не более одного раза за сессию, см.
+    /// `set_weapon_capacity_hint`.
+    bucket_a_is_weapon1: bool,
+    weapon_capacity_hint_applied: bool,
+    weapon_capacity_hint: (Option<f64>, Option<f64>),
+}
+
+impl Default for AmmoTracker {
+    fn default() -> Self {
+        Self {
+            last_values: HashMap::new(),
+            weapon1_keys: HashSet::new(),
+            weapon2_keys: HashSet::new(),
+            weapon1_solo_ticks: 0,
+            weapon2_solo_ticks: 0,
+            previous_ammo_sum: None,
+            fallback_last_values: HashMap::new(),
+            fallback_bucket_a: HashSet::new(),
+            fallback_bucket_b: HashSet::new(),
+            fallback_pending: HashSet::new(),
+            fallback_pending_ticks: 0,
+            fallback_bucket_a_starting_total: None,
+            fallback_bucket_b_starting_total: None,
+            // Не через #[derive(Default)] нарочно: derive дал бы `false`,
+            // а нужно "кластер A по умолчанию — weapon1".
+            bucket_a_is_weapon1: true,
+            weapon_capacity_hint_applied: false,
+            weapon_capacity_hint: (None, None),
+        }
+    }
 }
 
 impl AmmoTracker {
@@ -155,32 +244,165 @@ impl AmmoTracker {
         self.remaining(indicators, &self.weapon2_keys)
     }
 
+    /// Однократная (за сессию) подсказка ожидаемой ёмкости боекомплекта по
+    /// weapon1/weapon2 из статической таблицы (`weapon_profiles`). Нужна
+    /// только чтобы выбрать, какой из двух уже самостоятельно выученных
+    /// `infer_firing_from_ammo_sum`-кластеров назвать weapon1, а какой —
+    /// weapon2 — никогда не подменяет и не опережает живой сигнал. Вызов
+    /// после того, как подсказка уже применена в этой сессии — no-op.
+    pub fn set_weapon_capacity_hint(&mut self, weapon1_capacity: Option<f64>, weapon2_capacity: Option<f64>) {
+        if self.weapon_capacity_hint_applied {
+            return;
+        }
+        self.weapon_capacity_hint = (weapon1_capacity, weapon2_capacity);
+    }
+
     /// Фолбэк для бортов без единого ключа `weapon1..weapon4` в
     /// `/indicators`: суммирует все числовые поля, похожие по имени на
-    /// боеприпасы (см. `is_ammo_like_key`), и считает стрельбу по убыванию
-    /// суммы между тиками. Рост суммы (довооружение/респавн) просто
-    /// переустанавливает базу, не сигнализируя стрельбу. Вызывать только
-    /// когда вызывающий код уже убедился, что ни одного триггер-ключа нет.
-    pub fn infer_firing_from_ammo_sum(&mut self, indicators: &Value) -> bool {
+    /// боеприпасы (см. `is_ammo_like_key`), и по убыванию суммы между
+    /// тиками определяет, какой из двух самостоятельно выученных
+    /// кластеров ключей (см. doc-комментарий модуля) стрелял — а не только
+    /// сам факт стрельбы, как раньше. Рост суммы (довооружение/респавн)
+    /// просто переустанавливает базу, не сигнализируя стрельбу и не
+    /// трогая уже выученные кластеры. Вызывать только когда вызывающий
+    /// код уже убедился, что ни одного триггер-ключа нет.
+    pub fn infer_firing_from_ammo_sum(&mut self, indicators: &Value) -> FallbackFiring {
         let Some(obj) = indicators.as_object() else {
-            return false;
+            return FallbackFiring::default();
         };
-        let mut sum = 0.0;
-        let mut found_any = false;
+
+        let mut current: HashMap<String, f64> = HashMap::new();
         for (key, value) in obj {
             if !is_ammo_like_key(key) {
                 continue;
             }
-            let Some(n) = value.as_f64() else { continue };
-            sum += n;
-            found_any = true;
+            if let Some(n) = value.as_f64() {
+                current.insert(key.clone(), n);
+            }
         }
-        if !found_any {
-            return false;
+        if current.is_empty() {
+            return FallbackFiring::default();
         }
-        let fired = self.previous_ammo_sum.is_some_and(|prev| sum < prev - SUM_DECREASE_EPS);
+
+        let sum: f64 = current.values().sum();
+        let prev_sum = self.previous_ammo_sum;
         self.previous_ammo_sum = Some(sum);
-        fired
+        let sum_decreased = prev_sum.is_some_and(|prev| sum < prev - SUM_DECREASE_EPS);
+
+        if !sum_decreased {
+            // Первый тик, рост суммы (довооружение/респавн) или отсутствие
+            // изменений — просто перебазируемся, кластеры не трогаем.
+            self.fallback_last_values = current;
+            return FallbackFiring::default();
+        }
+
+        let decreased: HashSet<String> = current
+            .iter()
+            .filter_map(|(k, v)| {
+                let prev = self.fallback_last_values.get(k.as_str())?;
+                (*v < prev - SUM_DECREASE_EPS).then(|| k.clone())
+            })
+            .collect();
+
+        if decreased.is_empty() {
+            // Сумма упала за счёт множества мелких дробных изменений ниже
+            // порога на каждый отдельный ключ — редкий шум, не считаем это
+            // стрельбой ни одного оружия.
+            self.fallback_last_values = current;
+            return FallbackFiring::default();
+        }
+
+        let a_hit = !decreased.is_disjoint(&self.fallback_bucket_a);
+        let unassigned: HashSet<String> = decreased
+            .iter()
+            .filter(|k| !self.fallback_bucket_a.contains(*k) && !self.fallback_bucket_b.contains(*k))
+            .cloned()
+            .collect();
+
+        if self.fallback_bucket_a.is_empty() {
+            // Самое первое убывание за всю сессию — не с чем сравнивать,
+            // сразу и без задержки принимаем весь убывший набор за
+            // "базовый" кластер (сохраняет мгновенный отклик борта с одним
+            // типом боеприпасов — как и было в старой версии, до этого
+            // фикса).
+            self.fallback_bucket_a = decreased.clone();
+        } else if !unassigned.is_empty() {
+            if a_hit {
+                // Новые ключи убыли одновременно с уже известными ключами
+                // bucket_a — то же оружие (например, ещё один счётчик того
+                // же ствола), присоединяем сразу, без ожидания.
+                self.fallback_bucket_a.extend(unassigned);
+                self.fallback_pending.clear();
+                self.fallback_pending_ticks = 0;
+            } else {
+                // Убыли без участия bucket_a — кандидат на второе оружие,
+                // подтверждаем только после нескольких соло-тиков подряд
+                // (та же защита от шума на границе тиков, что и у
+                // основного flag-based учителя выше).
+                if unassigned == self.fallback_pending {
+                    self.fallback_pending_ticks += 1;
+                } else {
+                    self.fallback_pending = unassigned.clone();
+                    self.fallback_pending_ticks = 1;
+                }
+                if self.fallback_pending_ticks >= MIN_SOLO_TICKS {
+                    self.fallback_bucket_b = std::mem::take(&mut self.fallback_pending);
+                    self.fallback_pending_ticks = 0;
+                }
+            }
+        } else {
+            self.fallback_pending.clear();
+            self.fallback_pending_ticks = 0;
+        }
+
+        // Стартовую сумму кластера ловим по значениям ДО этого тика
+        // (`fallback_last_values`) — ближе к неизрасходованной ёмкости,
+        // чем уже уменьшившиеся значения текущего тика.
+        if self.fallback_bucket_a_starting_total.is_none() && !self.fallback_bucket_a.is_empty() {
+            let total: f64 = self
+                .fallback_bucket_a
+                .iter()
+                .filter_map(|k| self.fallback_last_values.get(k))
+                .sum();
+            self.fallback_bucket_a_starting_total = Some(total);
+        }
+        if self.fallback_bucket_b_starting_total.is_none() && !self.fallback_bucket_b.is_empty() {
+            let total: f64 = self
+                .fallback_bucket_b
+                .iter()
+                .filter_map(|k| self.fallback_last_values.get(k))
+                .sum();
+            self.fallback_bucket_b_starting_total = Some(total);
+        }
+
+        if !self.weapon_capacity_hint_applied
+            && let (Some(a_total), Some(b_total), (Some(w1), Some(w2))) = (
+                self.fallback_bucket_a_starting_total,
+                self.fallback_bucket_b_starting_total,
+                self.weapon_capacity_hint,
+            )
+        {
+            let dist_as_is = (a_total - w1).abs() + (b_total - w2).abs();
+            let dist_swapped = (a_total - w2).abs() + (b_total - w1).abs();
+            self.bucket_a_is_weapon1 = dist_as_is <= dist_swapped;
+            self.weapon_capacity_hint_applied = true;
+        }
+
+        self.fallback_last_values = current;
+
+        // "Кластер B" — единственное, что требует подтверждения; всё
+        // остальное убывшее (включая ещё не подтверждённых кандидатов) по
+        // умолчанию считается тем же "первым" оружием — так борт с одним
+        // типом боеприпасов продолжает мгновенно репортить стрельбу, как и
+        // раньше, а не ждёт появления второго типа.
+        let fired_default = decreased.iter().any(|k| !self.fallback_bucket_b.contains(k));
+        let fired_b = decreased.iter().any(|k| self.fallback_bucket_b.contains(k));
+
+        if self.bucket_a_is_weapon1 {
+            FallbackFiring { weapon1: fired_default, weapon2: fired_b }
+        } else {
+            FallbackFiring { weapon1: fired_b, weapon2: fired_default }
+        }
     }
 }
 
@@ -280,14 +502,22 @@ mod tests {
     #[test]
     fn infer_firing_first_call_only_establishes_baseline() {
         let mut t = AmmoTracker::new();
-        assert!(!t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 100})));
+        assert_eq!(
+            t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 100})),
+            FallbackFiring::default()
+        );
     }
 
     #[test]
     fn infer_firing_from_ammo_sum_decrease() {
         let mut t = AmmoTracker::new();
         t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 100}));
-        assert!(t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 98})));
+        // Единственный когда-либо виденный ammo-подобный ключ — сразу и без
+        // задержки становится "базовым" кластером (weapon1 по умолчанию).
+        assert_eq!(
+            t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 98})),
+            FallbackFiring { weapon1: true, weapon2: false }
+        );
     }
 
     #[test]
@@ -295,17 +525,26 @@ mod tests {
         let mut t = AmmoTracker::new();
         t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 10}));
         // респавн/довооружение — сумма выросла, стрельбы быть не должно
-        assert!(!t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 200})));
+        assert_eq!(
+            t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 200})),
+            FallbackFiring::default()
+        );
         // и следующий тик сравнивается уже с новой базой (200), а не старой (10):
         // без изменения от новой базы стрельбы тоже быть не должно
-        assert!(!t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 200})));
+        assert_eq!(
+            t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 200})),
+            FallbackFiring::default()
+        );
     }
 
     #[test]
     fn infer_firing_no_matching_keys_never_fires() {
         let mut t = AmmoTracker::new();
         t.infer_firing_from_ammo_sum(&json!({"speed": 500}));
-        assert!(!t.infer_firing_from_ammo_sum(&json!({"speed": 100})));
+        assert_eq!(
+            t.infer_firing_from_ammo_sum(&json!({"speed": 100})),
+            FallbackFiring::default()
+        );
     }
 
     #[test]
@@ -314,6 +553,146 @@ mod tests {
         // Только `_lamp`-ключ без основного счётчика — не считается вовсе
         // (found_any остаётся false), а не просто дублирует значение.
         t.infer_firing_from_ammo_sum(&json!({"ammo_counter1_lamp": 60}));
-        assert!(!t.infer_firing_from_ammo_sum(&json!({"ammo_counter1_lamp": 0})));
+        assert_eq!(
+            t.infer_firing_from_ammo_sum(&json!({"ammo_counter1_lamp": 0})),
+            FallbackFiring::default()
+        );
+    }
+
+    #[test]
+    fn infer_firing_routes_second_independent_ammo_key_to_weapon2() {
+        // Прямой регрессионный тест на баг: второй независимый ammo-ключ
+        // после обучения должен репортиться как weapon2 — раньше это было
+        // структурно невозможно (fallback всегда писал в weapon1).
+        let mut t = AmmoTracker::new();
+        let mut n = 100.0;
+        t.infer_firing_from_ammo_sum(&json!({"ammo_a": n}));
+        for _ in 0..MIN_SOLO_TICKS {
+            n -= 1.0;
+            let f = t.infer_firing_from_ammo_sum(&json!({"ammo_a": n}));
+            assert_eq!(f, FallbackFiring { weapon1: true, weapon2: false });
+        }
+
+        // Заводим базовую точку отсчёта для ammo_b до того, как он начнёт
+        // убывать (реалистично — оба счётчика телеметрии присутствуют
+        // каждый тик, меняется только один).
+        let mut m = 50.0;
+        t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
+
+        let mut last = FallbackFiring::default();
+        for _ in 0..MIN_SOLO_TICKS {
+            m -= 1.0;
+            last = t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
+        }
+        assert_eq!(last, FallbackFiring { weapon1: false, weapon2: true });
+    }
+
+    #[test]
+    fn infer_firing_keeps_co_decreasing_multi_counter_group_together() {
+        let mut t = AmmoTracker::new();
+        let (mut n1, mut n2) = (100.0, 200.0);
+        t.infer_firing_from_ammo_sum(&json!({"ammo_a1": n1, "ammo_a2": n2}));
+        for _ in 0..MIN_SOLO_TICKS {
+            n1 -= 1.0;
+            n2 -= 1.0;
+            let f = t.infer_firing_from_ammo_sum(&json!({"ammo_a1": n1, "ammo_a2": n2}));
+            assert_eq!(f, FallbackFiring { weapon1: true, weapon2: false });
+        }
+    }
+
+    #[test]
+    fn infer_firing_reports_simultaneous_fire_on_both_weapons() {
+        let mut t = AmmoTracker::new();
+        let mut n = 100.0;
+        t.infer_firing_from_ammo_sum(&json!({"ammo_a": n}));
+        for _ in 0..MIN_SOLO_TICKS {
+            n -= 1.0;
+            t.infer_firing_from_ammo_sum(&json!({"ammo_a": n}));
+        }
+        let mut m = 50.0;
+        t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
+        for _ in 0..MIN_SOLO_TICKS {
+            m -= 1.0;
+            t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
+        }
+
+        n -= 1.0;
+        m -= 1.0;
+        let f = t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
+        assert_eq!(f, FallbackFiring { weapon1: true, weapon2: true });
+    }
+
+    #[test]
+    fn infer_firing_capacity_hint_relabels_when_closer_match() {
+        let mut t = AmmoTracker::new();
+        // bucket A (первый увиденный) на деле — низкоёмкое оружие (~200),
+        // bucket B — высокоёмкое (~2000).
+        let mut a = 200.0;
+        t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a}));
+        for _ in 0..MIN_SOLO_TICKS {
+            a -= 1.0;
+            t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a}));
+        }
+        // подсказка: weapon1 = 2000-патронный пулемёт, weapon2 = 200-патронная пушка
+        t.set_weapon_capacity_hint(Some(2000.0), Some(200.0));
+
+        let mut b = 2000.0;
+        t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        let mut last = FallbackFiring::default();
+        for _ in 0..MIN_SOLO_TICKS {
+            b -= 1.0;
+            last = t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        }
+        // bucket A (cannon_ammo, ~200) теперь должен маркироваться как
+        // weapon2 — его стартовая сумма ближе к подсказанной ёмкости
+        // weapon2 (200), чем weapon1 (2000).
+        assert_eq!(last, FallbackFiring { weapon1: true, weapon2: false });
+
+        // и стрельба по cannon_ammo (bucket A) в одиночку теперь должна
+        // репортиться как weapon2, а не weapon1
+        a -= 1.0;
+        let f = t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        assert_eq!(f, FallbackFiring { weapon1: false, weapon2: true });
+    }
+
+    #[test]
+    fn infer_firing_no_capacity_hint_keeps_first_observed_as_weapon1() {
+        let mut t = AmmoTracker::new();
+        let mut a = 200.0;
+        t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a}));
+        for _ in 0..MIN_SOLO_TICKS {
+            a -= 1.0;
+            t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a}));
+        }
+        let mut b = 2000.0;
+        t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        let mut last = FallbackFiring::default();
+        for _ in 0..MIN_SOLO_TICKS {
+            b -= 1.0;
+            last = t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        }
+        // без подсказки порядок по умолчанию сохраняется: bucket A (cannon,
+        // первый увиденный) остаётся weapon1, bucket B (mg) — weapon2.
+        assert_eq!(last, FallbackFiring { weapon1: false, weapon2: true });
+    }
+
+    #[test]
+    fn infer_firing_capacity_hint_with_missing_slot_does_not_relabel() {
+        let mut t = AmmoTracker::new();
+        let mut a = 200.0;
+        t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a}));
+        for _ in 0..MIN_SOLO_TICKS {
+            a -= 1.0;
+            t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a}));
+        }
+        t.set_weapon_capacity_hint(None, Some(200.0));
+        let mut b = 2000.0;
+        t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        let mut last = FallbackFiring::default();
+        for _ in 0..MIN_SOLO_TICKS {
+            b -= 1.0;
+            last = t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
+        }
+        assert_eq!(last, FallbackFiring { weapon1: false, weapon2: true });
     }
 }

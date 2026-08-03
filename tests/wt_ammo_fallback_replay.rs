@@ -76,7 +76,8 @@ fn ammo_sum_fallback_never_misfires_on_recorded_sessions() {
             total_ticks += 1;
             if no_weapon_trigger_keys {
                 fallback_active_ticks += 1;
-                if ammo.infer_firing_from_ammo_sum(indicators) {
+                let inferred = ammo.infer_firing_from_ammo_sum(indicators);
+                if inferred.weapon1 || inferred.weapon2 {
                     fallback_inferred_firing_ticks += 1;
                 }
             }
@@ -128,6 +129,7 @@ fn ammo_sum_fallback_detects_real_gunfire_when_weapon_keys_are_stripped() {
     let mut inferred_firing_ticks = 0usize;
     let mut true_positive_ticks = 0usize;
     let mut false_positive_ticks = 0usize;
+    let mut weapon2_true_positive_ticks = 0usize;
 
     each_tick(&raw, |t, state, indicators| {
         let mut gt_vars = vars::parse(t, state, indicators);
@@ -156,12 +158,13 @@ fn ammo_sum_fallback_detects_real_gunfire_when_weapon_keys_are_stripped() {
             }
         }
         let inferred = fallback_ammo.infer_firing_from_ammo_sum(&stripped);
+        let inferred_firing = inferred.weapon1 || inferred.weapon2;
 
         ticks += 1;
         if ground_truth_firing {
             ground_truth_firing_ticks += 1;
         }
-        if inferred {
+        if inferred_firing {
             inferred_firing_ticks += 1;
             if ground_truth_firing {
                 true_positive_ticks += 1;
@@ -169,12 +172,15 @@ fn ammo_sum_fallback_detects_real_gunfire_when_weapon_keys_are_stripped() {
                 false_positive_ticks += 1;
             }
         }
+        if inferred.weapon2 && gt_vars.weapon2_firing {
+            weapon2_true_positive_ticks += 1;
+        }
     });
 
     println!(
         "[ammo_sum_fallback accuracy] ticks={ticks} ground_truth_firing_ticks={ground_truth_firing_ticks} \
          inferred_firing_ticks={inferred_firing_ticks} true_positive={true_positive_ticks} \
-         false_positive={false_positive_ticks}"
+         false_positive={false_positive_ticks} weapon2_true_positive={weapon2_true_positive_ticks}"
     );
 
     assert!(
@@ -184,6 +190,12 @@ fn ammo_sum_fallback_detects_real_gunfire_when_weapon_keys_are_stripped() {
     assert!(
         inferred_firing_ticks > 0,
         "sum-based fallback failed to detect any firing at all on a session with real gunfire"
+    );
+    assert!(
+        weapon2_true_positive_ticks > 0,
+        "fallback never routed any tick to weapon2 on a session with real weapon2 (cannon) \
+         gunfire — this is the exact bug being fixed (second weapon's ammo counter must be \
+         able to reach weapon2_firing, not just weapon1)"
     );
     // "Земля правды" здесь — сам булев флаг, а он по документированному в
     // ammo.rs поведению API иногда отпускается на 1-2 тика РАНЬШЕ, чем

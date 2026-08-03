@@ -263,6 +263,10 @@ pub struct UiState {
     // Персистится в SettingsFile, как lang/close_to_tray — см. save_global_settings.
     pub monitor_collapsed: bool,
     pub hold: Arc<AtomicBool>,
+    // Тумблер "Записывать сессию WT" (Options menu) — читается wt_worker'ом
+    // каждый тик (см. wt_link::recorder::SessionRecorder), сам факт
+    // записи/пути к файлу не хранится тут, только желаемое состояние.
+    pub recording: Arc<AtomicBool>,
 
     // "Close to tray" (Options menu): при close_requested окно прячется
     // (ViewportCommand::Visible(false)) вместо реального завершения процесса —
@@ -894,6 +898,20 @@ impl eframe::App for UiState {
                                 .changed()
                             {
                                 self.save_global_settings();
+                            }
+                            ui.separator();
+                            // Не персистится (см. UiState::recording) — читаем
+                            // текущее состояние атомика напрямую, а не из
+                            // отдельного поля UiState, чтобы не было двух
+                            // источников истины между этим чекбоксом и тем,
+                            // что реально видит wt_worker.
+                            let mut recording_now = self.recording.load(Ordering::Relaxed);
+                            if ui
+                                .checkbox(&mut recording_now, t.chk_record_wt_session)
+                                .on_hover_text(t.hover_record_wt_session)
+                                .changed()
+                            {
+                                self.recording.store(recording_now, Ordering::Relaxed);
                             }
                             ui.separator();
                             // Ручной оверрайд автоопределения активной игры.

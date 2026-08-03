@@ -67,6 +67,12 @@ fn main() -> Result<()> {
     let last_wt_vars = Arc::new(Mutex::new(None::<WtVars>));
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
+    // Тумблер "Записывать сессию WT" (меню Опции) — то же самое, что вручную
+    // запускать wt_probe, но встроено в основной воркер (см.
+    // wt_link::recorder). Не персистится в SettingsFile: сессия — разовое
+    // действие для конкретной диагностики, не долгоживущая настройка,
+    // случайно оставленная включённой между запусками была бы сюрпризом.
+    let recording = Arc::new(AtomicBool::new(false));
     let force_quit = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(aurora_vibra::SimStatus::Disconnected));
     let aircraft_title = Arc::new(Mutex::new(String::new()));
@@ -157,6 +163,7 @@ fn main() -> Result<()> {
         let aircraft_profiles_c = aircraft_profiles.clone();
         let profile_state_c = profile_state.clone();
         let game_c = GameSlot::new(active_game.clone());
+        let recording_c = recording.clone();
         thread::spawn(move || {
             wt_worker(
                 last_wt_vars_c,
@@ -170,6 +177,7 @@ fn main() -> Result<()> {
                 aircraft_profiles_c,
                 profile_state_c,
                 game_c,
+                recording_c,
             )
         });
     }
@@ -239,6 +247,7 @@ fn main() -> Result<()> {
         monitor_show_disabled: false,
         monitor_collapsed,
         hold,
+        recording,
         close_to_tray,
         active_game: active_game.clone(),
         game_override,

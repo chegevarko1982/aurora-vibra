@@ -26,8 +26,10 @@ use crate::game_state::{GameSlot, Liveness};
 use crate::profiles::ProfileState;
 use crate::wt_link::ammo::AmmoTracker;
 use crate::wt_link::http::WtClient;
+use crate::wt_link::recorder::SessionRecorder;
 use crate::wt_link::rumble::WtRumbleState;
 use crate::wt_link::vars::{self, WtVars};
+use crate::wt_link::weapon_profiles;
 use crate::{ActiveGame, ConfigShared, EffectsShared, GameOverride, HidCmd, LogBuffer, SimStatus};
 
 /// Ритм опроса /state и /indicators, пока WT жив — 20 Гц, как дефолт
@@ -55,12 +57,14 @@ pub fn wt_worker(
     aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
     profile_state: Arc<Mutex<ProfileState>>,
     game: GameSlot,
+    recording: Arc<AtomicBool>,
 ) {
     logs.push("WT: worker started, polling localhost:8111");
 
     let session_start = Instant::now();
     let mut engine = WtRumbleState::new();
     let mut ammo = AmmoTracker::new();
+    let mut recorder = SessionRecorder::new();
     let mut client: Option<WtClient> = None;
     let mut liveness = Liveness::new(GRACE_PERIOD);
     // Зануляем HID/эффекты ровно один раз на переходе владения true→false —
@@ -125,6 +129,8 @@ pub fn wt_worker(
 
         match (state, indicators) {
             (Ok(state_v), Ok(indicators_v)) => {
+                recorder.tick(recording.load(Ordering::Relaxed), t, &state_v, &indicators_v, &logs);
+
                 let mut wt_vars = vars::parse(t, &state_v, &indicators_v);
                 if !wt_vars.in_mission {
                     // В ангаре/меню может смениться борт — забываем, какие
@@ -133,6 +139,9 @@ pub fn wt_worker(
                     ammo.reset();
                 } else {
                     ammo.observe(&indicators_v, wt_vars.weapon1_firing, wt_vars.weapon2_firing);
+                    if let Some(profile) = weapon_profiles::match_weapon_profile(&wt_vars.vehicle_type) {
+                        ammo.set_weapon_capacity_hint(profile.weapon1_ammo_capacity, profile.weapon2_ammo_capacity);
+                    }
                     if ammo.weapon1_empty(&indicators_v) {
                         wt_vars.weapon1_firing = false;
                     }
@@ -148,12 +157,18 @@ pub fn wt_worker(
                     // определить по флагам вообще, и AmmoTracker::observe не
                     // может ничему обучиться (ему самому нужен истинный
                     // weapon1_firing/weapon2_firing хотя бы раз). Единственный
-                    // сигнал — убывание суммы всех похожих на боеприпасы полей.
+                    // сигнал — убывание похожих на боеприпасы полей;
+                    // infer_firing_from_ammo_sum сам разводит их по weapon1/2
+                    // (см. doc-комментарий ammo.rs) — раньше здесь всегда
+                    // писалось в weapon1, из-за чего второе оружие на бортах
+                    // с двумя типами боеприпасов молчало.
                     let no_weapon_trigger_keys = ["weapon1", "weapon2", "weapon3", "weapon4"]
                         .iter()
                         .all(|k| indicators_v.get(*k).is_none());
-                    if no_weapon_trigger_keys && ammo.infer_firing_from_ammo_sum(&indicators_v) {
-                        wt_vars.weapon1_firing = true;
+                    if no_weapon_trigger_keys {
+                        let inferred = ammo.infer_firing_from_ammo_sum(&indicators_v);
+                        wt_vars.weapon1_firing = inferred.weapon1;
+                        wt_vars.weapon2_firing = inferred.weapon2;
                     }
                 }
 
