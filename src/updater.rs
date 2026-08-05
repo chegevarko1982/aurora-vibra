@@ -403,9 +403,28 @@ fn find_new_exe_name(extracted_dir: &Path) -> Result<PathBuf> {
     Ok(exe.file_name().unwrap().into())
 }
 
+/// Имя временной копии EXE, которая и выполняет обновление.
+///
+/// Слов "update"/"setup"/"install"/"patch" в этом имени НЕТ намеренно. Windows
+/// опознаёт инсталляторы по имени файла (UAC installer detection и Program
+/// Compatibility Assistant) и вешает на такой путь слой RUNASADMIN в
+/// `HKCU\...\AppCompatFlags\Layers`. После этого CreateProcess по этому пути
+/// падает с ERROR_ELEVATION_REQUIRED, и обновление обрывалось сообщением
+/// "spawn helper: ... (os error 740)" ещё до того, как helper успевал сам
+/// разобраться, нужны ли ему вообще права администратора.
+///
+/// Смена имени попутно уводит нас с уже помеченного пути: слой в реестре
+/// привязан к конкретному пути, а не к содержимому файла.
+const HELPER_EXE_NAME: &str = "aurora-vibra-helper.exe";
+
+/// ERROR_ELEVATION_REQUIRED: CreateProcess отказывается запускать процесс, на
+/// который Windows навесила требование прав администратора. Поднять права сам
+/// CreateProcess не умеет — нужен ShellExecuteW("runas"), см. ниже.
+const ERROR_ELEVATION_REQUIRED: i32 = 740;
+
 fn copy_self_to_temp_helper(current_exe: &Path) -> Result<PathBuf> {
     let mut helper = std::env::temp_dir();
-    helper.push("aurora-vibra-updater-helper.exe");
+    helper.push(HELPER_EXE_NAME);
     fs::copy(current_exe, &helper).context("copy helper")?;
     Ok(helper)
 }
@@ -426,7 +445,26 @@ fn launch_helper_and_exit(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    let _ = cmd.spawn().context("spawn helper")?;
+    match cmd.spawn() {
+        Ok(_) => {}
+        Err(e) if e.raw_os_error() == Some(ERROR_ELEVATION_REQUIRED) => {
+            // Windows считает, что этот EXE обязан запускаться от админа, хотя
+            // на ЭТОМ шаге права не нужны: helper сначала сам проверяет, пишем
+            // ли каталог приложения, и просит UAC только если нет (см.
+            // apply_update/relaunch_self_elevated). Пробуем два пути по
+            // возрастанию неудобства для пользователя.
+            //
+            // 1. __COMPAT_LAYER=RunAsInvoker отменяет навязанное требование для
+            //    дочернего процесса — обновление проходит вообще без запроса UAC.
+            cmd.env("__COMPAT_LAYER", "RunAsInvoker");
+            if cmd.spawn().is_err() {
+                // 2. Не помогло — честно спрашиваем UAC. Права получаются выше
+                //    необходимых, но это лучше, чем оборванное обновление.
+                spawn_helper_via_uac(helper_path, app_dir, extracted_dir, exe_name)?;
+            }
+        }
+        Err(e) => return Err(anyhow::Error::new(e).context("spawn helper")),
+    }
 
     {
         let t = crate::i18n::get().strings();
@@ -435,6 +473,41 @@ fn launch_helper_and_exit(
 
     thread::sleep(Duration::from_millis(200));
     std::process::exit(0);
+}
+
+/// Запасной запуск helper'а — через ShellExecuteW("runas"), единственный путь,
+/// когда CreateProcess упёрся в ERROR_ELEVATION_REQUIRED. Helper сразу получает
+/// `--elevated`: права уже подняты, спрашивать UAC второй раз ему незачем.
+fn spawn_helper_via_uac(
+    helper_path: &Path,
+    app_dir: &Path,
+    extracted_dir: &Path,
+    exe_name: &str,
+) -> Result<()> {
+    let params = format!(
+        "--apply-update \"{}\" \"{}\" \"{}\" --elevated",
+        app_dir.display(),
+        extracted_dir.display(),
+        exe_name
+    );
+    let params_w = wide_str(&params);
+    let helper_w = wide_os(helper_path.as_os_str());
+    unsafe {
+        let h = ShellExecuteW(
+            None,
+            w!("runas"),
+            PCWSTR(helper_w.as_ptr()),
+            PCWSTR(params_w.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+        if (h.0 as isize) <= 32 {
+            let t = crate::i18n::get().strings();
+            msgbox_raw(t.upd_title_admin_required, t.upd_body_admin_required, true);
+            bail!("spawn helper: elevation required, and ShellExecuteW(runas) failed or was denied");
+        }
+    }
+    Ok(())
 }
 
 /// Runs in the helper copy. If the app directory is protected, we auto-elevate
@@ -653,6 +726,18 @@ fn wide_os(s: &OsStr) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_exe_name_avoids_installer_detection_keywords() {
+        // Регрессия: helper назывался aurora-vibra-updater-helper.exe, Windows
+        // опознавала его как инсталлятор по подстроке "update" и требовала
+        // прав администратора — CreateProcess падал с os error 740.
+        let name = HELPER_EXE_NAME.to_ascii_lowercase();
+        for kw in ["update", "setup", "install", "patch"] {
+            assert!(!name.contains(kw), "{HELPER_EXE_NAME} contains {kw:?}");
+        }
+        assert!(name.ends_with(".exe"));
+    }
 
     #[test]
     fn newer_patch_minor_and_major_are_offered() {
