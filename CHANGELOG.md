@@ -1,8 +1,8 @@
 # Changelog
 
-## v4.3.0-rc1
+## v4.3.0
 
-Release candidate — not distributed through the in-app auto-updater; download it manually from the GitHub Releases page if you want to test it.
+First stable release with three simulators. Supersedes `v4.3.0-rc1` — same code, now validated against a running X-Plane 12.
 
 **New:**
 - **X-Plane 12 support.** A third simulator link, alongside MSFS and War Thunder. Telemetry arrives over X-Plane's built-in RREF protocol on UDP port 49000 — no plugin, no SDK, nothing copied into `Resources/plugins`. X-Plane drives the same eleven effects and the same settings as MSFS: it is wired in as a second telemetry source for the existing effects engine, not as a separate feature set, so anything tuned for one simulator carries across to the other.
@@ -18,7 +18,7 @@ Release candidate — not distributed through the in-app auto-updater; download 
 - The non-Windows build was broken: `sim::sim_worker`'s stub signature had drifted from the Windows version and was missing its `GameSlot` parameter. This affected contributors and the Docker development image, not the shipped Windows build.
 
 **Notes:**
-- X-Plane support has **not yet been validated against a running simulator**. The dataref names and the landing-gear compression constant are best-effort and expected to need adjustment — this is the main reason this build is a release candidate. MSFS and War Thunder code paths are untouched by the X-Plane work.
+- X-Plane support has been validated against a running X-Plane 12 by a tester. MSFS and War Thunder code paths are untouched by the X-Plane work.
 - The stall/AoA buffet profile for War Thunder still uses Bf 109 F-4 aerodynamic data applied to every aircraft, pending per-aircraft profiles.
 
 ## v4.2.0-rc1
