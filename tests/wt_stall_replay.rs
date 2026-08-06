@@ -17,13 +17,28 @@ use aurora_vibra::wt_link::rumble::WtRumbleState;
 use aurora_vibra::wt_link::vars;
 use serde_json::Value;
 
+const SESSIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/wt_probe_sessions");
+
+/// Записанные сессии — локальные дев-захваты: они в .gitignore, весят десятки
+/// мегабайт и в репозиторий не кладутся. На CI их нет, поэтому реплей-тесты не
+/// падают, а громко пропускаются — у себя они по-прежнему гоняют полный корпус.
+fn read_session(name: &str) -> Option<String> {
+    let path = std::path::Path::new(SESSIONS_DIR).join(name);
+    match fs::read_to_string(&path) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("SKIP: no recorded session at {}", path.display());
+            None
+        }
+        Err(e) => panic!("read {}: {e}", path.display()),
+    }
+}
+
 #[test]
 fn bf109e3_session_replays_with_bf109f4_fallback_profile() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/wt_probe_sessions/session_20260728_204134.jsonl"
-    );
-    let raw = fs::read_to_string(path).expect("recorded session fixture must exist");
+    let Some(raw) = read_session("session_20260728_204134.jsonl") else {
+        return;
+    };
 
     let cfg = WtConfig::default();
     let mut engine = WtRumbleState::new();

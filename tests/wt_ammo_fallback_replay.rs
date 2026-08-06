@@ -12,6 +12,25 @@ use aurora_vibra::wt_link::ammo::AmmoTracker;
 use aurora_vibra::wt_link::vars;
 use serde_json::Value;
 
+const SESSIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/wt_probe_sessions");
+
+/// Записанные сессии — это локальные дев-захваты: они в .gitignore, весят
+/// десятки мегабайт и в репозиторий не кладутся. На CI их нет, поэтому
+/// реплей-тесты не падают, а громко пропускаются: у себя они по-прежнему
+/// гоняют полный корпус, а зелёный CI не покупается ценой отсутствующих
+/// данных.
+fn read_session(name: &str) -> Option<String> {
+    let path = std::path::Path::new(SESSIONS_DIR).join(name);
+    match fs::read_to_string(&path) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("SKIP: no recorded session at {}", path.display());
+            None
+        }
+        Err(e) => panic!("read {}: {e}", path.display()),
+    }
+}
+
 fn each_tick(raw: &str, mut f: impl FnMut(f64, &Value, &Value)) {
     let mut state = Value::Null;
     let mut indicators = Value::Null;
@@ -42,13 +61,16 @@ fn each_tick(raw: &str, mut f: impl FnMut(f64, &Value, &Value)) {
 
 #[test]
 fn ammo_sum_fallback_never_misfires_on_recorded_sessions() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/wt_probe_sessions");
+    let Ok(entries) = fs::read_dir(SESSIONS_DIR) else {
+        eprintln!("SKIP: no recorded sessions at {SESSIONS_DIR}");
+        return;
+    };
     let mut sessions_checked = 0usize;
     let mut total_ticks = 0usize;
     let mut fallback_active_ticks = 0usize;
     let mut fallback_inferred_firing_ticks = 0usize;
 
-    for entry in fs::read_dir(dir).expect("wt_probe_sessions dir must exist") {
+    for entry in entries {
         let path = entry.expect("dir entry").path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
@@ -115,11 +137,9 @@ fn ammo_sum_fallback_detects_real_gunfire_when_weapon_keys_are_stripped() {
     // через infer_firing_from_ammo_sum вырезаем из /indicators все
     // weapon-ключи — чтобы проверить, ловит ли суммовый фолбэк реальные
     // очереди по убыванию ammo_counterN без опоры на истинный флаг стрельбы.
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/wt_probe_sessions/session_20260729_094638.jsonl"
-    );
-    let raw = fs::read_to_string(path).expect("fixture must exist");
+    let Some(raw) = read_session("session_20260729_094638.jsonl") else {
+        return;
+    };
 
     let mut ground_truth_ammo = AmmoTracker::new();
     let mut fallback_ammo = AmmoTracker::new();

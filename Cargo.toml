@@ -122,11 +122,12 @@ path = "src/bin/wt_probe/main.rs"
 required-features = ["wt-probe"]
 
 # То же самое (общий код в src/wt_probe/), но вывод в окно eframe/egui вместо
-# консоли. Windows-only на практике: egui/eframe объявлены только в
-# [target.'cfg(windows)'.dependencies] ниже (см. комментарий там), поэтому
-# required-features достаточно "wt-probe" — на Linux этот бинарник просто не
-# соберётся, как и все GUI-утилиты из dev-tools, и это ожидаемо (не входит в
-# Linux CI).
+# консоли. Windows-only: egui/eframe объявлены только в
+# [target.'cfg(windows)'.dependencies] ниже (см. комментарий там), поэтому вся
+# начинка лежит в gui.rs под cfg(windows), а main.rs на прочих платформах
+# собирается в заглушку с сообщением. Без этой заглушки Linux-CI падал: шаг
+# `cargo clippy --bin wt_probe --features wt-probe --tests` из-за --tests
+# собирает тест-таргеты всех бинарников, подходящих по required-features.
 [[bin]]
 name = "wt_probe_gui"
 path = "src/bin/wt_probe_gui/main.rs"
