@@ -105,10 +105,7 @@ mod tests {
             "bf109f4",
             "Bf 109 F4",
         ] {
-            assert!(
-                match_profile(name).is_some(),
-                "expected match for {name:?}"
-            );
+            assert!(match_profile(name).is_some(), "expected match for {name:?}");
         }
     }
 

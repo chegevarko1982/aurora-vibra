@@ -98,14 +98,20 @@ fn bf109f4_full_start_stop_cycle_matches_expected_windows() {
         .iter()
         .filter(|tk| tk.t < 27.0)
         .all(|tk| !tk.engine_active);
-    assert!(before_start_silent, "must stay silent before t=27.0 (engine off)");
+    assert!(
+        before_start_silent,
+        "must stay silent before t=27.0 (engine off)"
+    );
 
     // Где-то в окне пуска (прокрутка+схватывание+раскрутка, 28-33с) эффект
     // обязан сработать хотя бы раз.
     let fires_during_start = ticks
         .iter()
         .any(|tk| (28.0..33.0).contains(&tk.t) && tk.engine_active);
-    assert!(fires_during_start, "engine effect never fired during 28-33s start window");
+    assert!(
+        fires_during_start,
+        "engine effect never fired during 28-33s start window"
+    );
 
     // На устойчивых холостых (глубоко внутри плато 33.25-39.55, с запасом на
     // фейд после выхода на холостые) — тишина.
@@ -122,14 +128,20 @@ fn bf109f4_full_start_stop_cycle_matches_expected_windows() {
     let fires_during_coast = ticks
         .iter()
         .any(|tk| (40.0..57.0).contains(&tk.t) && tk.engine_active);
-    assert!(fires_during_coast, "engine effect never fired during 40-57s coast window");
+    assert!(
+        fires_during_coast,
+        "engine effect never fired during 40-57s coast window"
+    );
 
     // После полной остановки винта (RPM=0 с запасом по времени) — тишина.
     let silent_after_full_stop = ticks
         .iter()
         .filter(|tk| tk.t > 59.0)
         .all(|tk| !tk.engine_active);
-    assert!(silent_after_full_stop, "must be silent well after full stop (t>59.0)");
+    assert!(
+        silent_after_full_stop,
+        "must be silent well after full stop (t>59.0)"
+    );
 }
 
 /// Регрессия на ложный пуск: борт может заспавниться в бою с уже
@@ -156,7 +168,10 @@ fn bf109e3_combat_session_no_false_start_on_already_running_engine() {
         "fixture is expected to start with the engine already spun up"
     );
     assert!(
-        ticks.iter().filter(|tk| tk.t < 100.0).all(|tk| !tk.engine_active),
+        ticks
+            .iter()
+            .filter(|tk| tk.t < 100.0)
+            .all(|tk| !tk.engine_active),
         "must not fire a false start at mission spawn (checked well before the real \
          in-flight throttle-cut at t≈106.9s later in this recording)"
     );
@@ -179,7 +194,10 @@ fn other_session_no_false_start_regardless_of_idle_rpm() {
         "fixture is expected to start with the engine already running"
     );
     assert!(
-        ticks.iter().filter(|tk| tk.t < 20.0).all(|tk| !tk.engine_active),
+        ticks
+            .iter()
+            .filter(|tk| tk.t < 20.0)
+            .all(|tk| !tk.engine_active),
         "must not fire a false start at mission spawn (checked well before the real \
          in-flight throttle-cut at t≈20.7s later in this recording)"
     );
@@ -206,7 +224,10 @@ fn a6m3_zero_airborne_respawn_no_false_start_or_stuck_coast() {
         "/wt_probe_sessions/session_20260729_202028.jsonl"
     );
     let ticks = replay(path);
-    assert!(ticks.len() > 1000, "expected a substantial recorded session");
+    assert!(
+        ticks.len() > 1000,
+        "expected a substantial recorded session"
+    );
     assert!(
         ticks.iter().all(|tk| !tk.engine_active),
         "engine effect must stay silent throughout: engine is already running at the \
@@ -230,7 +251,10 @@ fn engine_effect_stays_silent_whenever_gear_is_retracted_even_on_genuine_start_s
         "/wt_probe_sessions/session_20260729_151535.jsonl"
     );
     let ticks = replay_with_gear(path, true);
-    assert!(ticks.len() > 1000, "expected a substantial recorded session");
+    assert!(
+        ticks.len() > 1000,
+        "expected a substantial recorded session"
+    );
     assert!(
         ticks.iter().all(|tk| !tk.engine_active),
         "engine effect must be fully gated by gear position — a genuine start/coast with \

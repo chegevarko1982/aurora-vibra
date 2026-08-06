@@ -730,9 +730,7 @@ pub fn sim_worker(
                                         game.try_claim(ActiveGame::Msfs)
                                     };
                                     if owns_slot {
-                                        logs.push(
-                                            "SimConnect: claimed game slot".to_string(),
-                                        );
+                                        logs.push("SimConnect: claimed game slot".to_string());
                                         *status.lock() = SimStatus::Connected;
                                         *aircraft_title.lock() = String::new();
                                     }

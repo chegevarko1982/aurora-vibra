@@ -21,9 +21,9 @@
 use std::f64::consts::PI;
 use std::time::Instant;
 
+use crate::EffectsSnapshot;
 use crate::rumble::RumbleOutput;
 use crate::types::{GunPreset, WtConfig};
-use crate::EffectsSnapshot;
 
 use super::aero_profiles::{self, StallProfile};
 use super::overspeed_profiles;
@@ -211,8 +211,8 @@ impl StallState {
         }
 
         let clean = profile.clean_stall_aoa_deg as f64;
-        let landing_mid = (profile.landing_stall_aoa_deg.0 + profile.landing_stall_aoa_deg.1) as f64
-            / 2.0;
+        let landing_mid =
+            (profile.landing_stall_aoa_deg.0 + profile.landing_stall_aoa_deg.1) as f64 / 2.0;
         let flap_frac = (vars.flaps_pct / 100.0).clamp(0.0, 1.0);
         // Интерполяция порога сваливания между "чистым" крылом (закрылки 0%)
         // и посадочной конфигурацией (закрылки 100%) по текущим закрылкам.
@@ -895,7 +895,11 @@ impl WtRumbleState {
             let base_vne = overspeed_profiles::vne_kmh_for(&vars.vehicle_type);
             overspeed_profiles::effective_limit_kmh(&vars.vehicle_type, base_vne, vars.flaps_pct)
                 .map(|limit| {
-                    overspeed_profiles::intensity(vars.ias_kmh, limit as f64, cfg.overspeed_ceiling as f64)
+                    overspeed_profiles::intensity(
+                        vars.ias_kmh,
+                        limit as f64,
+                        cfg.overspeed_ceiling as f64,
+                    )
                 })
                 .unwrap_or(0.0)
         } else {
@@ -916,21 +920,20 @@ impl WtRumbleState {
         // порог — собственная скорость разрушения шасси борта, окно
         // нарастания шире (20 км/ч по требованию пользователя, вместо 10
         // у общего Vne).
-        let gear_overspeed_term = if cfg.gear_overspeed_enabled
-            && vars.gear_pct > GEAR_LOCKED_THRESHOLD_PCT
-        {
-            overspeed_profiles::gear_kmh_for(&vars.vehicle_type)
-                .map(|limit| {
-                    overspeed_profiles::gear_intensity(
-                        vars.ias_kmh,
-                        limit as f64,
-                        cfg.gear_overspeed_ceiling as f64,
-                    )
-                })
-                .unwrap_or(0.0)
-        } else {
-            0.0
-        };
+        let gear_overspeed_term =
+            if cfg.gear_overspeed_enabled && vars.gear_pct > GEAR_LOCKED_THRESHOLD_PCT {
+                overspeed_profiles::gear_kmh_for(&vars.vehicle_type)
+                    .map(|limit| {
+                        overspeed_profiles::gear_intensity(
+                            vars.ias_kmh,
+                            limit as f64,
+                            cfg.gear_overspeed_ceiling as f64,
+                        )
+                    })
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
         effects.wt_gear_overspeed_active = gear_overspeed_term > 0.0;
         if dt_.gear_overspeed.enable_joystick {
             joystick += gear_overspeed_term;
@@ -1350,7 +1353,10 @@ mod tests {
         v.aoa_deg = 25.0;
         v.t = 0.0;
         stall.step(v.t, &v, profile, ceiling);
-        assert_eq!(stall.break_impulse_t0, 0.0, "первое пересечение должно взвести импульс");
+        assert_eq!(
+            stall.break_impulse_t0, 0.0,
+            "первое пересечение должно взвести импульс"
+        );
 
         // Колебание у самого порога (внутри окна гистерезиса) — НЕ должно
         // взводить новый импульс.

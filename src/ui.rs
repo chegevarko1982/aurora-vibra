@@ -925,7 +925,11 @@ impl eframe::App for UiState {
                             ui.label(t.lbl_game_override);
                             let mut changed = false;
                             changed |= ui
-                                .radio_value(&mut self.game_override, GameOverride::Auto, t.opt_game_auto)
+                                .radio_value(
+                                    &mut self.game_override,
+                                    GameOverride::Auto,
+                                    t.opt_game_auto,
+                                )
                                 .changed();
                             changed |= ui
                                 .radio_value(
@@ -1021,315 +1025,325 @@ impl eframe::App for UiState {
                     });
                 });
             } else {
-            // Общий снимок "включён/активен" для каждого эффекта — используется и
-            // бейджами счётчика в навигации слева, и списком Live Monitor справа,
-            // чтобы не считать дважды.
-            let mon = self.config.get();
-            // Порядок элементов соответствует новой группировке по разделам
-            // (Aerodynamics / Taxi / Engines / Gears) — см. диапазоны ниже.
-            // Четвёртое поле — текущая интенсивность эффекта в процентах (та же
-            // формула val/native_max*100, что использует слайдер самой карточки),
-            // None — для triggered-по-порогу эффектов без единого "уровня"
-            // (Gear Transit). Используется компактным Live Monitor, чтобы
-            // показывать не только "включён/активен", но и реальное число.
-            //
-            // War Thunder (ag == ActiveGame::Wt): список полностью заменяется
-            // на 4 эффекта этого режима — MSFS-эффекты в этот момент не
-            // считаются (см. гейт в sim/worker.rs), показывать их в Live
-            // Monitor было бы вводящим в заблуждение.
-            let rows: Vec<(&str, bool, bool, Option<f32>)> = if ag == ActiveGame::Wt {
-                vec![
-                    (
-                        t.name_wt_weapon1,
-                        mon.wt.weapon1_enabled,
-                        self.effects.wt_weapon1_active.load(Ordering::Relaxed),
-                        None,
-                    ),
-                    (
-                        t.name_wt_weapon2,
-                        mon.wt.weapon2_enabled,
-                        self.effects.wt_weapon2_active.load(Ordering::Relaxed),
-                        None,
-                    ),
-                    (
-                        t.name_flaps,
-                        mon.wt.flaps_enabled,
-                        self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                        Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                    ),
-                    (
-                        t.lbl_gear_transit,
-                        mon.wt.gear_transit_enabled,
-                        self.effects.gear_transit_active.load(Ordering::Relaxed),
-                        None,
-                    ),
-                    (
-                        t.name_wt_stall,
-                        mon.wt.stall_enabled,
-                        self.effects.stall_active.load(Ordering::Relaxed),
-                        Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
-                    ),
-                    (
-                        t.name_wt_engine_start,
-                        mon.wt.engine_start_enabled,
-                        self.effects.engine_start_active.load(Ordering::Relaxed),
-                        Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                    ),
-                ]
-            } else {
-                vec![
-                (
-                    t.overspeed_effect_name,
-                    mon.overspeed_enabled,
-                    self.effects.overspeed_active.load(Ordering::Relaxed),
-                    Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_stall,
-                    mon.stall_enabled,
-                    self.effects.stall_active.load(Ordering::Relaxed),
-                    Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_spoilers,
-                    mon.spoilers_enabled,
-                    self.effects.spoilers_active.load(Ordering::Relaxed),
-                    Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_flaps,
-                    mon.flaps_enabled,
-                    self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                    Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.lbl_bank_turb,
-                    mon.bank_enabled,
-                    self.effects.bank_active.load(Ordering::Relaxed),
-                    Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_engine_start,
-                    mon.enable_engine_start,
-                    self.effects.engine_start_active.load(Ordering::Relaxed),
-                    Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_ground_roll,
-                    mon.ground_enabled,
-                    self.effects.ground_active.load(Ordering::Relaxed)
-                        || self.effects.ground_thump_active.load(Ordering::Relaxed),
-                    Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_left_peak,
-                    mon.gear_comp_left_enabled,
-                    self.effects.gear_comp_left_active.load(Ordering::Relaxed),
-                    Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_nose_peak,
-                    mon.gear_comp_nose_enabled,
-                    self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
-                    Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.name_right_peak,
-                    mon.gear_comp_right_enabled,
-                    self.effects.gear_comp_right_active.load(Ordering::Relaxed),
-                    Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                ),
-                (
-                    t.lbl_gear_transit,
-                    mon.gear_transit_enabled,
-                    self.effects.gear_transit_active.load(Ordering::Relaxed),
-                    None,
-                ),
-                ]
-            };
-            let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
-            egui::Panel::left("nav_panel")
-                .resizable(false)
-                .exact_size(nav_panel_width)
-                .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
-                .show(ui, |ui| {
-                    ui.add_space(4.0);
-                    // Кириллические подписи заметно длиннее английских, поэтому кнопка
-                    // должна переноситься на 2 строки, а не выходить за границы панели.
-                    // Это простой список разделов без индикации срабатывания эффектов —
-                    // такая индикация есть только в карточках эффектов и Live Monitor.
-                    let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str| -> bool {
-                        ui.add(egui::Button::selectable(selected, label).wrap())
-                            .clicked()
-                    };
-                    if ag == ActiveGame::Wt {
-                        if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
-                            self.active_section = Section::Wt;
-                        }
-                    } else {
-                        if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
-                            self.active_section = Section::Rumble;
-                        }
-                        if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
-                            self.active_section = Section::Taxi;
-                        }
-                        if nav_item(ui, self.active_section == Section::Engines, t.nav_engines) {
-                            self.active_section = Section::Engines;
-                        }
-                        if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
-                            self.active_section = Section::Gear;
-                        }
-                    }
-                    ui.separator();
-                    if ui
-                        .selectable_label(
-                            self.active_section == Section::Telemetry,
-                            t.nav_telemetry,
-                        )
-                        .clicked()
-                    {
-                        self.active_section = Section::Telemetry;
-                    }
-
-                    ui.separator();
-                    let holding = self.hold.load(Ordering::Relaxed);
-                    if !holding {
-                        let stop_button =
-                            egui::Button::new(RichText::new(t.btn_stop).color(Color32::WHITE))
-                                .fill(Color32::from_rgb(0x6d, 0x12, 0x1b)); // #6d121b
-                        if ui.add(stop_button).clicked() {
-                            self.hold.store(true, Ordering::Relaxed);
-                            let _ = self.tx_hid.send(HidCmd::SetHold(true));
-                            tray::notify_held(true);
-                        }
-                    } else if ui.button(t.btn_resume).clicked() {
-                        self.hold.store(false, Ordering::Relaxed);
-                        let _ = self.tx_hid.send(HidCmd::SetHold(false));
-                        tray::notify_held(false);
-                    }
-                });
-
-            // Компактный, всегда развёрнутый Live Monitor: раньше сворачивался в
-            // узкую полоску безымянных точек по умолчанию — теперь фиксированные
-            // 160/220px (EN/RU) с именем + реальным %, никакого режима "просто точки".
-            let live_monitor_width = if self.monitor_collapsed {
-                24.0
-            } else if self.lang == Lang::Ru {
-                220.0
-            } else {
-                160.0
-            };
-            egui::Panel::right("live_monitor_panel")
-                .resizable(false)
-                .exact_size(live_monitor_width)
-                .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
-                .show(ui, |ui| {
-                    ui.add_space(4.0);
-                    if self.monitor_collapsed {
-                        if ui
-                            .button("◀")
-                            .on_hover_text(t.hover_monitor_expand)
-                            .clicked()
-                        {
-                            self.monitor_collapsed = false;
-                            self.save_global_settings();
-                        }
-                        return;
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(t.heading_live_monitor).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button("▶")
-                                .on_hover_text(t.hover_monitor_collapse)
-                                .clicked()
-                            {
-                                self.monitor_collapsed = true;
-                                self.save_global_settings();
-                            }
-                        });
-                    });
-                    ui.separator();
-
-                    let enabled_rows: Vec<_> =
-                        rows.iter().filter(|(_, enabled, ..)| *enabled).collect();
-                    let disabled_count = rows.len() - enabled_rows.len();
-
-                    if enabled_rows.is_empty() {
-                        ui.weak(t.lbl_no_active_effects);
-                    }
-                    for (name, enabled, active, pct) in enabled_rows {
-                        ui.horizontal(|ui| {
-                            let (dot_color, filled) = if *enabled && *active {
-                                (palette::ACCENT_LIVE, true)
-                            } else {
-                                (palette::BORDER_ACTIVE, false)
-                            };
-                            // Значение резервирует место первым (right_to_left), затем
-                            // точка + имя получают оставшуюся ширину и переносятся, если
-                            // русская подпись не помещается в одну строку.
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let value_text = if *active {
-                                        match pct {
-                                            Some(p) => format!("{p:.0}%"),
-                                            None => t.status_active.to_string(),
-                                        }
-                                    } else {
-                                        "—".to_string()
-                                    };
-                                    let color = if *active {
-                                        palette::ACCENT_LIVE
-                                    } else {
-                                        palette::TEXT_SECONDARY
-                                    };
-                                    ui.colored_label(color, RichText::new(value_text).size(10.0));
-                                    ui.with_layout(
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            dot_indicator(ui, dot_color, filled, 8.0);
-                                            ui.add(
-                                                egui::Label::new(RichText::new(*name).size(10.0))
-                                                    .wrap(),
-                                            );
-                                        },
-                                    );
-                                },
-                            );
-                        });
-                    }
-
-                    if disabled_count > 0 {
+                // Общий снимок "включён/активен" для каждого эффекта — используется и
+                // бейджами счётчика в навигации слева, и списком Live Monitor справа,
+                // чтобы не считать дважды.
+                let mon = self.config.get();
+                // Порядок элементов соответствует новой группировке по разделам
+                // (Aerodynamics / Taxi / Engines / Gears) — см. диапазоны ниже.
+                // Четвёртое поле — текущая интенсивность эффекта в процентах (та же
+                // формула val/native_max*100, что использует слайдер самой карточки),
+                // None — для triggered-по-порогу эффектов без единого "уровня"
+                // (Gear Transit). Используется компактным Live Monitor, чтобы
+                // показывать не только "включён/активен", но и реальное число.
+                //
+                // War Thunder (ag == ActiveGame::Wt): список полностью заменяется
+                // на 4 эффекта этого режима — MSFS-эффекты в этот момент не
+                // считаются (см. гейт в sim/worker.rs), показывать их в Live
+                // Monitor было бы вводящим в заблуждение.
+                let rows: Vec<(&str, bool, bool, Option<f32>)> = if ag == ActiveGame::Wt {
+                    vec![
+                        (
+                            t.name_wt_weapon1,
+                            mon.wt.weapon1_enabled,
+                            self.effects.wt_weapon1_active.load(Ordering::Relaxed),
+                            None,
+                        ),
+                        (
+                            t.name_wt_weapon2,
+                            mon.wt.weapon2_enabled,
+                            self.effects.wt_weapon2_active.load(Ordering::Relaxed),
+                            None,
+                        ),
+                        (
+                            t.name_flaps,
+                            mon.wt.flaps_enabled,
+                            self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                            Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.lbl_gear_transit,
+                            mon.wt.gear_transit_enabled,
+                            self.effects.gear_transit_active.load(Ordering::Relaxed),
+                            None,
+                        ),
+                        (
+                            t.name_wt_stall,
+                            mon.wt.stall_enabled,
+                            self.effects.stall_active.load(Ordering::Relaxed),
+                            Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_wt_engine_start,
+                            mon.wt.engine_start_enabled,
+                            self.effects.engine_start_active.load(Ordering::Relaxed),
+                            Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                    ]
+                } else {
+                    vec![
+                        (
+                            t.overspeed_effect_name,
+                            mon.overspeed_enabled,
+                            self.effects.overspeed_active.load(Ordering::Relaxed),
+                            Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_stall,
+                            mon.stall_enabled,
+                            self.effects.stall_active.load(Ordering::Relaxed),
+                            Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_spoilers,
+                            mon.spoilers_enabled,
+                            self.effects.spoilers_active.load(Ordering::Relaxed),
+                            Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_flaps,
+                            mon.flaps_enabled,
+                            self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                            Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.lbl_bank_turb,
+                            mon.bank_enabled,
+                            self.effects.bank_active.load(Ordering::Relaxed),
+                            Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_engine_start,
+                            mon.enable_engine_start,
+                            self.effects.engine_start_active.load(Ordering::Relaxed),
+                            Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_ground_roll,
+                            mon.ground_enabled,
+                            self.effects.ground_active.load(Ordering::Relaxed)
+                                || self.effects.ground_thump_active.load(Ordering::Relaxed),
+                            Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_left_peak,
+                            mon.gear_comp_left_enabled,
+                            self.effects.gear_comp_left_active.load(Ordering::Relaxed),
+                            Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_nose_peak,
+                            mon.gear_comp_nose_enabled,
+                            self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
+                            Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.name_right_peak,
+                            mon.gear_comp_right_enabled,
+                            self.effects.gear_comp_right_active.load(Ordering::Relaxed),
+                            Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                        ),
+                        (
+                            t.lbl_gear_transit,
+                            mon.gear_transit_enabled,
+                            self.effects.gear_transit_active.load(Ordering::Relaxed),
+                            None,
+                        ),
+                    ]
+                };
+                let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
+                egui::Panel::left("nav_panel")
+                    .resizable(false)
+                    .exact_size(nav_panel_width)
+                    .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
+                    .show(ui, |ui| {
                         ui.add_space(4.0);
-                        let label = i18n::lbl_disabled_count(self.lang, disabled_count);
+                        // Кириллические подписи заметно длиннее английских, поэтому кнопка
+                        // должна переноситься на 2 строки, а не выходить за границы панели.
+                        // Это простой список разделов без индикации срабатывания эффектов —
+                        // такая индикация есть только в карточках эффектов и Live Monitor.
+                        let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str| -> bool {
+                            ui.add(egui::Button::selectable(selected, label).wrap())
+                                .clicked()
+                        };
+                        if ag == ActiveGame::Wt {
+                            if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
+                                self.active_section = Section::Wt;
+                            }
+                        } else {
+                            if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
+                                self.active_section = Section::Rumble;
+                            }
+                            if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
+                                self.active_section = Section::Taxi;
+                            }
+                            if nav_item(ui, self.active_section == Section::Engines, t.nav_engines)
+                            {
+                                self.active_section = Section::Engines;
+                            }
+                            if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
+                                self.active_section = Section::Gear;
+                            }
+                        }
+                        ui.separator();
                         if ui
                             .selectable_label(
-                                self.monitor_show_disabled,
-                                RichText::new(label).size(10.0).weak(),
+                                self.active_section == Section::Telemetry,
+                                t.nav_telemetry,
                             )
                             .clicked()
                         {
-                            self.monitor_show_disabled = !self.monitor_show_disabled;
+                            self.active_section = Section::Telemetry;
                         }
-                        if self.monitor_show_disabled {
-                            for (name, _enabled, _active, _pct) in
-                                rows.iter().filter(|(_, enabled, ..)| !*enabled)
+
+                        ui.separator();
+                        let holding = self.hold.load(Ordering::Relaxed);
+                        if !holding {
+                            let stop_button =
+                                egui::Button::new(RichText::new(t.btn_stop).color(Color32::WHITE))
+                                    .fill(Color32::from_rgb(0x6d, 0x12, 0x1b)); // #6d121b
+                            if ui.add(stop_button).clicked() {
+                                self.hold.store(true, Ordering::Relaxed);
+                                let _ = self.tx_hid.send(HidCmd::SetHold(true));
+                                tray::notify_held(true);
+                            }
+                        } else if ui.button(t.btn_resume).clicked() {
+                            self.hold.store(false, Ordering::Relaxed);
+                            let _ = self.tx_hid.send(HidCmd::SetHold(false));
+                            tray::notify_held(false);
+                        }
+                    });
+
+                // Компактный, всегда развёрнутый Live Monitor: раньше сворачивался в
+                // узкую полоску безымянных точек по умолчанию — теперь фиксированные
+                // 160/220px (EN/RU) с именем + реальным %, никакого режима "просто точки".
+                let live_monitor_width = if self.monitor_collapsed {
+                    24.0
+                } else if self.lang == Lang::Ru {
+                    220.0
+                } else {
+                    160.0
+                };
+                egui::Panel::right("live_monitor_panel")
+                    .resizable(false)
+                    .exact_size(live_monitor_width)
+                    .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
+                    .show(ui, |ui| {
+                        ui.add_space(4.0);
+                        if self.monitor_collapsed {
+                            if ui
+                                .button("◀")
+                                .on_hover_text(t.hover_monitor_expand)
+                                .clicked()
                             {
-                                ui.horizontal(|ui| {
-                                    dot_indicator(ui, palette::TEXT_DISABLED, false, 8.0);
-                                    ui.add_enabled(
-                                        false,
-                                        egui::Label::new(RichText::new(*name).size(10.0)).wrap(),
-                                    );
-                                });
+                                self.monitor_collapsed = false;
+                                self.save_global_settings();
+                            }
+                            return;
+                        }
+
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(t.heading_live_monitor).strong());
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .button("▶")
+                                        .on_hover_text(t.hover_monitor_collapse)
+                                        .clicked()
+                                    {
+                                        self.monitor_collapsed = true;
+                                        self.save_global_settings();
+                                    }
+                                },
+                            );
+                        });
+                        ui.separator();
+
+                        let enabled_rows: Vec<_> =
+                            rows.iter().filter(|(_, enabled, ..)| *enabled).collect();
+                        let disabled_count = rows.len() - enabled_rows.len();
+
+                        if enabled_rows.is_empty() {
+                            ui.weak(t.lbl_no_active_effects);
+                        }
+                        for (name, enabled, active, pct) in enabled_rows {
+                            ui.horizontal(|ui| {
+                                let (dot_color, filled) = if *enabled && *active {
+                                    (palette::ACCENT_LIVE, true)
+                                } else {
+                                    (palette::BORDER_ACTIVE, false)
+                                };
+                                // Значение резервирует место первым (right_to_left), затем
+                                // точка + имя получают оставшуюся ширину и переносятся, если
+                                // русская подпись не помещается в одну строку.
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let value_text = if *active {
+                                            match pct {
+                                                Some(p) => format!("{p:.0}%"),
+                                                None => t.status_active.to_string(),
+                                            }
+                                        } else {
+                                            "—".to_string()
+                                        };
+                                        let color = if *active {
+                                            palette::ACCENT_LIVE
+                                        } else {
+                                            palette::TEXT_SECONDARY
+                                        };
+                                        ui.colored_label(
+                                            color,
+                                            RichText::new(value_text).size(10.0),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                dot_indicator(ui, dot_color, filled, 8.0);
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(*name).size(10.0),
+                                                    )
+                                                    .wrap(),
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            });
+                        }
+
+                        if disabled_count > 0 {
+                            ui.add_space(4.0);
+                            let label = i18n::lbl_disabled_count(self.lang, disabled_count);
+                            if ui
+                                .selectable_label(
+                                    self.monitor_show_disabled,
+                                    RichText::new(label).size(10.0).weak(),
+                                )
+                                .clicked()
+                            {
+                                self.monitor_show_disabled = !self.monitor_show_disabled;
+                            }
+                            if self.monitor_show_disabled {
+                                for (name, _enabled, _active, _pct) in
+                                    rows.iter().filter(|(_, enabled, ..)| !*enabled)
+                                {
+                                    ui.horizontal(|ui| {
+                                        dot_indicator(ui, palette::TEXT_DISABLED, false, 8.0);
+                                        ui.add_enabled(
+                                            false,
+                                            egui::Label::new(RichText::new(*name).size(10.0))
+                                                .wrap(),
+                                        );
+                                    });
+                                }
                             }
                         }
-                    }
-                });
+                    });
 
-            egui::CentralPanel::default().show(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {

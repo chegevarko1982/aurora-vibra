@@ -50,7 +50,10 @@ pub fn ursa_model_name(pid: u16) -> &'static str {
 /// РУД линейки Ursa Minor (оба физических блока, L и R) — отдельное
 /// устройство, не джойстик.
 pub fn is_ursa_minor_throttle(pid: u16) -> bool {
-    matches!(pid, WW_PID_URSA_MINOR_THROTTLE | WW_PID_URSA_MINOR_THROTTLE_R)
+    matches!(
+        pid,
+        WW_PID_URSA_MINOR_THROTTLE | WW_PID_URSA_MINOR_THROTTLE_R
+    )
 }
 
 pub fn is_orion_joystick(pid: u16) -> bool {
@@ -157,7 +160,13 @@ fn build_joystick_vibe_frame_raw(
 }
 
 pub fn build_simapp_vibe_frame(pid: u16, report_id: u8, out_len: u16, intensity: u8) -> Vec<u8> {
-    build_joystick_vibe_frame_raw(channel_byte_for_pid(pid), 0xBF, report_id, out_len, intensity)
+    build_joystick_vibe_frame_raw(
+        channel_byte_for_pid(pid),
+        0xBF,
+        report_id,
+        out_len,
+        intensity,
+    )
 }
 
 /// Orion Joystick Base II (+ JGRIP-F16, PID 0xBEA8). identifier_byte и
@@ -175,7 +184,11 @@ pub fn build_orion_joystick_vibe_frame(report_id: u8, out_len: u16, intensity: u
 /// разных командных байта (0xBF и 0xCF) при фиксированном identifier_byte
 /// 0x01. Источник: rswilem/winctrl-xplane-plugin, product-orion-throttle.cpp —
 /// ProductOrionThrottle::setVibration().
-pub fn build_orion_throttle_vibe_frames(report_id: u8, out_len: u16, intensity: u8) -> [Vec<u8>; 2] {
+pub fn build_orion_throttle_vibe_frames(
+    report_id: u8,
+    out_len: u16,
+    intensity: u8,
+) -> [Vec<u8>; 2] {
     [
         build_joystick_vibe_frame_raw(0x01, 0xBF, report_id, out_len, intensity),
         build_joystick_vibe_frame_raw(0x01, 0xCF, report_id, out_len, intensity),
@@ -344,7 +357,9 @@ mod tests {
         let frame = build_orion_joystick_vibe_frame(0x02, 14, 0x19);
         assert_eq!(
             frame,
-            vec![0x02, 0x01, 0x00, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0]
+            vec![
+                0x02, 0x01, 0x00, 0x00, 0x00, 0x03, 0x49, 0x00, 0x19, 0, 0, 0, 0, 0
+            ]
         );
     }
 
@@ -355,11 +370,15 @@ mod tests {
         let [frame_bf, frame_cf] = build_orion_throttle_vibe_frames(0x02, 14, 0x7F);
         assert_eq!(
             frame_bf,
-            vec![0x02, 0x01, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x7F, 0, 0, 0, 0, 0]
+            vec![
+                0x02, 0x01, 0xBF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x7F, 0, 0, 0, 0, 0
+            ]
         );
         assert_eq!(
             frame_cf,
-            vec![0x02, 0x01, 0xCF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x7F, 0, 0, 0, 0, 0]
+            vec![
+                0x02, 0x01, 0xCF, 0x00, 0x00, 0x03, 0x49, 0x00, 0x7F, 0, 0, 0, 0, 0
+            ]
         );
     }
 

@@ -17,6 +17,7 @@
 // ВАЖНО: закрой основное приложение и SimAppPro перед запуском — HID-
 // устройство может быть открыто только одним процессом одновременно.
 
+use aurora_vibra::WtConfig;
 use aurora_vibra::hid::protocol::{
     THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_simapp_vibe_frame,
     build_throttle_vibe_frame, is_ursa_minor_throttle, ursa_model_name,
@@ -24,7 +25,6 @@ use aurora_vibra::hid::protocol::{
 use aurora_vibra::wt_link::aero_profiles::BF_109_F4;
 use aurora_vibra::wt_link::rumble::WtRumbleState;
 use aurora_vibra::wt_link::vars::WtVars;
-use aurora_vibra::WtConfig;
 use hidapi::{HidApi, HidDevice};
 use std::time::Duration;
 
@@ -53,7 +53,9 @@ impl OpenDevice {
 
 fn main() {
     println!("=== Aurora Vibra — стенд эффекта срыва потока (Bf 109 F-4) ===");
-    println!("Подход (линейный рост) -> break-импульс -> пауза/255 в срыве -> восстановление. 3 круга.");
+    println!(
+        "Подход (линейный рост) -> break-импульс -> пауза/255 в срыве -> восстановление. 3 круга."
+    );
     println!("Закрой основное приложение и SimAppPro перед запуском!\n");
 
     let api = HidApi::new().expect("не удалось инициализировать HID API");
@@ -72,7 +74,9 @@ fn main() {
         }
     }
     if devices.is_empty() {
-        eprintln!("Устройства Winwing не найдены. Проверь подключение и что не занято другим процессом.");
+        eprintln!(
+            "Устройства Winwing не найдены. Проверь подключение и что не занято другим процессом."
+        );
         return;
     }
     println!();

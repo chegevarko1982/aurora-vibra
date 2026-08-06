@@ -187,7 +187,9 @@ mod tests {
         assert_eq!(ACF_DESCRIP_RANGE.len(), 40);
         for i in ACF_DESCRIP_RANGE {
             assert!(
-                DrIdx::DEFS[i].0.starts_with("sim/aircraft/view/acf_descrip["),
+                DrIdx::DEFS[i]
+                    .0
+                    .starts_with("sim/aircraft/view/acf_descrip["),
                 "unexpected dataref at index {i}: {}",
                 DrIdx::DEFS[i].0
             );

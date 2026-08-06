@@ -18,13 +18,13 @@
 // ВАЖНО: закрой основное приложение и SimAppPro перед запуском — HID-
 // устройство может быть открыто только одним процессом одновременно.
 
+use aurora_vibra::WtConfig;
 use aurora_vibra::hid::protocol::{
     THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_simapp_vibe_frame,
     build_throttle_vibe_frame, is_ursa_minor_throttle, ursa_model_name,
 };
 use aurora_vibra::wt_link::rumble::WtRumbleState;
 use aurora_vibra::wt_link::vars::WtVars;
-use aurora_vibra::WtConfig;
 use hidapi::{HidApi, HidDevice};
 use std::time::Duration;
 
@@ -71,7 +71,11 @@ fn scripted_rpm_power(t: f64) -> (f64, f64) {
     } else if t < SPOOL_END {
         // Раскрутка/флейр: 120 -> 485, мощность появляется во второй половине.
         let p = (t - CATCH_END) / (SPOOL_END - CATCH_END);
-        let power = if p > 0.4 { 60.0 * (1.0 - (p - 0.4) / 0.6) } else { 0.0 };
+        let power = if p > 0.4 {
+            60.0 * (1.0 - (p - 0.4) / 0.6)
+        } else {
+            0.0
+        };
         (120.0 + 365.0 * p, power.max(0.0))
     } else if t < IDLE_END {
         // Устойчивые холостые — эффект должен молчать.
@@ -107,7 +111,9 @@ fn main() {
         }
     }
     if devices.is_empty() {
-        eprintln!("Устройства Winwing не найдены. Проверь подключение и что не занято другим процессом.");
+        eprintln!(
+            "Устройства Winwing не найдены. Проверь подключение и что не занято другим процессом."
+        );
         return;
     }
     println!();

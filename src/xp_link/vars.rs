@@ -102,13 +102,29 @@ pub fn to_flight_vars(v: &[f32]) -> FlightVars {
         trailing_edge_flaps_left_percent: flaps_ratio_pct,
         // Телеметрия запуска двигателей (Engine Spool-up & Ignition).
         eng1_n2_percent: g(DrIdx::Eng1N2),
-        eng1_combustion: if g(DrIdx::Eng1Burning) != 0.0 { 1.0 } else { 0.0 },
+        eng1_combustion: if g(DrIdx::Eng1Burning) != 0.0 {
+            1.0
+        } else {
+            0.0
+        },
         eng2_n2_percent: g(DrIdx::Eng2N2),
-        eng2_combustion: if g(DrIdx::Eng2Burning) != 0.0 { 1.0 } else { 0.0 },
+        eng2_combustion: if g(DrIdx::Eng2Burning) != 0.0 {
+            1.0
+        } else {
+            0.0
+        },
         eng3_n2_percent: g(DrIdx::Eng3N2),
-        eng3_combustion: if g(DrIdx::Eng3Burning) != 0.0 { 1.0 } else { 0.0 },
+        eng3_combustion: if g(DrIdx::Eng3Burning) != 0.0 {
+            1.0
+        } else {
+            0.0
+        },
         eng4_n2_percent: g(DrIdx::Eng4N2),
-        eng4_combustion: if g(DrIdx::Eng4Burning) != 0.0 { 1.0 } else { 0.0 },
+        eng4_combustion: if g(DrIdx::Eng4Burning) != 0.0 {
+            1.0
+        } else {
+            0.0
+        },
         eng1_starter: g(DrIdx::Eng1Starter) != 0.0,
         eng2_starter: g(DrIdx::Eng2Starter) != 0.0,
         eng3_starter: g(DrIdx::Eng3Starter) != 0.0,

@@ -196,7 +196,12 @@ pub fn gear_kmh_for(vehicle_type: &str) -> Option<f32> {
 /// Vne-эффекта, но с окном 20 км/ч вместо 10 (см.
 /// `GEAR_OVERSPEED_WARNING_WINDOW_KMH`).
 pub fn gear_intensity(ias_kmh: f64, gear_limit_kmh: f64, ceiling: f64) -> f64 {
-    intensity_with_window(ias_kmh, gear_limit_kmh, GEAR_OVERSPEED_WARNING_WINDOW_KMH, ceiling)
+    intensity_with_window(
+        ias_kmh,
+        gear_limit_kmh,
+        GEAR_OVERSPEED_WARNING_WINDOW_KMH,
+        ceiling,
+    )
 }
 
 #[cfg(test)]
@@ -243,22 +248,34 @@ mod tests {
     #[test]
     fn effective_limit_ignores_flaps_when_retracted() {
         // bf-109f-4: vne=790, П/В/Б=260/409/438.
-        assert_eq!(effective_limit_kmh("bf-109f-4", Some(790.0), 0.0), Some(790.0));
+        assert_eq!(
+            effective_limit_kmh("bf-109f-4", Some(790.0), 0.0),
+            Some(790.0)
+        );
     }
 
     #[test]
     fn effective_limit_uses_combat_bucket_near_20pct() {
-        assert_eq!(effective_limit_kmh("bf-109f-4", Some(790.0), 10.0), Some(438.0));
+        assert_eq!(
+            effective_limit_kmh("bf-109f-4", Some(790.0), 10.0),
+            Some(438.0)
+        );
     }
 
     #[test]
     fn effective_limit_uses_takeoff_bucket_near_33pct() {
-        assert_eq!(effective_limit_kmh("bf-109f-4", Some(790.0), 50.0), Some(409.0));
+        assert_eq!(
+            effective_limit_kmh("bf-109f-4", Some(790.0), 50.0),
+            Some(409.0)
+        );
     }
 
     #[test]
     fn effective_limit_uses_landing_bucket_near_100pct() {
-        assert_eq!(effective_limit_kmh("bf-109f-4", Some(790.0), 90.0), Some(260.0));
+        assert_eq!(
+            effective_limit_kmh("bf-109f-4", Some(790.0), 90.0),
+            Some(260.0)
+        );
     }
 
     #[test]
@@ -267,9 +284,18 @@ mod tests {
         // slashes — aircraft has only one flap deployment position, so all
         // three CSV columns are filled with the same number at merge time.
         // Whichever bucket flaps_pct falls into, the limit is the same.
-        assert_eq!(effective_limit_kmh("avenger_mk1", Some(500.0), 10.0), Some(285.0));
-        assert_eq!(effective_limit_kmh("avenger_mk1", Some(500.0), 50.0), Some(285.0));
-        assert_eq!(effective_limit_kmh("avenger_mk1", Some(500.0), 90.0), Some(285.0));
+        assert_eq!(
+            effective_limit_kmh("avenger_mk1", Some(500.0), 10.0),
+            Some(285.0)
+        );
+        assert_eq!(
+            effective_limit_kmh("avenger_mk1", Some(500.0), 50.0),
+            Some(285.0)
+        );
+        assert_eq!(
+            effective_limit_kmh("avenger_mk1", Some(500.0), 90.0),
+            Some(285.0)
+        );
     }
 
     #[test]
@@ -278,9 +304,18 @@ mod tests {
         // combat position — combat_kmh is None. In the combat bucket
         // (flaps_pct <= 26.5), flap_limit is None too, so only base Vne
         // applies (no silent wrong guess at a limit that doesn't exist).
-        assert_eq!(effective_limit_kmh("gladiator_j8a", Some(500.0), 10.0), Some(500.0));
-        assert_eq!(effective_limit_kmh("gladiator_j8a", Some(500.0), 50.0), Some(469.0));
-        assert_eq!(effective_limit_kmh("gladiator_j8a", Some(500.0), 90.0), Some(320.0));
+        assert_eq!(
+            effective_limit_kmh("gladiator_j8a", Some(500.0), 10.0),
+            Some(500.0)
+        );
+        assert_eq!(
+            effective_limit_kmh("gladiator_j8a", Some(500.0), 50.0),
+            Some(469.0)
+        );
+        assert_eq!(
+            effective_limit_kmh("gladiator_j8a", Some(500.0), 90.0),
+            Some(320.0)
+        );
     }
 
     #[test]
@@ -294,7 +329,10 @@ mod tests {
 
     #[test]
     fn effective_limit_none_when_nothing_applies() {
-        assert_eq!(effective_limit_kmh("not-a-real-vehicle-xyz", None, 100.0), None);
+        assert_eq!(
+            effective_limit_kmh("not-a-real-vehicle-xyz", None, 100.0),
+            None
+        );
     }
 
     #[test]

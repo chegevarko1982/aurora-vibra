@@ -130,7 +130,13 @@ pub fn wt_worker(
 
         match (state, indicators) {
             (Ok(state_v), Ok(indicators_v)) => {
-                recorder.tick(recording.load(Ordering::Relaxed), t, &state_v, &indicators_v, &logs);
+                recorder.tick(
+                    recording.load(Ordering::Relaxed),
+                    t,
+                    &state_v,
+                    &indicators_v,
+                    &logs,
+                );
 
                 let mut wt_vars = vars::parse(t, &state_v, &indicators_v);
                 if !wt_vars.in_mission {
@@ -139,9 +145,18 @@ pub fn wt_worker(
                     // самолёта, чтобы не гейтить по чужой раскладке стволов.
                     ammo.reset();
                 } else {
-                    ammo.observe(&indicators_v, wt_vars.weapon1_firing, wt_vars.weapon2_firing);
-                    if let Some(profile) = weapon_profiles::match_weapon_profile(&wt_vars.vehicle_type) {
-                        ammo.set_weapon_capacity_hint(profile.weapon1_ammo_capacity, profile.weapon2_ammo_capacity);
+                    ammo.observe(
+                        &indicators_v,
+                        wt_vars.weapon1_firing,
+                        wt_vars.weapon2_firing,
+                    );
+                    if let Some(profile) =
+                        weapon_profiles::match_weapon_profile(&wt_vars.vehicle_type)
+                    {
+                        ammo.set_weapon_capacity_hint(
+                            profile.weapon1_ammo_capacity,
+                            profile.weapon2_ammo_capacity,
+                        );
                     }
                     if ammo.weapon1_empty(&indicators_v) {
                         wt_vars.weapon1_firing = false;

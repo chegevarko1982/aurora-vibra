@@ -11,10 +11,10 @@
 
 use std::fs;
 
+use aurora_vibra::types::WtConfig;
 use aurora_vibra::wt_link::aero_profiles;
 use aurora_vibra::wt_link::rumble::WtRumbleState;
 use aurora_vibra::wt_link::vars;
-use aurora_vibra::types::WtConfig;
 use serde_json::Value;
 
 #[test]
@@ -66,8 +66,14 @@ fn bf109e3_session_replays_with_bf109f4_fallback_profile() {
         ticks_replayed += 1;
     }
 
-    assert!(ticks_replayed > 100, "expected a substantial recorded session, got {ticks_replayed} ticks");
-    assert_eq!(vehicle_type_seen, "bf-109e-3", "fixture is expected to be the Bf 109 E-3 session");
+    assert!(
+        ticks_replayed > 100,
+        "expected a substantial recorded session, got {ticks_replayed} ticks"
+    );
+    assert_eq!(
+        vehicle_type_seen, "bf-109e-3",
+        "fixture is expected to be the Bf 109 E-3 session"
+    );
     assert_eq!(
         aero_profiles::match_profile(&vehicle_type_seen),
         Some(&aero_profiles::BF_109_F4),

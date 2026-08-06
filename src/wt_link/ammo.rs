@@ -250,7 +250,11 @@ impl AmmoTracker {
     /// `infer_firing_from_ammo_sum`-кластеров назвать weapon1, а какой —
     /// weapon2 — никогда не подменяет и не опережает живой сигнал. Вызов
     /// после того, как подсказка уже применена в этой сессии — no-op.
-    pub fn set_weapon_capacity_hint(&mut self, weapon1_capacity: Option<f64>, weapon2_capacity: Option<f64>) {
+    pub fn set_weapon_capacity_hint(
+        &mut self,
+        weapon1_capacity: Option<f64>,
+        weapon2_capacity: Option<f64>,
+    ) {
         if self.weapon_capacity_hint_applied {
             return;
         }
@@ -315,7 +319,9 @@ impl AmmoTracker {
         let a_hit = !decreased.is_disjoint(&self.fallback_bucket_a);
         let unassigned: HashSet<String> = decreased
             .iter()
-            .filter(|k| !self.fallback_bucket_a.contains(*k) && !self.fallback_bucket_b.contains(*k))
+            .filter(|k| {
+                !self.fallback_bucket_a.contains(*k) && !self.fallback_bucket_b.contains(*k)
+            })
             .cloned()
             .collect();
 
@@ -395,13 +401,21 @@ impl AmmoTracker {
         // умолчанию считается тем же "первым" оружием — так борт с одним
         // типом боеприпасов продолжает мгновенно репортить стрельбу, как и
         // раньше, а не ждёт появления второго типа.
-        let fired_default = decreased.iter().any(|k| !self.fallback_bucket_b.contains(k));
+        let fired_default = decreased
+            .iter()
+            .any(|k| !self.fallback_bucket_b.contains(k));
         let fired_b = decreased.iter().any(|k| self.fallback_bucket_b.contains(k));
 
         if self.bucket_a_is_weapon1 {
-            FallbackFiring { weapon1: fired_default, weapon2: fired_b }
+            FallbackFiring {
+                weapon1: fired_default,
+                weapon2: fired_b,
+            }
         } else {
-            FallbackFiring { weapon1: fired_b, weapon2: fired_default }
+            FallbackFiring {
+                weapon1: fired_b,
+                weapon2: fired_default,
+            }
         }
     }
 }
@@ -413,7 +427,14 @@ mod tests {
 
     /// Кормит трекер N тиками, где убывает только `key`, соло для `w1`/`w2`
     /// (сколько раз нужно, чтобы перескочить `MIN_SOLO_TICKS`).
-    fn fire_solo(t: &mut AmmoTracker, key: &str, mut n: f64, ticks: u32, w1: bool, w2: bool) -> f64 {
+    fn fire_solo(
+        t: &mut AmmoTracker,
+        key: &str,
+        mut n: f64,
+        ticks: u32,
+        w1: bool,
+        w2: bool,
+    ) -> f64 {
         for _ in 0..ticks {
             n -= 1.0;
             t.observe(&json!({ key: n }), w1, w2);
@@ -450,9 +471,17 @@ mod tests {
     #[test]
     fn does_not_confuse_weapon2_counter_with_weapon1() {
         let mut t = AmmoTracker::new();
-        t.observe(&json!({"ammo_counter1": 60, "ammo_counter5": 1000}), false, false);
+        t.observe(
+            &json!({"ammo_counter1": 60, "ammo_counter5": 1000}),
+            false,
+            false,
+        );
         fire_solo(&mut t, "ammo_counter1", 60.0, MIN_SOLO_TICKS, true, false);
-        t.observe(&json!({"ammo_counter1": 57, "ammo_counter5": 1000}), false, false);
+        t.observe(
+            &json!({"ammo_counter1": 57, "ammo_counter5": 1000}),
+            false,
+            false,
+        );
         fire_solo(&mut t, "ammo_counter5", 1000.0, MIN_SOLO_TICKS, false, true);
         // weapon1's own counter hitting 0 gates weapon1 regardless of weapon2's counter
         assert!(t.weapon1_empty(&json!({"ammo_counter1": 0, "ammo_counter5": 500})));
@@ -467,13 +496,25 @@ mod tests {
         // "чужой" для weapon1 счётчик (ammo_counter1, на деле weapon2) —
         // это не должно приписать ammo_counter1 к weapon1.
         let mut t = AmmoTracker::new();
-        t.observe(&json!({"ammo_counter1": 250, "ammo_counter2": 900}), false, false);
+        t.observe(
+            &json!({"ammo_counter1": 250, "ammo_counter2": 900}),
+            false,
+            false,
+        );
         fire_solo(&mut t, "ammo_counter2", 900.0, MIN_SOLO_TICKS, true, false);
-        t.observe(&json!({"ammo_counter1": 250, "ammo_counter2": 897}), false, false);
+        t.observe(
+            &json!({"ammo_counter1": 250, "ammo_counter2": 897}),
+            false,
+            false,
+        );
         fire_solo(&mut t, "ammo_counter1", 250.0, MIN_SOLO_TICKS, false, true);
         // оба спуска зажаты несколько тиков, стреляет фактически только counter1
         for n in (240..247).rev() {
-            t.observe(&json!({"ammo_counter1": n as f64, "ammo_counter2": 897}), true, true);
+            t.observe(
+                &json!({"ammo_counter1": n as f64, "ammo_counter2": 897}),
+                true,
+                true,
+            );
         }
         // weapon1's real counter (2) still has ammo -> must not be gated
         assert!(!t.weapon1_empty(&json!({"ammo_counter1": 0, "ammo_counter2": 897})));
@@ -516,7 +557,10 @@ mod tests {
         // задержки становится "базовым" кластером (weapon1 по умолчанию).
         assert_eq!(
             t.infer_firing_from_ammo_sum(&json!({"cannon1_ammo": 98})),
-            FallbackFiring { weapon1: true, weapon2: false }
+            FallbackFiring {
+                weapon1: true,
+                weapon2: false
+            }
         );
     }
 
@@ -570,7 +614,13 @@ mod tests {
         for _ in 0..MIN_SOLO_TICKS {
             n -= 1.0;
             let f = t.infer_firing_from_ammo_sum(&json!({"ammo_a": n}));
-            assert_eq!(f, FallbackFiring { weapon1: true, weapon2: false });
+            assert_eq!(
+                f,
+                FallbackFiring {
+                    weapon1: true,
+                    weapon2: false
+                }
+            );
         }
 
         // Заводим базовую точку отсчёта для ammo_b до того, как он начнёт
@@ -584,7 +634,13 @@ mod tests {
             m -= 1.0;
             last = t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
         }
-        assert_eq!(last, FallbackFiring { weapon1: false, weapon2: true });
+        assert_eq!(
+            last,
+            FallbackFiring {
+                weapon1: false,
+                weapon2: true
+            }
+        );
     }
 
     #[test]
@@ -596,7 +652,13 @@ mod tests {
             n1 -= 1.0;
             n2 -= 1.0;
             let f = t.infer_firing_from_ammo_sum(&json!({"ammo_a1": n1, "ammo_a2": n2}));
-            assert_eq!(f, FallbackFiring { weapon1: true, weapon2: false });
+            assert_eq!(
+                f,
+                FallbackFiring {
+                    weapon1: true,
+                    weapon2: false
+                }
+            );
         }
     }
 
@@ -619,7 +681,13 @@ mod tests {
         n -= 1.0;
         m -= 1.0;
         let f = t.infer_firing_from_ammo_sum(&json!({"ammo_a": n, "ammo_b": m}));
-        assert_eq!(f, FallbackFiring { weapon1: true, weapon2: true });
+        assert_eq!(
+            f,
+            FallbackFiring {
+                weapon1: true,
+                weapon2: true
+            }
+        );
     }
 
     #[test]
@@ -646,13 +714,25 @@ mod tests {
         // bucket A (cannon_ammo, ~200) теперь должен маркироваться как
         // weapon2 — его стартовая сумма ближе к подсказанной ёмкости
         // weapon2 (200), чем weapon1 (2000).
-        assert_eq!(last, FallbackFiring { weapon1: true, weapon2: false });
+        assert_eq!(
+            last,
+            FallbackFiring {
+                weapon1: true,
+                weapon2: false
+            }
+        );
 
         // и стрельба по cannon_ammo (bucket A) в одиночку теперь должна
         // репортиться как weapon2, а не weapon1
         a -= 1.0;
         let f = t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
-        assert_eq!(f, FallbackFiring { weapon1: false, weapon2: true });
+        assert_eq!(
+            f,
+            FallbackFiring {
+                weapon1: false,
+                weapon2: true
+            }
+        );
     }
 
     #[test]
@@ -673,7 +753,13 @@ mod tests {
         }
         // без подсказки порядок по умолчанию сохраняется: bucket A (cannon,
         // первый увиденный) остаётся weapon1, bucket B (mg) — weapon2.
-        assert_eq!(last, FallbackFiring { weapon1: false, weapon2: true });
+        assert_eq!(
+            last,
+            FallbackFiring {
+                weapon1: false,
+                weapon2: true
+            }
+        );
     }
 
     #[test]
@@ -693,6 +779,12 @@ mod tests {
             b -= 1.0;
             last = t.infer_firing_from_ammo_sum(&json!({"cannon_ammo": a, "mg_ammo": b}));
         }
-        assert_eq!(last, FallbackFiring { weapon1: false, weapon2: true });
+        assert_eq!(
+            last,
+            FallbackFiring {
+                weapon1: false,
+                weapon2: true
+            }
+        );
     }
 }
