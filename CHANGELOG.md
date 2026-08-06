@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.3.1
+
+Patch release. Fixes restoring the window from the tray icon.
+
+**Fixes:**
+- Clicking (or double-clicking) the tray icon did not bring the window back. Two causes: the window title the tray searched for was hardcoded to an older version string and no longer matched the real window, and even when found, a window hidden by **close to tray** was only un-minimized, never made visible again. The title is now derived from the package version, and the restore path explicitly shows the window.
+- The in-app updater no longer gives up when Windows returns `ERROR_ELEVATION_REQUIRED` while spawning the update helper: the helper is retried through the shell so the UAC prompt appears instead.
+
 ## v4.3.0
 
 First stable release with three simulators. Supersedes `v4.3.0-rc1` — same code, now validated against a running X-Plane 12.

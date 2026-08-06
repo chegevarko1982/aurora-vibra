@@ -22,7 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos,
     GetMessageW, IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LR_SHARED, LoadCursorW, MENU_ITEM_FLAGS,
     MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage, RegisterClassW,
-    SHOW_WINDOW_CMD, SW_RESTORE, SetForegroundWindow, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    SHOW_WINDOW_CMD, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage,
     WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER,
     WNDCLASSW, WS_OVERLAPPED,
@@ -38,7 +39,15 @@ const ID_TRAY_QUIT: u32 = 1004;
 
 const WM_TRAYICON: u32 = WM_USER + 0x42;
 const WC_TRAY: &str = "AuroraVibra.TrayWindow";
-const MAIN_WINDOW_TITLE: &str = "Aurora Vibra v4.0.1"; // must match run_native title
+
+/// Заголовок главного окна — строится ровно так же, как в `main.rs`
+/// (`format!("Aurora Vibra v{}", env!("CARGO_PKG_VERSION"))`). Раньше это была
+/// захардкоженная строка "Aurora Vibra v4.0.1", которая разошлась с версией в
+/// Cargo.toml — FindWindowW переставал находить окно, и восстановление из трея
+/// молча ничего не делало.
+fn main_window_title() -> String {
+    format!("Aurora Vibra v{}", env!("CARGO_PKG_VERSION"))
+}
 
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
@@ -65,9 +74,14 @@ static TRAY_STATE: OnceLock<Mutex<Box<TrayState>>> = OnceLock::new();
 /// foreground" logic the tray icon already used, no need for a second copy.
 pub fn bring_main_to_front() {
     unsafe {
-        let title_w = wide(MAIN_WINDOW_TITLE);
+        let title_w = wide(&main_window_title());
         let main_hwnd = FindWindowW(None, PCWSTR(title_w.as_ptr()));
         if main_hwnd.0 != 0 {
+            // SW_SHOW нужен отдельно: "close to tray" прячет окно через
+            // ViewportCommand::Visible(false) (= ShowWindow(SW_HIDE)), и такое
+            // окно не свёрнуто, а скрыто — одного SW_RESTORE для egui-состояния
+            // мало, а скрытому окну winit может не доставить redraw.
+            let _ = ShowWindow(main_hwnd, SHOW_WINDOW_CMD(SW_SHOW.0));
             let _ = ShowWindow(main_hwnd, SHOW_WINDOW_CMD(SW_RESTORE.0));
             let _ = SetForegroundWindow(main_hwnd);
         }
@@ -75,6 +89,9 @@ pub fn bring_main_to_front() {
 
     if let Some(lock) = TRAY_STATE.get() {
         let st = lock.lock().unwrap();
+        // Visible(true) обязателен, иначе winit продолжает считать окно
+        // скрытым и следующий Visible(false) (закрытие в трей) станет no-op.
+        st.ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         st.ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
         st.ctx.send_viewport_cmd(ViewportCommand::Focus);
         st.ctx.request_repaint();

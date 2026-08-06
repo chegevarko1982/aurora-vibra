@@ -2842,6 +2842,9 @@ impl eframe::App for UiState {
             match self.rx_ui.try_recv() {
                 Ok(cmd) => match cmd {
                     UiCmd::Show => {
+                        // Visible(true) — окно могло быть спрятано в трей
+                        // (close_to_tray), а не свёрнуто; см. tray::bring_main_to_front.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         ctx.request_repaint();
