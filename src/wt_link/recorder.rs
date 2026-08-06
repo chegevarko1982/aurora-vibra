@@ -32,6 +32,12 @@ pub struct SessionRecorder {
     last_flush: Instant,
 }
 
+impl Default for SessionRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionRecorder {
     pub fn new() -> Self {
         Self {
@@ -44,7 +50,14 @@ impl SessionRecorder {
     /// Сам решает, когда открыть/закрыть файл (по фронту `enabled`) и когда
     /// писать/сбрасывать буфер — вызывающему коду (`worker.rs`) не нужно
     /// хранить никакого дополнительного состояния перехода.
-    pub fn tick(&mut self, enabled: bool, t: f64, state: &Value, indicators: &Value, logs: &LogBuffer) {
+    pub fn tick(
+        &mut self,
+        enabled: bool,
+        t: f64,
+        state: &Value,
+        indicators: &Value,
+        logs: &LogBuffer,
+    ) {
         if enabled && self.writer.is_none() {
             self.start(logs);
         } else if !enabled && self.writer.is_some() {
@@ -66,7 +79,10 @@ impl SessionRecorder {
     fn start(&mut self, logs: &LogBuffer) {
         let dir = sessions_dir();
         if let Err(e) = fs::create_dir_all(&dir) {
-            logs.push(format!("WT recorder: failed to create {}: {e}", dir.display()));
+            logs.push(format!(
+                "WT recorder: failed to create {}: {e}",
+                dir.display()
+            ));
             return;
         }
         let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
@@ -77,7 +93,10 @@ impl SessionRecorder {
                 self.writer = Some(BufWriter::new(f));
                 self.last_flush = Instant::now();
             }
-            Err(e) => logs.push(format!("WT recorder: failed to create {}: {e}", path.display())),
+            Err(e) => logs.push(format!(
+                "WT recorder: failed to create {}: {e}",
+                path.display()
+            )),
         }
     }
 
@@ -92,9 +111,17 @@ impl SessionRecorder {
 /// То же самое ручное форматирование, что `wt_probe::writer::format_line` —
 /// `body` пересериализуется компактно (WT отдаёт `/state`/`/indicators`
 /// pretty-printed, со встроенными переводами строк, которые сломали бы JSONL).
-fn write_line(w: &mut BufWriter<File>, t: f64, endpoint: &str, body: &Value) -> std::io::Result<()> {
+fn write_line(
+    w: &mut BufWriter<File>,
+    t: f64,
+    endpoint: &str,
+    body: &Value,
+) -> std::io::Result<()> {
     let compact_body = serde_json::to_string(body).unwrap_or_else(|_| "null".to_string());
-    writeln!(w, "{{\"t\":{t:.6},\"endpoint\":\"{endpoint}\",\"body\":{compact_body}}}")
+    writeln!(
+        w,
+        "{{\"t\":{t:.6},\"endpoint\":\"{endpoint}\",\"body\":{compact_body}}}"
+    )
 }
 
 /// Тот же приоритет путей, что у `LogBuffer::try_init_file_prefer_exe_dir` —

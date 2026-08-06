@@ -33,8 +33,7 @@ use crate::xp_link::datarefs::DrIdx;
 use crate::xp_link::rref::RrefClient;
 use crate::xp_link::vars;
 use crate::{
-    ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleEngine,
-    SimStatus,
+    ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleEngine, SimStatus,
 };
 
 /// Ритм опроса, пока X-Plane жив — 20 Гц, тот же такт, что у WT-конвейера и
@@ -141,10 +140,8 @@ pub fn xp_worker(
         // данные уже со следующего тика. Подписки идемпотентны (freq у уже
         // подписанного dataref просто перезаписывается тем же значением),
         // так что повторный вызов безопасен и не требует доп. состояния.
-        if !alive {
-            if let Err(e) = c.subscribe_all() {
-                logs.push(format!("XP: re-subscribe (probing) failed: {e}"));
-            }
+        if !alive && let Err(e) = c.subscribe_all() {
+            logs.push(format!("XP: re-subscribe (probing) failed: {e}"));
         }
 
         // 7. Переподписка/отписка по ВЛАДЕНИЮ: теряя слот, отписываемся,
@@ -234,31 +231,30 @@ pub fn xp_worker(
         // dataref — это не ошибка транспорта, слот просто никогда не станет
         // `seen`, и без этой проверки опечатка проявлялась бы только как
         // «эффект молча не работает», без единого следа в логах.
-        if !self_check_done {
-            if let Some(t0) = self_check_anchor {
-                if t0.elapsed() >= SELF_CHECK_DELAY {
-                    self_check_done = true;
-                    // DEFS[i].0 — это ровно то же имя, что вернул бы
-                    // DrIdx::name() для индекса i (инвариант макроса
-                    // dataref_idx!, см. datarefs.rs), поэтому отдельно
-                    // реконструировать DrIdx из усечённого индекса не нужно.
-                    let missing: Vec<&str> = DrIdx::DEFS
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| !seen[*i])
-                        .map(|(_, (name, _))| *name)
-                        .collect();
-                    if missing.is_empty() {
-                        logs.push("XP: self-check ok, every subscribed dataref reported at least once");
-                    } else {
-                        logs.push(format!(
-                            "XP: self-check found {} dataref(s) with no data ever received \
-                             (typo in name, or not supported by this aircraft?): {}",
-                            missing.len(),
-                            missing.join(", ")
-                        ));
-                    }
-                }
+        if !self_check_done
+            && let Some(t0) = self_check_anchor
+            && t0.elapsed() >= SELF_CHECK_DELAY
+        {
+            self_check_done = true;
+            // DEFS[i].0 — это ровно то же имя, что вернул бы
+            // DrIdx::name() для индекса i (инвариант макроса
+            // dataref_idx!, см. datarefs.rs), поэтому отдельно
+            // реконструировать DrIdx из усечённого индекса не нужно.
+            let missing: Vec<&str> = DrIdx::DEFS
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !seen[*i])
+                .map(|(_, (name, _))| *name)
+                .collect();
+            if missing.is_empty() {
+                logs.push("XP: self-check ok, every subscribed dataref reported at least once");
+            } else {
+                logs.push(format!(
+                    "XP: self-check found {} dataref(s) with no data ever received \
+                     (typo in name, or not supported by this aircraft?): {}",
+                    missing.len(),
+                    missing.join(", ")
+                ));
             }
         }
 

@@ -66,12 +66,12 @@ pub(crate) fn decode_packet(buf: &[u8], values: &mut [f32], seen: &mut [bool]) -
 
         // Индекс от сима может ссылаться на прошлую (уже отменённую)
         // подписку — просто пропускаем, не паникуем на out-of-bounds.
-        if index >= 0 {
-            if let Some(slot) = values.get_mut(index as usize) {
-                *slot = value;
-                seen[index as usize] = true;
-                updated += 1;
-            }
+        if index >= 0
+            && let Some(slot) = values.get_mut(index as usize)
+        {
+            *slot = value;
+            seen[index as usize] = true;
+            updated += 1;
         }
     }
 
