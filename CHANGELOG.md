@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.3.2
+
+Patch release. Fixes the in-app updater failing with «Отказано в доступе (os error 5)» / "Access is denied".
+
+**Fixes:**
+- The update helper started copying files while the application was still running, so writing the new `.exe` over the running one failed with access denied. The helper now waits for the application's process to actually exit (it is passed its PID), the "Updating…" message box no longer blocks that exit — it is shown before the helper is launched, not after — and if a target file is still locked anyway, it is renamed aside instead of aborting the update. Left-over `*.aurora-old` files are cleaned up on the next start.
+
+**Note:**
+- Because the faulty code lives in the *installed* version, updating **from v4.3.1 or earlier still fails** — install this release manually once (download the zip below and unpack it over your existing folder). Automatic updates work from v4.3.2 onwards.
+
 ## v4.3.1
 
 Patch release. Fixes restoring the window from the tray icon.

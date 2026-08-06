@@ -27,7 +27,8 @@ const UA: &str = "AuroraVibra-Updater (+https://github.com/chegevarko1982/aurora
 /// helper mode it will perform the update and then relaunch the app.
 /// Returns true if the helper ran and the process should exit immediately.
 pub fn early_self_update_hook() -> bool {
-    // Args:  --apply-update <app_dir> <extracted_dir> <new_exe_name> [--elevated]
+    // Args:  --apply-update <app_dir> <extracted_dir> <new_exe_name>
+    //        [--elevated] [--wait-pid <pid>]
     let mut args = std::env::args_os();
     if let Some(first) = args.nth(1)
         && first == "--apply-update"
@@ -35,11 +36,24 @@ pub fn early_self_update_hook() -> bool {
         let app_dir = args.next().expect("missing app_dir");
         let extract = args.next().expect("missing extracted_dir");
         let exe_name = args.next().expect("missing exe_name");
+        // Хвост разбираем циклом, а не «следующий аргумент — это --elevated»:
+        // флагов теперь два и порядок между ними не гарантирован.
         let mut elevated = false;
-        if let Some(flag) = args.next()
-            && flag == "--elevated"
-        {
-            elevated = true;
+        let mut wait_pid: Option<u32> = None;
+        while let Some(flag) = args.next() {
+            if flag == "--elevated" {
+                elevated = true;
+            } else if flag == "--wait-pid" {
+                wait_pid = args
+                    .next()
+                    .and_then(|v| v.to_string_lossy().parse::<u32>().ok());
+            }
+        }
+        if let Some(pid) = wait_pid {
+            // Ждём реального выхода приложения. Без этого helper начинал
+            // копирование, пока основной процесс ещё жив (он висел на модальном
+            // "Updating"-окне), и падал с "Отказано в доступе (os error 5)".
+            wait_for_process_exit(pid, Duration::from_secs(30));
         }
         if let Err(e) = apply_update(
             Path::new(&app_dir),
@@ -56,7 +70,68 @@ pub fn early_self_update_hook() -> bool {
         }
         return true;
     }
+
+    // Обычный запуск: подчищаем резервные копии, оставшиеся от прошлого
+    // обновления (см. replace_file) — тогда они были заняты, сейчас нет.
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        cleanup_stale_backups(dir);
+    }
+
     false
+}
+
+/// Суффикс, который получает занятый файл, если положить новый поверх него
+/// не удалось (см. replace_file). Чистится при следующем обычном запуске.
+const BACKUP_EXT: &str = "aurora-old";
+
+/// Ждёт завершения процесса с указанным PID.
+///
+/// Не ошибка, если процесс уже мёртв: OpenProcess просто не даст хендл, и мы
+/// сразу возвращаемся. Таймаут — страховка от зависшего приложения; по его
+/// истечении обновление всё равно пробуется (replace_file умеет обходить
+/// занятый файл переименованием).
+fn wait_for_process_exit(pid: u32, timeout: Duration) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+
+    unsafe {
+        let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
+            return;
+        };
+        if h.is_invalid() {
+            return;
+        }
+        let _ = WaitForSingleObject(h, timeout.as_millis() as u32);
+        let _ = CloseHandle(h);
+    }
+
+    // Windows освобождает файловые блокировки образа не мгновенно после того,
+    // как процесс сигналит о завершении.
+    thread::sleep(Duration::from_millis(300));
+}
+
+/// Удаляет `*.aurora-old`, оставшиеся от предыдущего обновления. Best-effort:
+/// файл всё ещё может быть занят, тогда попробуем в следующий раз.
+fn cleanup_stale_backups(dir: &Path) {
+    let Ok(entries) = read_dir(dir) else {
+        return;
+    };
+    for e in entries.filter_map(|e| e.ok()) {
+        let p = e.path();
+        // По имени, а не по extension(): у второй копии суффикс может быть
+        // ".aurora-old.<pid>", и расширением тогда считается уже pid.
+        if p.file_name()
+            .and_then(OsStr::to_str)
+            .map(|s| s.to_ascii_lowercase().contains(&format!(".{BACKUP_EXT}")))
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(&p);
+        }
+    }
 }
 
 /// Spawns a background thread that checks + prompts + downloads + launches helper.
@@ -435,12 +510,24 @@ fn launch_helper_and_exit(
     extracted_dir: &Path,
     exe_name: &str,
 ) -> Result<()> {
+    // Сообщение показываем ДО запуска helper'а. MessageBoxW модальный: пока
+    // пользователь не нажмёт OK, процесс не выходит — а helper тем временем
+    // уже копировал бы файлы поверх работающего приложения и падал с
+    // "Отказано в доступе (os error 5)".
+    {
+        let t = crate::i18n::get().strings();
+        msgbox(HWND(0), t.upd_title_updating, t.upd_body_updating, false);
+    }
+
     // Use a detached helper so it keeps running after we exit.
+    let pid = std::process::id().to_string();
     let mut cmd = Command::new(helper_path);
     cmd.arg("--apply-update")
         .arg(app_dir)
         .arg(extracted_dir)
         .arg(exe_name)
+        .arg("--wait-pid")
+        .arg(&pid)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -466,12 +553,8 @@ fn launch_helper_and_exit(
         Err(e) => return Err(anyhow::Error::new(e).context("spawn helper")),
     }
 
-    {
-        let t = crate::i18n::get().strings();
-        msgbox(HWND(0), t.upd_title_updating, t.upd_body_updating, false);
-    }
-
-    thread::sleep(Duration::from_millis(200));
+    // Выходим немедленно: helper ждёт именно нашего PID и до тех пор ничего
+    // не трогает.
     std::process::exit(0);
 }
 
@@ -485,10 +568,11 @@ fn spawn_helper_via_uac(
     exe_name: &str,
 ) -> Result<()> {
     let params = format!(
-        "--apply-update \"{}\" \"{}\" \"{}\" --elevated",
+        "--apply-update \"{}\" \"{}\" \"{}\" --elevated --wait-pid {}",
         app_dir.display(),
         extracted_dir.display(),
-        exe_name
+        exe_name,
+        std::process::id()
     );
     let params_w = wide_str(&params);
     let helper_w = wide_os(helper_path.as_os_str());
@@ -504,7 +588,9 @@ fn spawn_helper_via_uac(
         if (h.0 as isize) <= 32 {
             let t = crate::i18n::get().strings();
             msgbox_raw(t.upd_title_admin_required, t.upd_body_admin_required, true);
-            bail!("spawn helper: elevation required, and ShellExecuteW(runas) failed or was denied");
+            bail!(
+                "spawn helper: elevation required, and ShellExecuteW(runas) failed or was denied"
+            );
         }
     }
     Ok(())
@@ -610,6 +696,12 @@ fn relaunch_self_elevated(
     Ok(())
 }
 
+/// Дополнительная (слабая) проверка перед копированием.
+///
+/// Занятость запущенного EXE она НЕ ловит: Windows разрешает переименовывать
+/// файл работающего образа, запрещая только удаление и перезапись. Настоящая
+/// гарантия — ожидание PID приложения в early_self_update_hook, а страховка на
+/// случай остаточных блокировок — replace_file.
 fn wait_for_writable(app_dir: &Path, timeout: Duration) -> Result<()> {
     let start = Instant::now();
 
@@ -663,17 +755,51 @@ fn recursive_copy_overwrite(src: &Path, dst: &Path) -> Result<()> {
             if let Some(parent) = dp.parent() {
                 create_dir_all(parent)?;
             }
-            // Try atomic replace: copy to temp in the destination dir, then rename into place.
-            let mut tmp = dp.clone();
-            tmp.set_extension("updt");
-            copy(&sp, &tmp)?;
-            fs::rename(&tmp, &dp).or_else(|_| {
-                let _ = fs::remove_file(&dp);
-                fs::rename(&tmp, &dp)
-            })?;
+            replace_file(&sp, &dp)?;
         }
     }
     Ok(())
+}
+
+/// Кладёт `src` на место `dst`, переживая занятость `dst`.
+///
+/// Windows не даёт удалить или перезаписать файл запущенного образа (EXE/DLL),
+/// но переименовать его — даёт. Поэтому если обычная замена упирается в
+/// «Отказано в доступе», занятый файл уезжает в сторону под `.aurora-old`, а
+/// новый встаёт на освободившееся имя; хвост подчищается при следующем старте
+/// (cleanup_stale_backups). Раньше этой ветки не было, и обновление обрывалось
+/// с "os error 5", если приложение ещё не успело закрыться.
+fn replace_file(src: &Path, dst: &Path) -> Result<()> {
+    // Сначала копия рядом с целью: rename в пределах тома атомарен, копирование
+    // поверх живого файла — нет.
+    let mut tmp = dst.to_path_buf();
+    tmp.set_extension("updt");
+    copy(src, &tmp).with_context(|| format!("copy to {}", tmp.display()))?;
+
+    if fs::rename(&tmp, dst).is_ok() {
+        return Ok(());
+    }
+    if fs::remove_file(dst).is_ok() && fs::rename(&tmp, dst).is_ok() {
+        return Ok(());
+    }
+
+    // Цель занята — уводим её под уникальным именем и повторяем.
+    let mut backup = dst.to_path_buf();
+    backup.set_extension(BACKUP_EXT);
+    let _ = fs::remove_file(&backup); // остаток прошлого обновления
+    if backup.exists() {
+        backup.set_extension(format!("{}.{}", BACKUP_EXT, std::process::id()));
+    }
+    fs::rename(dst, &backup).with_context(|| format!("move aside {}", dst.display()))?;
+    match fs::rename(&tmp, dst) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Вернуть всё как было — иначе останется каталог без EXE.
+            let _ = fs::rename(&backup, dst);
+            let _ = fs::remove_file(&tmp);
+            Err(anyhow::Error::new(e).context(format!("install {}", dst.display())))
+        }
+    }
 }
 
 fn confirm(hwnd: HWND, title: &str, text: &str) -> bool {
@@ -737,6 +863,37 @@ mod tests {
             assert!(!name.contains(kw), "{HELPER_EXE_NAME} contains {kw:?}");
         }
         assert!(name.ends_with(".exe"));
+    }
+
+    #[test]
+    fn replace_file_overwrites_and_backups_are_cleaned_up() {
+        let dir = std::env::temp_dir().join(format!(
+            "aurora-vibra-replace-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = create_dir_all(&dir);
+
+        let src = dir.join("new.bin");
+        let dst = dir.join("app.exe");
+        fs::write(&src, b"new").unwrap();
+        fs::write(&dst, b"old").unwrap();
+
+        replace_file(&src, &dst).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"new");
+        assert!(!dir.join("app.updt").exists(), "временный файл не убран");
+
+        // Хвост от прошлого обновления подчищается по имени, включая вариант
+        // с ".aurora-old.<pid>".
+        let b1 = dir.join(format!("app.{BACKUP_EXT}"));
+        let b2 = dir.join(format!("app.{BACKUP_EXT}.4242"));
+        fs::write(&b1, b"x").unwrap();
+        fs::write(&b2, b"x").unwrap();
+        cleanup_stale_backups(&dir);
+        assert!(!b1.exists() && !b2.exists());
+        assert!(dst.exists(), "чистка не должна трогать обычные файлы");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
