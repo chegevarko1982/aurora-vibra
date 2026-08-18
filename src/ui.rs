@@ -31,19 +31,50 @@ use crate::{
 mod palette {
     use egui::Color32;
 
-    pub const BG_APP: Color32 = Color32::from_rgb(0x0B, 0x0E, 0x14);
-    pub const BG_SIDEBAR: Color32 = Color32::from_rgb(0x0F, 0x13, 0x1A);
-    pub const BG_CARD: Color32 = Color32::from_rgb(0x16, 0x1B, 0x24);
-    pub const BG_CARD_DISABLED: Color32 = Color32::from_rgb(0x12, 0x16, 0x1D);
+    // Фоны. Раньше BG_APP был почти чистый чёрный (#0B0E14) — на неоткалиброванных
+    // мониторах он сливался с текстом egui по умолчанию (gray(140)). Подняли всю
+    // лестницу поверхностей, чтобы карточка/панель/фон различались и на плохом
+    // экране, и чтобы у текста была нормальная подложка.
+    pub const BG_APP: Color32 = Color32::from_rgb(0x0F, 0x14, 0x1C);
+    pub const BG_SIDEBAR: Color32 = Color32::from_rgb(0x15, 0x1B, 0x25);
+    pub const BG_CARD: Color32 = Color32::from_rgb(0x1E, 0x26, 0x32);
+    pub const BG_CARD_DISABLED: Color32 = Color32::from_rgb(0x17, 0x1E, 0x28);
 
-    pub const BORDER_DEFAULT: Color32 = Color32::from_rgb(0x2A, 0x33, 0x44);
-    pub const BORDER_ACTIVE: Color32 = Color32::from_rgb(0x3B, 0x4A, 0x61);
+    /// Подложка кнопок/полей в покое. Ключевой момент доступности: без неё
+    /// невыбранные пункты навигации не имели вообще никакого фона и «появлялись»
+    /// только под курсором (жалоба тестировщика).
+    pub const SURFACE_CONTROL: Color32 = Color32::from_rgb(0x2A, 0x33, 0x44);
+    pub const SURFACE_CONTROL_HOVER: Color32 = Color32::from_rgb(0x38, 0x44, 0x5A);
+    pub const SURFACE_CONTROL_ACTIVE: Color32 = Color32::from_rgb(0x46, 0x55, 0x6F);
 
-    pub const ACCENT_PRIMARY: Color32 = Color32::from_rgb(0x3B, 0x82, 0xF6);
+    pub const BORDER_DEFAULT: Color32 = Color32::from_rgb(0x3A, 0x46, 0x5A);
+    pub const BORDER_ACTIVE: Color32 = Color32::from_rgb(0x5A, 0x6E, 0x8C);
+
+    pub const ACCENT_PRIMARY: Color32 = Color32::from_rgb(0x7D, 0xB3, 0xFF);
     pub const ACCENT_LIVE: Color32 = Color32::from_rgb(0x22, 0xD3, 0xEE);
 
-    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(0x94, 0xA3, 0xB8);
-    pub const TEXT_DISABLED: Color32 = Color32::from_rgb(0x64, 0x74, 0x8B);
+    /// Статусы в верхней панели. Красный был #C83C3C — всего ~3.6:1 на BG_APP,
+    /// то есть самая важная строка («не подключено») читалась хуже остальных.
+    pub const STATUS_BAD: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x6B);
+    pub const STATUS_WARN: Color32 = Color32::from_rgb(0xDC, 0xB4, 0x28);
+    pub const STATUS_OK: Color32 = Color32::from_rgb(0x3E, 0xC9, 0x74);
+    pub const STATUS_ATTENTION: Color32 = Color32::from_rgb(0xE6, 0x82, 0x1E);
+
+    /// Подложка выбранного пункта — непрозрачная тёмно-синяя, а не
+    /// полупрозрачный акцент поверх фона: раньше выбранный пункт был синим
+    /// текстом на синей заливке (~3:1) и читался хуже невыбранного.
+    pub const SELECTED_BG: Color32 = Color32::from_rgb(0x1E, 0x3A, 0x5F);
+    pub const SELECTED_FG: Color32 = Color32::from_rgb(0x93, 0xC5, 0xFD);
+    /// Тинт иконки устройства во включённом состоянии: там под ней светлая
+    /// заливка (#CCCEFF), поэтому сама иконка должна быть тёмной.
+    pub const DEVICE_ON_FG: Color32 = Color32::from_rgb(0x1E, 0x3A, 0x5F);
+
+    /// Базовый цвет текста. egui::Visuals::dark() ставит gray(140) — формально
+    /// это ~5.7:1 на нашем фоне, но на практике тонкий шрифт такого тона
+    /// читается как «серо-чёрный по чёрному». Держим ~15:1.
+    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(0xE8, 0xEE, 0xF7);
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(0xB4, 0xC0, 0xD0);
+    pub const TEXT_DISABLED: Color32 = Color32::from_rgb(0x8C, 0x9A, 0xAE);
 
     /// Единая тёмная тема приложения поверх egui::Visuals::dark() —
     /// применяется один раз при старте (см. UiState::apply_theme), а не
@@ -60,9 +91,47 @@ mod palette {
         visuals.window_fill = BG_APP;
         visuals.extreme_bg_color = BG_APP;
         visuals.faint_bg_color = BG_SIDEBAR;
-        visuals.selection.bg_fill = ACCENT_PRIMARY.gamma_multiply(0.35);
-        visuals.selection.stroke.color = ACCENT_PRIMARY;
+        visuals.selection.bg_fill = SELECTED_BG;
+        visuals.selection.stroke.color = SELECTED_FG;
         visuals.hyperlink_color = ACCENT_PRIMARY;
+
+        // Текст. Все три «тона» задаём явно, иначе egui считает weak-текст как
+        // base * 0.6 alpha (≈2.4:1 на тёмном фоне — нечитаемо).
+        visuals.weak_text_color = Some(TEXT_SECONDARY);
+        // disabled_alpha перемножается с override_text_color карточки и с
+        // add_enabled_ui(false) у слайдеров: 0.5 давало ~1.5:1 у выключенного
+        // эффекта. 0.8 оставляет выключенное заметно тусклее включённого, но
+        // всё ещё читаемым.
+        visuals.disabled_alpha = 0.8;
+
+        let w = &mut visuals.widgets;
+        // noninteractive — обычные ui.label(); bg_stroke здесь же красит
+        // ui.separator() и линии отступов.
+        w.noninteractive.fg_stroke = egui::Stroke::new(1.0, TEXT_PRIMARY);
+        w.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER_DEFAULT);
+        w.noninteractive.weak_bg_fill = BG_APP;
+        w.noninteractive.bg_fill = BG_APP;
+
+        w.inactive.weak_bg_fill = SURFACE_CONTROL;
+        w.inactive.bg_fill = SURFACE_CONTROL;
+        w.inactive.bg_stroke = egui::Stroke::new(1.0, BORDER_DEFAULT);
+        w.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT_PRIMARY);
+
+        w.hovered.weak_bg_fill = SURFACE_CONTROL_HOVER;
+        w.hovered.bg_fill = SURFACE_CONTROL_HOVER;
+        w.hovered.bg_stroke = egui::Stroke::new(1.0, BORDER_ACTIVE);
+        w.hovered.fg_stroke = egui::Stroke::new(1.5, Color32::WHITE);
+
+        w.active.weak_bg_fill = SURFACE_CONTROL_ACTIVE;
+        w.active.bg_fill = SURFACE_CONTROL_ACTIVE;
+        w.active.bg_stroke = egui::Stroke::new(1.0, ACCENT_PRIMARY);
+        w.active.fg_stroke = egui::Stroke::new(2.0, Color32::WHITE);
+
+        w.open.weak_bg_fill = SURFACE_CONTROL;
+        w.open.bg_fill = SURFACE_CONTROL;
+        w.open.bg_stroke = egui::Stroke::new(1.0, BORDER_DEFAULT);
+        w.open.fg_stroke = egui::Stroke::new(1.0, TEXT_PRIMARY);
+
         ctx.set_visuals(visuals);
     }
 }
@@ -129,10 +198,113 @@ fn dot_indicator(ui: &mut egui::Ui, color: Color32, filled: bool, diameter: f32)
         .circle_stroke(center, r, egui::Stroke::new(1.2, color));
 }
 
-/// Статус-бейдж карточки эффекта: круглый маркер без текстовой подписи.
-/// Когда эффект реально сработал (`active && enabled`), маркер закрашивается
-/// белым — этого сигнала достаточно, отдельной текстовой подписи рядом с ним
-/// нет (маркер уже показывает состояние).
+/// Картинка устройства (джойстик/РУД) заданного тона и размера. Вынесена из
+/// `UiState::device_icon_button`, потому что ровно те же глифы нужны легенде
+/// (`effects_legend`) — иначе легенда объясняла бы не те значки, что в карточках.
+fn device_icon_image(icon: DeviceIcon, tint: Color32, size: f32) -> egui::Image<'static> {
+    let source = match icon {
+        DeviceIcon::Joystick => egui::include_image!("../assets/icon_joystick.png"),
+        DeviceIcon::Throttle => egui::include_image!("../assets/icon_throttle.png"),
+    };
+    egui::Image::new(source)
+        .tint(tint)
+        .fit_to_exact_size(egui::vec2(size, size))
+}
+
+/// Заливка под «включённой» иконкой устройства — одна константа на кнопку в
+/// карточке и на образец в легенде, чтобы они выглядели одинаково.
+const DEVICE_ON_BG: Color32 = Color32::from_rgb(0xCC, 0xCE, 0xFF);
+
+/// Легенда над списком эффектов: расшифровывает иконки устройств и состояния
+/// эффекта постоянным видимым текстом, а не только тултипом. `show_devices`
+/// выключается для секций, где маршрутизация зафиксирована и переключателей
+/// устройства в карточках нет (Engines) — иначе легенда объясняла бы
+/// отсутствующий элемент.
+fn effects_legend(ui: &mut egui::Ui, t: &Strings, show_devices: bool) {
+    // Образец иконки — ровно в том виде, в каком она выглядит включённой в
+    // карточке (тёмный глиф на светлой подложке), чтобы её можно было узнать.
+    fn device_sample(ui: &mut egui::Ui, icon: DeviceIcon, label: &str) {
+        egui::Frame::new()
+            .fill(DEVICE_ON_BG)
+            .corner_radius(3u8)
+            .inner_margin(egui::Margin::same(2))
+            .show(ui, |ui| {
+                ui.add(device_icon_image(icon, palette::DEVICE_ON_FG, 14.0));
+            });
+        ui.label(
+            RichText::new(label)
+                .small()
+                .strong()
+                .color(palette::TEXT_SECONDARY),
+        );
+    }
+
+    fn note(ui: &mut egui::Ui, text: &str) {
+        ui.label(RichText::new(text).small().color(palette::TEXT_DISABLED));
+    }
+
+    egui::Frame::new()
+        .fill(palette::BG_CARD_DISABLED)
+        .stroke(egui::Stroke::new(1.0, palette::BORDER_DEFAULT))
+        .corner_radius(6u8)
+        .inner_margin(egui::Margin::symmetric(10, 7))
+        .outer_margin(egui::Margin::symmetric(6, 0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
+
+            if show_devices {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(t.legend_devices)
+                            .small()
+                            .color(palette::TEXT_SECONDARY),
+                    );
+                    device_sample(ui, DeviceIcon::Joystick, t.legend_stick);
+                    ui.add_space(6.0);
+                    device_sample(ui, DeviceIcon::Throttle, t.legend_throttle);
+                    ui.add_space(6.0);
+                    note(ui, t.legend_hint);
+                });
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(t.legend_states)
+                        .small()
+                        .color(palette::TEXT_SECONDARY),
+                );
+
+                ui.label(
+                    RichText::new(t.status_off)
+                        .small()
+                        .color(palette::TEXT_DISABLED),
+                );
+                note(ui, t.legend_state_off);
+                ui.add_space(6.0);
+
+                dot_indicator(ui, palette::BORDER_ACTIVE, false, 8.0);
+                ui.label(
+                    RichText::new(t.status_idle)
+                        .small()
+                        .color(palette::TEXT_SECONDARY),
+                );
+                note(ui, t.legend_state_idle);
+                ui.add_space(6.0);
+
+                dot_indicator(ui, Color32::WHITE, true, 8.0);
+                ui.label(RichText::new(t.status_active).small().color(Color32::WHITE));
+                note(ui, t.legend_state_active);
+            });
+        });
+    ui.add_space(6.0);
+}
+
+/// Статус-бейдж карточки эффекта: круглый маркер И слово рядом с ним.
+/// Раньше во включённом состоянии здесь был только кружок, а что он значит,
+/// знала лишь всплывающая подсказка — тестировщик не смог разобраться в
+/// интерфейсе именно из-за таких немых значков. Теперь состояние всегда
+/// подписано словом, кружок остался как быстрый визуальный якорь.
 fn effect_status_badge(ui: &mut egui::Ui, enabled: bool, active: bool, t: &Strings) {
     if !enabled {
         ui.label(
@@ -142,24 +314,39 @@ fn effect_status_badge(ui: &mut egui::Ui, enabled: bool, active: bool, t: &Strin
         );
         return;
     }
+    let (dot, text, color) = if active {
+        (Color32::WHITE, t.status_active, Color32::WHITE)
+    } else {
+        (
+            palette::BORDER_ACTIVE,
+            t.status_idle,
+            palette::TEXT_SECONDARY,
+        )
+    };
+    // Бейдж живёт внутри Layout::right_to_left (см. вызовы в карточках), а
+    // ui.horizontal наследует направление родителя — значит первый добавленный
+    // элемент оказывается САМЫМ ПРАВЫМ. Чтобы читалось «кружок, потом слово» и
+    // там, и в легенде (где направление обычное), порядок выбираем по
+    // фактическому направлению раскладки.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if active {
-            dot_indicator(ui, Color32::WHITE, true, 8.0);
+        let word = RichText::new(text).small().color(color);
+        if ui.layout().prefer_right_to_left() {
+            ui.label(word);
+            dot_indicator(ui, dot, active, 8.0);
         } else {
-            dot_indicator(ui, palette::BORDER_ACTIVE, false, 8.0);
+            dot_indicator(ui, dot, active, 8.0);
+            ui.label(word);
         }
     });
 }
 
 fn status_badge(ui: &mut egui::Ui, status: &SimStatus, t: &Strings) {
     let (text, color, filled) = match status {
-        SimStatus::Disconnected => (t.disconnected, Color32::from_rgb(200, 60, 60), false),
-        SimStatus::Connected => (t.connected, Color32::from_rgb(220, 180, 40), false),
-        SimStatus::InFlight => (t.in_flight, Color32::from_rgb(30, 180, 90), true),
-        SimStatus::SimConnectMissing => {
-            (t.simconnect_missing, Color32::from_rgb(230, 130, 30), true)
-        }
+        SimStatus::Disconnected => (t.disconnected, palette::STATUS_BAD, false),
+        SimStatus::Connected => (t.connected, palette::STATUS_WARN, false),
+        SimStatus::InFlight => (t.in_flight, palette::STATUS_OK, true),
+        SimStatus::SimConnectMissing => (t.simconnect_missing, palette::STATUS_ATTENTION, true),
     };
     ui.horizontal(|ui| {
         circle_indicator_colored(ui, color, filled);
@@ -190,9 +377,9 @@ fn game_badge(ui: &mut egui::Ui, game: ActiveGame, t: &Strings) {
 
 fn controller_badge_dot(ui: &mut egui::Ui, label: &str, connected: bool, t: &Strings) {
     let (color, filled) = if connected {
-        (Color32::from_rgb(30, 180, 90), true)
+        (palette::STATUS_OK, true)
     } else {
-        (Color32::from_rgb(200, 60, 60), false)
+        (palette::STATUS_BAD, false)
     };
     ui.horizontal(|ui| {
         circle_indicator_colored(ui, color, filled);
@@ -478,17 +665,32 @@ impl UiState {
     ) {
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
-            let j = Self::device_icon_button(ui, target.enable_joystick, DeviceIcon::Joystick)
-                .on_hover_text(t.hover_joystick_hw);
-            if j.clicked() {
-                target.enable_joystick = !target.enable_joystick;
-                *on_change = true;
-            }
-            let th = Self::device_icon_button(ui, target.enable_throttle, DeviceIcon::Throttle)
-                .on_hover_text(t.hover_throttle_hw);
-            if th.clicked() {
-                target.enable_throttle = !target.enable_throttle;
-                *on_change = true;
+            // Как и у effect_status_badge: вызывающий код оборачивает нас в
+            // Layout::right_to_left, а ui.scope сохраняет направление, поэтому
+            // добавленная первой иконка уезжает вправо. До появления легенды
+            // это было незаметно, но легенда называет первую иконку
+            // «джойстик» — значит в карточке она обязана быть первой слева,
+            // иначе легенда учит неверному соответствию.
+            let order = if ui.layout().prefer_right_to_left() {
+                [DeviceIcon::Throttle, DeviceIcon::Joystick]
+            } else {
+                [DeviceIcon::Joystick, DeviceIcon::Throttle]
+            };
+            for icon in order {
+                let (selected, hover) = match icon {
+                    DeviceIcon::Joystick => (target.enable_joystick, t.hover_joystick_hw),
+                    DeviceIcon::Throttle => (target.enable_throttle, t.hover_throttle_hw),
+                };
+                if Self::device_icon_button(ui, selected, icon)
+                    .on_hover_text(hover)
+                    .clicked()
+                {
+                    match icon {
+                        DeviceIcon::Joystick => target.enable_joystick = !target.enable_joystick,
+                        DeviceIcon::Throttle => target.enable_throttle = !target.enable_throttle,
+                    }
+                    *on_change = true;
+                }
             }
         });
     }
@@ -498,25 +700,23 @@ impl UiState {
     /// акцентным цветом в выбранном состоянии — та же selected-стилистика,
     /// что была у selectable_label, но с реальной иконкой вместо эмодзи.
     fn device_icon_button(ui: &mut egui::Ui, selected: bool, icon: DeviceIcon) -> egui::Response {
-        let source = match icon {
-            DeviceIcon::Joystick => egui::include_image!("../assets/icon_joystick.png"),
-            DeviceIcon::Throttle => egui::include_image!("../assets/icon_throttle.png"),
-        };
+        // Во включённом состоянии под иконкой светлая заливка (DEVICE_ON_BG),
+        // поэтому тинт там должен быть ТЁМНЫМ — раньше он брался из
+        // selection.stroke.color, и после подъёма акцента до светло-голубого
+        // иконка стала бы светлой по светлому.
         let tint = if selected {
-            ui.visuals().selection.stroke.color
+            palette::DEVICE_ON_FG
         } else {
             ui.visuals().text_color()
         };
-        let image = egui::Image::new(source)
-            .tint(tint)
-            .fit_to_exact_size(egui::vec2(19.2, 19.2));
+        let image = device_icon_image(icon, tint, 19.2);
         let mut button = egui::Button::new(image).selected(selected);
         if selected {
             // Явный fill вместо стандартной полупрозрачной selection.bg_fill —
             // просили конкретную подложку под включённой иконкой устройства,
             // не трогая глобальный акцент выбора (он используется и в других
             // местах — nav, чекбоксы).
-            button = button.fill(Color32::from_rgb(0xCC, 0xCE, 0xFF));
+            button = button.fill(DEVICE_ON_BG);
         }
         ui.add(button)
     }
@@ -868,8 +1068,8 @@ impl eframe::App for UiState {
                 // Telemetry — см. nav_panel ниже.
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let ru_btn = ui.selectable_label(self.lang == Lang::Ru, "RU");
-                    let en_btn = ui.selectable_label(self.lang == Lang::En, "EN");
+                    let ru_btn = ui.add(egui::Button::new("RU").selected(self.lang == Lang::Ru));
+                    let en_btn = ui.add(egui::Button::new("EN").selected(self.lang == Lang::En));
 
                     ui.add_space(8.0);
                     // Overflow-меню: Options (резерв на будущее), Help и, в debug-сборке,
@@ -879,13 +1079,19 @@ impl eframe::App for UiState {
                         #[cfg(debug_assertions)]
                         {
                             if ui
-                                .selectable_label(self.active_tab == Tab::Main, t.tab_main)
+                                .add(
+                                    egui::Button::new(t.tab_main)
+                                        .selected(self.active_tab == Tab::Main),
+                                )
                                 .clicked()
                             {
                                 self.active_tab = Tab::Main;
                             }
                             if ui
-                                .selectable_label(self.active_tab == Tab::Debug, t.tab_debug)
+                                .add(
+                                    egui::Button::new(t.tab_debug)
+                                        .selected(self.active_tab == Tab::Debug),
+                                )
                                 .clicked()
                             {
                                 self.active_tab = Tab::Debug;
@@ -1162,9 +1368,19 @@ impl eframe::App for UiState {
                         // должна переноситься на 2 строки, а не выходить за границы панели.
                         // Это простой список разделов без индикации срабатывания эффектов —
                         // такая индикация есть только в карточках эффектов и Live Monitor.
+                        // Button::new(..).selected(..) вместо Button::selectable(..):
+                        // у selectable невыбранная кнопка рисуется вообще без рамки
+                        // и заливки, поэтому пункты навигации проявлялись только под
+                        // курсором. Здесь рамка есть всегда, на всю ширину панели.
                         let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str| -> bool {
-                            ui.add(egui::Button::selectable(selected, label).wrap())
-                                .clicked()
+                            let w = ui.available_width();
+                            ui.add(
+                                egui::Button::new(label)
+                                    .selected(selected)
+                                    .wrap()
+                                    .min_size(Vec2::new(w, 0.0)),
+                            )
+                            .clicked()
                         };
                         if ag == ActiveGame::Wt {
                             if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
@@ -1186,13 +1402,11 @@ impl eframe::App for UiState {
                             }
                         }
                         ui.separator();
-                        if ui
-                            .selectable_label(
-                                self.active_section == Section::Telemetry,
-                                t.nav_telemetry,
-                            )
-                            .clicked()
-                        {
+                        if nav_item(
+                            ui,
+                            self.active_section == Section::Telemetry,
+                            t.nav_telemetry,
+                        ) {
                             self.active_section = Section::Telemetry;
                         }
 
@@ -1467,6 +1681,7 @@ impl eframe::App for UiState {
                                 Section::Rumble => {
                                     ui.heading(t.nav_rumble);
                                     ui.add_space(4.0);
+                                    effects_legend(ui, t, true);
                                     ui.vertical(|ui| {
                                         // Overspeed
                                         {
@@ -1747,6 +1962,7 @@ impl eframe::App for UiState {
                                 Section::Taxi => {
                                     ui.heading(t.nav_taxi);
                                     ui.add_space(4.0);
+                                    effects_legend(ui, t, true);
                                     ui.vertical(|ui| {
                                         // Taxi Thump Bounds (Start + End + advanced Period curve)
                                         {
@@ -1870,6 +2086,7 @@ impl eframe::App for UiState {
                                 Section::Engines => {
                                     ui.heading(t.nav_engines);
                                     ui.add_space(4.0);
+                                    effects_legend(ui, t, false);
                                     ui.vertical(|ui| {
                                         // Engine Start / Ignition (+ advanced N2 idle, 4-Eng mode, swap hands)
                                         {
@@ -1991,6 +2208,7 @@ impl eframe::App for UiState {
                                 Section::Gear => {
                                     ui.heading(t.nav_gear);
                                     ui.add_space(4.0);
+                                    effects_legend(ui, t, true);
                                     ui.label(RichText::new(t.heading_gear_comp).weak());
                                     ui.add_space(4.0);
 
@@ -2164,6 +2382,7 @@ impl eframe::App for UiState {
                                 Section::Wt => {
                                     ui.heading(t.nav_wt);
                                     ui.add_space(4.0);
+                                    effects_legend(ui, t, true);
                                     ui.vertical(|ui| {
                                         // Weapon1 — маршрутизация зафиксирована (только
                                         // джойстик), поэтому здесь нет ни слайдера силы,
@@ -2649,12 +2868,12 @@ impl eframe::App for UiState {
                                                     |ui: &mut egui::Ui, active: bool| {
                                                         if active {
                                                             ui.colored_label(
-                                                                Color32::from_rgb(30, 180, 90),
+                                                                palette::STATUS_OK,
                                                                 t.val_on,
                                                             );
                                                         } else {
                                                             ui.colored_label(
-                                                                Color32::from_gray(140),
+                                                                palette::TEXT_DISABLED,
                                                                 t.val_off,
                                                             );
                                                         }

@@ -103,7 +103,22 @@ pub struct Strings {
     pub limit_na: &'static str,
     pub val_na: &'static str,
     pub status_active: &'static str,
+    pub status_idle: &'static str,
     pub status_off: &'static str,
+
+    // Легенда над списком эффектов. Раньше смысл иконок устройства и
+    // кружка-статуса жил только во всплывающей подсказке — тестировщик
+    // сообщил, что «непонятно, что означают отдельные квадратики», т.е.
+    // подсказку надо ещё догадаться вызвать. Легенда показывает то же самое
+    // постоянно и видимым текстом.
+    pub legend_devices: &'static str,
+    pub legend_stick: &'static str,
+    pub legend_throttle: &'static str,
+    pub legend_hint: &'static str,
+    pub legend_states: &'static str,
+    pub legend_state_off: &'static str,
+    pub legend_state_idle: &'static str,
+    pub legend_state_active: &'static str,
 
     pub device_label: &'static str,
     pub hover_joystick_hw: &'static str,
@@ -370,7 +385,17 @@ https://yoomoney.ru/to/410011348629282",
     limit_na: "Limit: N/A",
     val_na: "N/A",
     status_active: "ACTIVE",
+    status_idle: "Idle",
     status_off: "Off",
+
+    legend_devices: "Sends vibration to:",
+    legend_stick: "Stick",
+    legend_throttle: "Throttle",
+    legend_hint: "(click these icons inside a card to change where that effect goes)",
+    legend_states: "Effect state:",
+    legend_state_off: "— switched off",
+    legend_state_idle: "— on, not firing",
+    legend_state_active: "— vibrating right now",
 
     device_label: "Device:",
     hover_joystick_hw: "Combat Joystick R",
@@ -630,7 +655,17 @@ https://yoomoney.ru/to/410011348629282",
     limit_na: "Порог: Н/Д",
     val_na: "Н/Д",
     status_active: "АКТИВНО",
+    status_idle: "Ждёт",
     status_off: "Выкл",
+
+    legend_devices: "Отдаёт вибрацию на:",
+    legend_stick: "Ручку",
+    legend_throttle: "РУД",
+    legend_hint: "(эти иконки в карточке кликабельны — задают, куда пойдёт эффект)",
+    legend_states: "Состояние эффекта:",
+    legend_state_off: "— выключен",
+    legend_state_idle: "— включён, не срабатывает",
+    legend_state_active: "— вибрирует сейчас",
 
     device_label: "Устройство:",
     hover_joystick_hw: "Combat Joystick R",

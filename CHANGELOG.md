@@ -1,5 +1,22 @@
 # Changelog
 
+## v4.4.0
+
+Readability release. A tester reported being unable to use the application at all: outside of the red **Stop** button and the top bar, every label read as "gray-black on black", and the section list on the left only appeared when the mouse hovered over it. This release makes the interface legible, and self-explanatory where it previously relied on hover tooltips.
+
+**Fixes:**
+- **Contrast throughout the interface.** The dark theme set background colours but left every *text* tone at egui's defaults: ordinary labels sat at ~5.7:1 against a near-black background, "weak" text at ~2.4:1, and a switched-off effect at ~1.5:1 — the last one because the card's own dimming was multiplied a second time by the disabled-widget alpha. All text tones, separators and control surfaces are now set explicitly by the application: roughly 15:1 for body text, and no worse than ~4:1 for anything switched off. The backgrounds were lifted as well, so panels, cards and the window background stay distinguishable on an uncalibrated monitor.
+- **The section list on the left was invisible until hovered.** Unselected navigation entries were drawn with no background and no border at all, and the selected one was blue text on a translucent blue fill (~3:1), which read no better. Navigation entries now always carry a frame, span the full width of the panel, and the selected one is light blue on opaque dark blue.
+- **"Disconnected" in the top bar** was the least readable line in the window (~3.6:1) despite being the most important one. All four connection states now come from one palette and clear 6:1.
+- **The joystick and throttle icons in every effect card were drawn in reverse order.** They sit inside a right-to-left row, and `ui.horizontal` inherits that direction, so the icon added first ended up rightmost. Harmless while the icons were unlabelled — actively misleading now that the legend names them.
+
+**New:**
+- **A legend above every effect list.** It shows what the two device icons mean, that they are clickable, and what each effect state looks like — permanently and in plain text, instead of only in a tooltip you have to know to summon.
+- **Effect state is now spelled out.** The bare dot in an effect card is accompanied by a word: *Off*, *Idle* or *ACTIVE*.
+
+**Note:**
+- Interface only — no changes to effects, telemetry or device handling. Settings and aircraft profiles carry over untouched.
+
 ## v4.3.2
 
 Patch release. Fixes the in-app updater failing with «Отказано в доступе (os error 5)» / "Access is denied".
