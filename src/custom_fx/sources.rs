@@ -393,8 +393,8 @@ pub const SOURCES: &[SourceDef] = &[
     },
     SourceDef {
         id: SourceId::Lvar,
-        label_en: "Custom variable (L:...)",
-        label_ru: "Своя переменная (L:...)",
+        label_en: "Custom variable (LVAR)",
+        label_ru: "Своя переменная (LVAR)",
         // Настоящая единица — на самом эффекте (CustomEffect::lvar::unit),
         // здесь пусто: таблица SOURCES статическая и не знает имени/единицы
         // конкретной переменной пользователя.

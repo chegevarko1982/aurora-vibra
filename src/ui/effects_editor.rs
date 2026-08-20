@@ -811,12 +811,26 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
             .selected_text(source_label(cur_def, cx.lang))
             .width(260.0)
             .show_ui(ui, |ui| {
-                let mut prev_is_wt = false;
-                for (i, s) in SOURCES.iter().enumerate() {
-                    if i > 0 && s.games.wt != prev_is_wt {
-                        ui.separator();
+                let mut prev_group: Option<SourceGroup> = None;
+                for s in SOURCES.iter() {
+                    let group = source_group(s.games);
+                    if Some(group) != prev_group {
+                        if prev_group.is_some() {
+                            ui.separator();
+                        }
+                        // Без .small(): заголовок группы обязан читаться так же
+                        // легко, как сами пункты — мелкий приглушённый текст в
+                        // этом проекте уже один раз оказался нечитаемым (см.
+                        // комментарии к палитре в ui.rs). От пунктов его
+                        // отличают жирность, отступ и разделитель выше, а не
+                        // размер.
+                        ui.label(
+                            RichText::new(source_group_header(group, cx.t))
+                                .strong()
+                                .color(palette::TEXT_SECONDARY),
+                        );
+                        prev_group = Some(group);
                     }
-                    prev_is_wt = s.games.wt;
                     if ui
                         .selectable_label(s.id == effect.source, source_label(s, cx.lang))
                         .clicked()
@@ -2332,6 +2346,40 @@ fn default_source_for_game(game: ActiveGame) -> SourceId {
     }
 }
 
+/// Группа источника в выпадающем списке "1. Источник" — к какой игре он
+/// относится. Определяется маской `SourceDef::games`, а не позицией строки
+/// в `SOURCES`: так заголовок группы сам появится над новым источником,
+/// когда его добавят в таблицу, без правки этого файла. Три варианта
+/// соответствуют ровно трём маскам, которые сейчас использует таблица
+/// `SOURCES` (`FLIGHT_ONLY`/`WT_ONLY`/`MSFS_ONLY` в `custom_fx/sources.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceGroup {
+    /// MSFS + X-Plane (общий конвейер `FlightVars`).
+    Flight,
+    /// War Thunder.
+    Wt,
+    /// Пользовательская LVAR — физически существует только в MSFS.
+    MsfsLvar,
+}
+
+fn source_group(games: GameMask) -> SourceGroup {
+    if games.wt {
+        SourceGroup::Wt
+    } else if games.xplane {
+        SourceGroup::Flight
+    } else {
+        SourceGroup::MsfsLvar
+    }
+}
+
+fn source_group_header(group: SourceGroup, t: &Strings) -> &'static str {
+    match group {
+        SourceGroup::Flight => t.hdr_fx_source_group_flight,
+        SourceGroup::Wt => t.hdr_fx_source_group_wt,
+        SourceGroup::MsfsLvar => t.hdr_fx_source_group_lvar,
+    }
+}
+
 fn source_label(def: &SourceDef, lang: Lang) -> String {
     let name = match lang {
         Lang::En => def.label_en,
@@ -2530,6 +2578,16 @@ mod tests {
     fn source_label_skips_empty_unit() {
         let def = sources::def(SourceId::FlightOnGround);
         assert!(!source_label(def, Lang::En).contains('('));
+    }
+
+    #[test]
+    fn source_group_separates_flight_wt_and_lvar() {
+        let flight = source_group(sources::def(SourceId::FlightAirspeedKn).games);
+        let wt = source_group(sources::def(SourceId::WtIasKmh).games);
+        let lvar = source_group(sources::def(SourceId::Lvar).games);
+        assert_ne!(flight, wt);
+        assert_ne!(flight, lvar);
+        assert_ne!(wt, lvar);
     }
 
     #[test]
