@@ -6,7 +6,8 @@
 use aurora_vibra::{
     ActiveGame, ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
     aircraft_profiles::AircraftProfiles,
-    game_state::GameSlot,
+    custom_fx::store::CustomFxShared,
+    game_state::{GameSlot, PreviewLock},
     hid::hid_worker,
     log::LogBuffer,
     profiles::ProfileState,
@@ -68,10 +69,11 @@ fn main() -> Result<()> {
     let last_wt_vars = Arc::new(Mutex::new(None::<WtVars>));
     let effects: EffectsShared = Arc::new(EffectsState::default());
     let hold = Arc::new(AtomicBool::new(false));
-    // Тумблер "Записывать сессию WT" (меню Опции) — то же самое, что вручную
-    // запускать wt_probe, но встроено в основной воркер (см.
-    // wt_link::recorder). Не персистится в SettingsFile: сессия — разовое
-    // действие для конкретной диагностики, не долгоживущая настройка,
+    // Тумблер "Записывать сессию" (меню Опции) — общий для ВСЕХ трёх
+    // конвейеров (см. `crate::recorder`), каждый пишет свой JSONL, когда
+    // реально владеет слотом. Для WT — то же самое, что вручную запускать
+    // wt_probe, но встроено в воркер. Не персистится в SettingsFile: сессия —
+    // разовое действие для конкретной диагностики, не долгоживущая настройка,
     // случайно оставленная включённой между запусками была бы сюрпризом.
     let recording = Arc::new(AtomicBool::new(false));
     let force_quit = Arc::new(AtomicBool::new(false));
@@ -79,6 +81,22 @@ fn main() -> Result<()> {
     let aircraft_title = Arc::new(Mutex::new(String::new()));
     let active_game = Arc::new(Mutex::new(ActiveGame::None));
     let logs = LogBuffer::default();
+
+    // Пользовательские эффекты грузятся с диска так же, как настройки ниже —
+    // отсутствие файла (первый запуск) не ошибка, просто пустой список.
+    let custom_fx = Arc::new(CustomFxShared::new_with(
+        aurora_vibra::custom_fx::store::load().unwrap_or_default(),
+    ));
+    // Живой список id эффектов, реально дающих отдачу в режиме Custom (см.
+    // custom_fx::engine::CustomFxOutput::active_ids) — воркеры пишут сюда
+    // каждый тик, Live Monitor в UI читает. По образцу last_vars: тот же
+    // Arc<Mutex<..>>, не отдельный канал, потому что читателю (UI) нужен
+    // только последний снимок, а не история.
+    let active_custom_ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Захват HID-канала редактором эффектов на время предпросмотра — общий
+    // для всех трёх воркеров, создаётся один раз и клонируется (PreviewLock
+    // сам по себе Clone, см. game_state.rs).
+    let preview_lock = PreviewLock::new();
 
     match logs.try_init_file_prefer_exe_dir() {
         Ok(p) => logs.push(format!("File logging enabled → {}", p.display())),
@@ -104,6 +122,7 @@ fn main() -> Result<()> {
     aurora_vibra::settings::set_monitor_collapsed(monitor_collapsed);
     let game_override = settings_file.game_override;
     aurora_vibra::settings::set_game_override(game_override);
+    aurora_vibra::settings::set_effect_mode(settings_file.effect_mode);
     aurora_vibra::settings::set_simconnect_dll_path(settings_file.simconnect_dll_path.clone());
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
@@ -135,6 +154,10 @@ fn main() -> Result<()> {
         let aircraft_profiles_c = aircraft_profiles.clone();
         let profile_state_c = profile_state.clone();
         let game_c = GameSlot::new(active_game.clone());
+        let recording_c = recording.clone();
+        let custom_fx_c = custom_fx.clone();
+        let active_custom_ids_c = active_custom_ids.clone();
+        let preview_c = preview_lock.clone();
         thread::spawn(move || {
             sim_worker(
                 last_vars_c,
@@ -148,6 +171,10 @@ fn main() -> Result<()> {
                 aircraft_profiles_c,
                 profile_state_c,
                 game_c,
+                recording_c,
+                custom_fx_c,
+                active_custom_ids_c,
+                preview_c,
             )
         });
     }
@@ -165,6 +192,9 @@ fn main() -> Result<()> {
         let profile_state_c = profile_state.clone();
         let game_c = GameSlot::new(active_game.clone());
         let recording_c = recording.clone();
+        let custom_fx_c = custom_fx.clone();
+        let active_custom_ids_c = active_custom_ids.clone();
+        let preview_c = preview_lock.clone();
         thread::spawn(move || {
             wt_worker(
                 last_wt_vars_c,
@@ -179,6 +209,9 @@ fn main() -> Result<()> {
                 profile_state_c,
                 game_c,
                 recording_c,
+                custom_fx_c,
+                active_custom_ids_c,
+                preview_c,
             )
         });
     }
@@ -203,6 +236,10 @@ fn main() -> Result<()> {
         let aircraft_profiles_c = aircraft_profiles.clone();
         let profile_state_c = profile_state.clone();
         let game_c = GameSlot::new(active_game.clone());
+        let recording_c = recording.clone();
+        let custom_fx_c = custom_fx.clone();
+        let active_custom_ids_c = active_custom_ids.clone();
+        let preview_c = preview_lock.clone();
         thread::spawn(move || {
             xp_worker(
                 last_vars_c,
@@ -216,6 +253,10 @@ fn main() -> Result<()> {
                 aircraft_profiles_c,
                 profile_state_c,
                 game_c,
+                recording_c,
+                custom_fx_c,
+                active_custom_ids_c,
+                preview_c,
             )
         });
     }
@@ -261,6 +302,12 @@ fn main() -> Result<()> {
 
         config,
         effects,
+
+        custom_fx: custom_fx.clone(),
+        active_custom_ids: active_custom_ids.clone(),
+        effect_mode: settings_file.effect_mode,
+        fx_editor: Default::default(),
+        preview_lock,
 
         #[cfg(debug_assertions)]
         test_level: 0x80,

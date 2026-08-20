@@ -4,7 +4,8 @@ use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
 use crate::aircraft_profiles::AircraftProfiles;
-use crate::game_state::GameSlot;
+use crate::custom_fx::store::CustomFxShared;
+use crate::game_state::{GameSlot, PreviewLock};
 use crate::profiles::ProfileState;
 use crate::{ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
@@ -23,6 +24,10 @@ pub fn xp_worker(
     _aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
     _profile_state: Arc<Mutex<ProfileState>>,
     _game: GameSlot,
+    _recording: Arc<AtomicBool>,
+    _custom_fx: Arc<CustomFxShared>,
+    _active_custom_ids: Arc<Mutex<Vec<String>>>,
+    _preview: PreviewLock,
 ) {
     // Non-Windows stub: RREF/HID hardware pipeline is unavailable.
 }

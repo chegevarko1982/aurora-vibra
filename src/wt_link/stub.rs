@@ -4,7 +4,8 @@ use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
 use crate::aircraft_profiles::AircraftProfiles;
-use crate::game_state::GameSlot;
+use crate::custom_fx::store::CustomFxShared;
+use crate::game_state::{GameSlot, PreviewLock};
 use crate::profiles::ProfileState;
 use crate::wt_link::vars::WtVars;
 use crate::{ConfigShared, EffectsShared, HidCmd, LogBuffer, SimStatus};
@@ -25,6 +26,9 @@ pub fn wt_worker(
     _profile_state: Arc<Mutex<ProfileState>>,
     _game: GameSlot,
     _recording: Arc<AtomicBool>,
+    _custom_fx: Arc<CustomFxShared>,
+    _active_custom_ids: Arc<Mutex<Vec<String>>>,
+    _preview: PreviewLock,
 ) {
     // Non-Windows stub: HID/War Thunder hardware pipeline is unavailable.
 }

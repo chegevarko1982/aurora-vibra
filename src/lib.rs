@@ -15,6 +15,12 @@ pub mod tray;
 pub mod ui;
 #[cfg(all(windows, feature = "app"))]
 pub mod updater;
+// Обёртка над системными диалогами «Открыть/Сохранить файл»
+// (GetOpenFileNameW/GetSaveFileNameW) для редактора пользовательских
+// эффектов — крейта rfd в проекте нет, поэтому тонкий Win32-слой поверх уже
+// подключённого windows-crate, как tray/ui/updater выше.
+#[cfg(all(windows, feature = "app"))]
+pub mod file_dialog;
 
 // Общий код разведки телеметрии War Thunder — используется двумя бинарниками
 // (src/bin/wt_probe/ — текстовый TUI, src/bin/wt_probe_gui/ — окно eframe),
@@ -34,6 +40,21 @@ pub mod wt_link;
 // X-Plane пока нет — весь модуль нужен только основному приложению.
 #[cfg(feature = "app")]
 pub mod xp_link;
+
+// Данные (не движок и не UI) конструктора пользовательских эффектов
+// вибрации: модель одного эффекта + таблица источников телеметрии (см.
+// custom_fx/mod.rs). Как и xp_link, нужен только основному приложению —
+// recon-бинарникам (wt_probe/wt_probe_gui) это не сдалось.
+#[cfg(feature = "app")]
+pub mod custom_fx;
+
+// Общий JSONL-рекордер сессий телеметрии — раньше жил только в wt_link
+// (умел писать только War Thunder), теперь общий модуль: его вызывают все
+// три воркера (wt_link::worker, sim::worker, xp_link::worker), не только
+// WT-конвейер. См. recorder.rs — формат/имя WT-файлов не менялись при
+// переносе, только добавлен второй метод записи для MSFS/X-Plane.
+#[cfg(feature = "app")]
+pub mod recorder;
 
 pub use log::LogBuffer;
 pub use rumble::RumbleEngine;

@@ -26,14 +26,19 @@ use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
 use crate::aircraft_profiles::{self, AircraftProfiles};
-use crate::game_state::{GameSlot, Liveness};
+use crate::custom_fx::engine::CustomFxEngine;
+use crate::custom_fx::sources::TelemetryFrame;
+use crate::custom_fx::store::CustomFxShared;
+use crate::game_state::{GameSlot, Liveness, PreviewLock};
 use crate::profiles::ProfileState;
+use crate::recorder::SessionRecorder;
 use crate::sim::parse::flight_status;
 use crate::xp_link::datarefs::DrIdx;
 use crate::xp_link::rref::RrefClient;
 use crate::xp_link::vars;
 use crate::{
-    ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleEngine, SimStatus,
+    ActiveGame, ConfigShared, EffectMode, EffectsShared, FlightVars, HidCmd, LogBuffer,
+    RumbleEngine, SimStatus,
 };
 
 /// Ритм опроса, пока X-Plane жив — 20 Гц, тот же такт, что у WT-конвейера и
@@ -63,12 +68,27 @@ pub fn xp_worker(
     aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
     profile_state: Arc<Mutex<ProfileState>>,
     game: GameSlot,
+    recording: Arc<AtomicBool>,
+    custom_fx: Arc<CustomFxShared>,
+    active_custom_ids: Arc<Mutex<Vec<String>>>,
+    preview: PreviewLock,
 ) {
     logs.push("XP: worker started, polling RREF on localhost:49000");
 
     let mut engine = RumbleEngine::new();
+    let mut recorder = SessionRecorder::new();
+    // Взаимоисключающий движок пользовательских эффектов (см.
+    // custom_fx::engine) — своё состояние независимое от `engine` выше,
+    // сбрасывается отдельно (потеря владения слотом / смена режима).
+    let mut custom_engine = CustomFxEngine::new();
     let mut client: Option<RrefClient> = None;
     let mut liveness = Liveness::new(GRACE_PERIOD);
+    // Режим предыдущего тика — ловим МОМЕНТ переключения BuiltIn<->Custom для
+    // разового сброса (см. точку отправки HID ниже), не сравниваем впустую.
+    let mut last_effect_mode = crate::settings::effect_mode();
+    // Фронт захвата PreviewLock — один раз нули на моторы в момент захвата,
+    // дальше молчим, пока не отпустят (см. game_state::PreviewLock).
+    let mut preview_was_held = false;
     // Зануляем HID/эффекты ровно один раз на переходе владения true→false —
     // не на каждом тике `!owns` (см. подробный комментарий в
     // wt_link/worker.rs): проигравший try_claim не шлёт нули каждый тик,
@@ -161,6 +181,8 @@ pub fn xp_worker(
                 throttle_right: 0,
             });
             engine.reset();
+            custom_engine.reset();
+            active_custom_ids.lock().clear();
             // Отдаём табличку с названием борта обратно MSFS-конвейеру —
             // тот сам выставит её при следующем подключении SimConnect (см.
             // sim/worker.rs), а до тех пор пусть будет пустой, а не
@@ -186,6 +208,16 @@ pub fn xp_worker(
             // статуса вёл себя одинаково у обоих авиасимов.
             *status.lock() = flight_status(&fv);
 
+            // Запись сессии (тот же тумблер, что у WT/MSFS, см.
+            // wt_link::worker/sim::worker) — только пока слот реально наш.
+            recorder.tick_flightvars(
+                recording.load(Ordering::Relaxed),
+                fv.sim_time_s,
+                &fv,
+                "xplane",
+                &logs,
+            );
+
             // Смена борта — тем же путём, каким это делает wt_worker для
             // техники War Thunder: то же поле aircraft_title, та же система
             // именных профилей (не заводим отдельный XP-only виджет).
@@ -204,20 +236,94 @@ pub fn xp_worker(
                 }
             }
 
-            let cfg_now = config.get();
-            let out = engine.step(
-                &fv,
-                &cfg_now,
-                config.current_rev(),
-                hold.load(Ordering::Relaxed),
-            );
-            *last_vars.lock() = Some(fv);
-            effects.apply_snapshot(&out.effects);
-            let _ = tx_hid.send(HidCmd::SendIntensity {
-                joystick: out.joystick_intensity,
-                throttle_left: out.throttle_left_intensity,
-                throttle_right: out.throttle_right_intensity,
-            });
+            if preview.is_held() {
+                // Редактор эффектов держит HID-канал под предпросмотр (см.
+                // game_state::PreviewLock) — воркер молчит, иначе оба
+                // источника 20 раз в секунду переписывали бы друг друга на
+                // моторе. На ФРОНТЕ захвата шлём нули один раз, чтобы не
+                // застыло последнее значение движка.
+                if !preview_was_held {
+                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                        joystick: 0,
+                        throttle_left: 0,
+                        throttle_right: 0,
+                    });
+                    preview_was_held = true;
+                }
+            } else {
+                preview_was_held = false;
+
+                // Встроенный и пользовательский движки эффектов —
+                // ВЗАИМОИСКЛЮЧАЮЩИЕ (см. doc-комментарий types::EffectMode): два
+                // независимых движка на одних и тех же трёх моторах давали бы
+                // непредсказуемое наложение, поэтому здесь именно ВЫБОР считающего
+                // движка, а не смешивание их выходов. При смене режима на лету —
+                // разовый сброс состояния ОБОИХ движков и кадр нулей: без него
+                // эффект, активный в момент переключения, застыл бы на моторе
+                // последним значением (тот же приём, что уже используется выше при
+                // потере владения слотом).
+                let cfg_now = config.get();
+                let mode_now = crate::settings::effect_mode();
+                if mode_now != last_effect_mode {
+                    engine.reset();
+                    custom_engine.reset();
+                    effects.clear_all();
+                    active_custom_ids.lock().clear();
+                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                        joystick: 0,
+                        throttle_left: 0,
+                        throttle_right: 0,
+                    });
+                    last_effect_mode = mode_now;
+                }
+
+                match mode_now {
+                    EffectMode::BuiltIn => {
+                        let out = engine.step(
+                            &fv,
+                            &cfg_now,
+                            config.current_rev(),
+                            hold.load(Ordering::Relaxed),
+                        );
+                        *last_vars.lock() = Some(fv);
+                        effects.apply_snapshot(&out.effects);
+                        active_custom_ids.lock().clear();
+                        let _ = tx_hid.send(HidCmd::SendIntensity {
+                            joystick: out.joystick_intensity,
+                            throttle_left: out.throttle_left_intensity,
+                            throttle_right: out.throttle_right_intensity,
+                        });
+                    }
+                    EffectMode::Custom => {
+                        // FlightVars больше не Copy (добавлен словарь lvars) —
+                        // .clone() вместо неявного копирования, fv ниже ещё
+                        // нужен и для fv.sim_time_s, и для last_vars.
+                        let frame = TelemetryFrame::Flight(fv.clone());
+                        let custom_effects = custom_fx.get();
+                        let out = custom_engine.step(
+                            &frame,
+                            fv.sim_time_s,
+                            &custom_effects,
+                            custom_fx.current_rev(),
+                            &title,
+                            ActiveGame::Xplane,
+                            hold.load(Ordering::Relaxed),
+                            cfg_now.max_output,
+                        );
+                        *last_vars.lock() = Some(fv);
+                        // Встроенный EffectsSnapshot в режиме Custom заведомо пуст —
+                        // Live Monitor подсвечивает активность через
+                        // active_custom_ids, а не через effects.
+                        effects.clear_all();
+                        *active_custom_ids.lock() = out.active_ids;
+                        let _ = tx_hid.send(HidCmd::SendIntensity {
+                            joystick: out.joystick,
+                            throttle_left: out.throttle_left,
+                            throttle_right: out.throttle_right,
+                        });
+                    }
+                }
+            }
         }
 
         // Self-check опечаток в именах datarefs — ровно один раз, спустя

@@ -7,6 +7,7 @@
 //! game_state;` в lib.rs (без cfg(windows)).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -82,6 +83,44 @@ impl Liveness {
                 alive
             }
         }
+    }
+}
+
+/// Временный перехват HID-канала редактором эффектов на время предпросмотра
+/// пользовательского эффекта. В отличие от `GameSlot` (арбитраж между ИГРАМИ за
+/// владение каналом), это примитив для временного усыпления АКТИВНОЙ игры при
+/// включении кнопки «Играть» в редакторе. Владение здесь не липкое: GUI-поток
+/// захватывает канал через `take()`, воркер видит `is_held() == true` и должен
+/// ОДИН раз отправить нули на моторы (чтобы не «застыли» последние значения),
+/// а затем молчать, пока не вызовется `release()`. Это делает поведение
+/// подконтрольным UI, а не последней отправленной интенсивности.
+#[derive(Clone, Default)]
+pub struct PreviewLock {
+    held: Arc<AtomicBool>,
+}
+
+impl PreviewLock {
+    pub fn new() -> Self {
+        Self {
+            held: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Захватить канал для предпросмотра (GUI-поток, кнопка «Играть»).
+    /// Идемпотентно — повторные вызовы ничего не меняют.
+    pub fn take(&self) {
+        self.held.store(true, Ordering::Release);
+    }
+
+    /// Вернуть канал воркерам. Идемпотентно.
+    pub fn release(&self) {
+        self.held.store(false, Ordering::Release);
+    }
+
+    /// true, если канал захвачен предпросмотром.
+    /// Воркер обязан пропускать отправку HID, пока true.
+    pub fn is_held(&self) -> bool {
+        self.held.load(Ordering::Acquire)
     }
 }
 
@@ -163,5 +202,54 @@ mod tests {
         assert!(l.observe(true, t0));
         assert!(!l.observe(false, t0 + Duration::from_millis(3000)));
         assert!(l.observe(true, t0 + Duration::from_millis(3100)));
+    }
+
+    #[test]
+    fn preview_lock_fresh_not_held() {
+        let lock = PreviewLock::new();
+        assert!(!lock.is_held());
+    }
+
+    #[test]
+    fn preview_lock_take_holds() {
+        let lock = PreviewLock::new();
+        lock.take();
+        assert!(lock.is_held());
+    }
+
+    #[test]
+    fn preview_lock_take_then_release() {
+        let lock = PreviewLock::new();
+        lock.take();
+        assert!(lock.is_held());
+        lock.release();
+        assert!(!lock.is_held());
+    }
+
+    #[test]
+    fn preview_lock_take_idempotent() {
+        let lock = PreviewLock::new();
+        lock.take();
+        lock.take();
+        assert!(lock.is_held());
+    }
+
+    #[test]
+    fn preview_lock_release_idempotent() {
+        let lock = PreviewLock::new();
+        lock.take();
+        lock.release();
+        lock.release();
+        assert!(!lock.is_held());
+    }
+
+    #[test]
+    fn preview_lock_clone_shares_state() {
+        let lock1 = PreviewLock::new();
+        let lock2 = lock1.clone();
+        lock1.take();
+        assert!(lock2.is_held());
+        lock2.release();
+        assert!(!lock1.is_held());
     }
 }

@@ -1,9 +1,92 @@
+use std::collections::BTreeMap;
+
 use super::elem_idx::ElemIdx;
+// custom_fx (CustomEffect/SourceId) существует только под фичой "app" (см.
+// lib.rs) — а sim::parse собирается всегда (recon-бинарники вроде wt_probe
+// её не включают). collect_lvar_defs — единственное, что здесь зависит от
+// custom_fx, поэтому и импорт, и сама функция под тем же cfg.
+#[cfg(feature = "app")]
+use crate::custom_fx::model::CustomEffect;
+#[cfg(feature = "app")]
+use crate::custom_fx::sources::SourceId;
 use crate::{FlightVars, SimStatus};
 
 // Порог Overspeed по умолчанию, когда ни AIRSPEED BARBER POLE, ни L:I_PFD_VMAX
 // ещё не пришли от SimConnect (0.0/невалидное значение) — см. sanitize_flight_vars.
 const DEFAULT_OVERSPEED_BARBER_POLE_KN: f64 = 350.0;
+
+/// Потолок числа одновременно зарегистрированных пользовательских LVAR (см.
+/// `collect_lvar_defs`, `sim/worker.rs::DEF_LVAR`). Каждая переменная — это
+/// трафик SimConnect на КАЖДОМ кадре сима, поэтому список не безлимитный.
+#[cfg(feature = "app")]
+pub const MAX_CUSTOM_LVARS: usize = 16;
+
+/// Собирает уникальный список пользовательских LVAR (имя, единица) из
+/// активных эффектов — то, что `sim/worker.rs` регистрирует в SimConnect под
+/// отдельным `DEF_LVAR` (НЕ подмешивается в `DEF_MAIN`, см. doc-комментарий
+/// там: невалидное имя/единица пользователя не должны ронять штатную
+/// телеметрию).
+///
+/// Дедуплицирует по имени: два эффекта могут смотреть на одну и ту же
+/// переменную, регистрировать её дважды нельзя. Если для одного имени
+/// встретились РАЗНЫЕ единицы — оставляет первую попавшуюся и добавляет
+/// предупреждение во второй возвращённый список (молча выбирать нельзя).
+/// Ограничивает список `MAX_CUSTOM_LVARS`; переменные сверх лимита тоже
+/// попадают в предупреждения вместо тихого отбрасывания.
+#[cfg(feature = "app")]
+pub fn collect_lvar_defs(effects: &[CustomEffect]) -> (Vec<(String, String)>, Vec<String>) {
+    let mut defs: Vec<(String, String)> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    for effect in effects {
+        if effect.source != SourceId::Lvar {
+            continue;
+        }
+        let Some(lvar) = &effect.lvar else {
+            continue;
+        };
+        let name = lvar.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+
+        if let Some((_, existing_unit)) = defs.iter().find(|(n, _)| n == name) {
+            if existing_unit != &lvar.unit {
+                warnings.push(format!(
+                    "'{name}': unit conflict ('{existing_unit}' vs '{}'), keeping the first one",
+                    lvar.unit
+                ));
+            }
+            continue;
+        }
+
+        if defs.len() >= MAX_CUSTOM_LVARS {
+            warnings.push(format!(
+                "'{name}': dropped, limit of {MAX_CUSTOM_LVARS} custom LVARs reached"
+            ));
+            continue;
+        }
+
+        defs.push((name.to_string(), lvar.unit.clone()));
+    }
+
+    (defs, warnings)
+}
+
+/// Разбирает буфер значений `f64`, пришедший от SimConnect для одного пакета
+/// `DEF_LVAR`/`REQ_LVAR`, в словарь имя -> значение. `names` обязан быть тем
+/// же вектором и в том же порядке, что был передан `SimConnect_AddToDataDefinition`
+/// при регистрации (см. `collect_lvar_defs`/`sim/worker.rs`) — SimConnect
+/// возвращает значения строго в порядке регистрации, без имён внутри пакета
+/// (та же ловушка, из-за которой в `elem_idx.rs` завёлся макрос `elem_idx!`
+/// для основного списка; здесь список динамический, поэтому источник истины —
+/// вектор `names`, который вызывающий код обязан хранить рядом).
+///
+/// Буфер `values` короче `names` — читаем сколько есть (`zip` останавливается
+/// на более коротком); длиннее — лишний хвост игнорируется.
+pub fn parse_lvar_values(names: &[String], values: &[f64]) -> BTreeMap<String, f64> {
+    names.iter().cloned().zip(values.iter().copied()).collect()
+}
 
 pub fn parse_main_elems(
     elem: &[f64],
@@ -259,6 +342,14 @@ pub fn parse_main_elems(
             .copied()
             .unwrap_or(0.0),
         is_fenix: crate::profiles::is_fenix_aircraft(aircraft_title),
+        // Пустой словарь здесь: этот парсер работает только с фиксированным
+        // buffer'ом ElemIdx::DEFS (DEF_MAIN) и ничего не знает о динамическом
+        // списке пользовательских LVAR. Их регистрация (DEF_LVAR/REQ_LVAR) и
+        // приём значений живут в sim/worker.rs — вызывающий код там
+        // присваивает `fv.lvars` накопленный словарь ПОСЛЕ этого вызова (см.
+        // collect_lvar_defs/parse_lvar_values выше и doc-комментарий на
+        // FlightVars::lvars в types.rs).
+        lvars: BTreeMap::new(),
     };
 
     sanitize_flight_vars(&mut fv, ias_deadband_kn);
@@ -536,5 +627,126 @@ mod tests {
     fn overspeed_threshold_defaults_to_350_when_unavailable() {
         let fv = parse_main_elems(&sample_elems(), false, 1.0, "Boeing 737-800");
         assert_eq!(fv.overspeed_barber_pole_kn, 350.0);
+    }
+
+    // --- collect_lvar_defs / parse_lvar_values ---
+
+    // collect_lvar_defs (и, следовательно, эти тесты) существует только под
+    // фичой "app" — см. cfg на самой функции выше и комментарий у импорта
+    // custom_fx в начале файла.
+    #[cfg(feature = "app")]
+    mod collect_lvar_defs_tests {
+        use super::*;
+        use crate::custom_fx::model::{LvarSpec, new_effect};
+
+        fn lvar_effect(name: &str, unit: &str) -> CustomEffect {
+            let mut e = new_effect(format!("fx-{name}"), SourceId::Lvar);
+            e.lvar = Some(LvarSpec {
+                name: name.to_string(),
+                unit: unit.to_string(),
+            });
+            e
+        }
+
+        #[test]
+        fn collect_lvar_defs_ignores_non_lvar_effects() {
+            let effects = vec![new_effect("A".into(), SourceId::FlightAirspeedKn)];
+            let (defs, warnings) = collect_lvar_defs(&effects);
+            assert!(defs.is_empty());
+            assert!(warnings.is_empty());
+        }
+
+        #[test]
+        fn collect_lvar_defs_ignores_lvar_source_without_spec() {
+            // source == Lvar, но lvar == None (UI ещё не заполнил спецификацию).
+            let effects = vec![new_effect("A".into(), SourceId::Lvar)];
+            let (defs, warnings) = collect_lvar_defs(&effects);
+            assert!(defs.is_empty());
+            assert!(warnings.is_empty());
+        }
+
+        #[test]
+        fn collect_lvar_defs_skips_blank_names() {
+            let effects = vec![lvar_effect("   ", "Number")];
+            let (defs, warnings) = collect_lvar_defs(&effects);
+            assert!(defs.is_empty());
+            assert!(warnings.is_empty());
+        }
+
+        #[test]
+        fn collect_lvar_defs_returns_trimmed_unique_names() {
+            let effects = vec![lvar_effect("  L:Foo  ", "Number")];
+            let (defs, _warnings) = collect_lvar_defs(&effects);
+            assert_eq!(defs, vec![("L:Foo".to_string(), "Number".to_string())]);
+        }
+
+        #[test]
+        fn collect_lvar_defs_dedupes_same_name_same_unit_silently() {
+            let effects = vec![
+                lvar_effect("L:Foo", "Number"),
+                lvar_effect("L:Foo", "Number"),
+            ];
+            let (defs, warnings) = collect_lvar_defs(&effects);
+            assert_eq!(defs.len(), 1);
+            assert!(warnings.is_empty());
+        }
+
+        #[test]
+        fn collect_lvar_defs_keeps_first_unit_and_warns_on_conflict() {
+            let effects = vec![
+                lvar_effect("L:Foo", "Number"),
+                lvar_effect("L:Foo", "Percent"),
+            ];
+            let (defs, warnings) = collect_lvar_defs(&effects);
+            assert_eq!(defs, vec![("L:Foo".to_string(), "Number".to_string())]);
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].contains("L:Foo"));
+        }
+
+        #[test]
+        fn collect_lvar_defs_caps_at_max_and_warns_on_overflow() {
+            let effects: Vec<CustomEffect> = (0..MAX_CUSTOM_LVARS + 3)
+                .map(|i| lvar_effect(&format!("L:Var{i}"), "Number"))
+                .collect();
+            let (defs, warnings) = collect_lvar_defs(&effects);
+            assert_eq!(defs.len(), MAX_CUSTOM_LVARS);
+            assert_eq!(warnings.len(), 3);
+        }
+    }
+
+    #[test]
+    fn parse_lvar_values_zips_names_and_values_in_order() {
+        let names = vec!["L:A".to_string(), "L:B".to_string(), "L:C".to_string()];
+        let values = [1.0, 2.0, 3.0];
+        let map = parse_lvar_values(&names, &values);
+        assert_eq!(map.get("L:A"), Some(&1.0));
+        assert_eq!(map.get("L:B"), Some(&2.0));
+        assert_eq!(map.get("L:C"), Some(&3.0));
+        assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn parse_lvar_values_handles_shorter_value_buffer() {
+        let names = vec!["L:A".to_string(), "L:B".to_string()];
+        let values = [1.0];
+        let map = parse_lvar_values(&names, &values);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("L:A"), Some(&1.0));
+        assert_eq!(map.get("L:B"), None);
+    }
+
+    #[test]
+    fn parse_lvar_values_ignores_extra_values_beyond_names() {
+        let names = vec!["L:A".to_string()];
+        let values = [1.0, 99.0, 99.0];
+        let map = parse_lvar_values(&names, &values);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("L:A"), Some(&1.0));
+    }
+
+    #[test]
+    fn parse_lvar_values_empty_names_yields_empty_map() {
+        let map = parse_lvar_values(&[], &[1.0, 2.0]);
+        assert!(map.is_empty());
     }
 }

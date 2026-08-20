@@ -5,7 +5,10 @@ use parking_lot::Mutex;
 
 use crate::{
     ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
-    aircraft_profiles::AircraftProfiles, game_state::GameSlot, profiles::ProfileState,
+    aircraft_profiles::AircraftProfiles,
+    custom_fx::store::CustomFxShared,
+    game_state::{GameSlot, PreviewLock},
+    profiles::ProfileState,
 };
 
 // Сигнатура обязана совпадать с windows-версией в worker.rs (тот же
@@ -23,6 +26,10 @@ pub fn sim_worker(
     _aircraft_profiles: Arc<Mutex<AircraftProfiles>>,
     _profile_state: Arc<Mutex<ProfileState>>,
     _game: GameSlot,
+    _recording: Arc<AtomicBool>,
+    _custom_fx: Arc<CustomFxShared>,
+    _active_custom_ids: Arc<Mutex<Vec<String>>>,
+    _preview: PreviewLock,
 ) {
     // Non-Windows stub: SimConnect is unavailable.
 }

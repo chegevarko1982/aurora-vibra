@@ -11,11 +11,19 @@ use crossbeam_channel::Sender;
 use libloading::Library;
 use parking_lot::Mutex;
 
+use std::collections::BTreeMap;
+
 use crate::RumbleEngine;
-use crate::game_state::GameSlot;
+use crate::custom_fx::engine::CustomFxEngine;
+use crate::custom_fx::sources::TelemetryFrame;
+use crate::custom_fx::store::CustomFxShared;
+use crate::game_state::{GameSlot, PreviewLock};
+use crate::recorder::SessionRecorder;
 use crate::sim::elem_idx::ElemIdx;
-use crate::sim::parse::{flight_status, parse_main_elems};
-use crate::{ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
+use crate::sim::parse::{collect_lvar_defs, flight_status, parse_lvar_values, parse_main_elems};
+use crate::{
+    ActiveGame, ConfigShared, EffectMode, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
+};
 
 type DWord = u32;
 // Имя намеренно совпадает с типом из Win32 SDK — так подписи FFI ниже читаются
@@ -128,6 +136,17 @@ const REQ_PING: DWord = 3101;
 const DEF_TITLE: DWord = 2201;
 const REQ_TITLE: DWord = 3201;
 const REQ_SYS_STATE: DWord = 3301;
+// Пользовательские MSFS LVAR (см. custom_fx::model::LvarSpec) — НАМЕРЕННО
+// отдельное определение/запрос, а не подмешаны в DEF_MAIN/REQ_MAIN: имя и
+// единицу измерения вписывает пользователь в UI, и они могут оказаться
+// невалидными (несуществующая переменная, опечатка в единице). Если бы такая
+// запись была частью DEF_MAIN, отказ SimConnect зарегистрировать её мог бы
+// увести в ошибку всё определение целиком — тогда сломалась бы ВСЯ штатная
+// телеметрия (61 переменная, от которой зависят все встроенные эффекты), а
+// не только пользовательская. Список, зарегистрированный под этим ID,
+// пересобирается на лету при изменении custom_fx (см. apply_lvar_defs ниже).
+const DEF_LVAR: DWord = 2401;
+const REQ_LVAR: DWord = 3401;
 
 type PfnSimConnectOpen =
     unsafe extern "system" fn(*mut Handle, *const c_char, HWnd, DWord, Handle, DWord) -> HRESULT;
@@ -152,6 +171,11 @@ type PfnSimConnectRequestDataOnSimObject = unsafe extern "system" fn(
     DWord,
     DWord,
 ) -> HRESULT;
+// SimConnect не умеет удалять отдельные элементы из определения — единственный
+// способ пересобрать динамический список пользовательских LVAR на лету это
+// снести всё определение целиком и заново вызвать AddToDataDefinition для
+// актуального списка (см. apply_lvar_defs в sim_worker).
+type PfnSimConnectClearDataDefinition = unsafe extern "system" fn(Handle, DWord) -> HRESULT;
 type PfnSimConnectGetNextDispatch =
     unsafe extern "system" fn(Handle, *mut *mut SimRecv, *mut DWord) -> HRESULT;
 type PfnSimConnectSubscribeToSystemEvent =
@@ -174,6 +198,12 @@ struct SimConnectFns {
     next_dispatch: PfnSimConnectGetNextDispatch,
     subscribe_event: Option<PfnSimConnectSubscribeToSystemEvent>,
     request_system_state: Option<PfnSimConnectRequestSystemState>,
+    // Optional как subscribe_event/request_system_state выше: символ есть в
+    // клиентских библиотеках SimConnect уже давно, но если вдруг его нет
+    // (нестандартная/старая DLL) — пользовательские LVAR просто не смогут
+    // пересобираться на лету (см. apply_lvar_defs), это не должно валить
+    // остальную загрузку SimConnect.
+    clear_data_def: Option<PfnSimConnectClearDataDefinition>,
 }
 
 // Проприетарный компонент Microsoft, не покрытый MIT этого проекта —
@@ -254,6 +284,10 @@ fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
             .get::<PfnSimConnectRequestSystemState>(b"SimConnect_RequestSystemState\0")
             .ok()
             .map(|s| *s);
+        let clear_data_def: Option<PfnSimConnectClearDataDefinition> = lib
+            .get::<PfnSimConnectClearDataDefinition>(b"SimConnect_ClearDataDefinition\0")
+            .ok()
+            .map(|s| *s);
 
         Ok(SimConnectFns {
             _lib: std::sync::Arc::new(lib),
@@ -264,6 +298,7 @@ fn bind_simconnect(lib: Library) -> Result<SimConnectFns> {
             next_dispatch,
             subscribe_event,
             request_system_state,
+            clear_data_def,
         })
     }
 }
@@ -343,6 +378,10 @@ pub fn sim_worker(
     aircraft_profiles: Arc<Mutex<crate::aircraft_profiles::AircraftProfiles>>,
     profile_state: Arc<Mutex<crate::profiles::ProfileState>>,
     game: GameSlot,
+    recording: Arc<AtomicBool>,
+    custom_fx: Arc<CustomFxShared>,
+    active_custom_ids: Arc<Mutex<Vec<String>>>,
+    preview: PreviewLock,
 ) {
     logs.push("SimConnect: worker started");
 
@@ -359,6 +398,12 @@ pub fn sim_worker(
             return;
         }
     };
+
+    // Живёт ВНЕ цикла переподключений SimConnect ниже (тот же уровень, что
+    // и `fns`) — короткий обрыв связи с симом не должен рвать одну сессию
+    // записи на несколько файлов; тумблер тот же `recording`, что у
+    // wt_worker (см. main.rs).
+    let mut recorder = SessionRecorder::new();
 
     unsafe {
         loop {
@@ -397,6 +442,19 @@ pub fn sim_worker(
 
             let mut in_flight: bool = true;
             let mut rumble_engine = RumbleEngine::new();
+            // Взаимоисключающий движок пользовательских эффектов (см.
+            // custom_fx::engine) — своё состояние (EMA/гистерезис/фаза Pulse),
+            // независимое от rumble_engine, живёт рядом с ним и так же
+            // пересоздаётся при каждом переподключении SimConnect.
+            let mut custom_engine = CustomFxEngine::new();
+            // Режим предыдущего тика — нужен только чтобы поймать МОМЕНТ
+            // переключения BuiltIn<->Custom и сделать разовый сброс (см. ниже
+            // у точки отправки HID), а не сравнивать на каждый тик впустую.
+            let mut last_effect_mode = crate::settings::effect_mode();
+            // Фронт захвата PreviewLock — редактору эффектов нужно ОДИН раз
+            // получить нули на моторы в момент захвата канала, а не каждый
+            // тик, пока он держит канал (см. game_state::PreviewLock).
+            let mut preview_was_held = false;
 
             if let Some(sub) = fns.subscribe_event {
                 for (id, ev) in &[
@@ -446,6 +504,96 @@ pub fn sim_worker(
                     0.0,
                     0xFFFF_FFFF,
                 )
+            };
+
+            // Отдельный путь для DEF_LVAR (не переиспользует `add` выше):
+            // `add` делает CString::new(...).unwrap() на именах, зашитых в
+            // код (safe), но здесь имя/единица вписаны пользователем в UI —
+            // NUL-байт внутри строки (маловероятно, но возможно при вставке
+            // мусора) уронил бы весь процесс через unwrap. Такую переменную
+            // просто пропускаем и логируем, а не паникуем.
+            let add_lvar = |name_s: &str, unit_s: &str| -> Option<HRESULT> {
+                let n = std::ffi::CString::new(name_s).ok()?;
+                let u = std::ffi::CString::new(unit_s).ok()?;
+                Some((fns.add_to_def)(
+                    h_sc,
+                    DEF_LVAR,
+                    n.as_ptr(),
+                    u.as_ptr(),
+                    SIMCONNECT_DATATYPE_FLOAT64,
+                    0.0,
+                    0xFFFF_FFFF,
+                ))
+            };
+
+            // Пересобирает DEF_LVAR/REQ_LVAR целиком под актуальный список
+            // (имя, единица) — вызывается на старте соединения и каждый раз,
+            // когда custom_fx.current_rev() меняется (см. лупу диспетчера
+            // ниже). SimConnect не умеет удалять отдельные элементы
+            // определения, поэтому единственный способ убрать/переименовать
+            // переменную — снести всё определение (ClearDataDefinition) и
+            // зарегистрировать заново.
+            let apply_lvar_defs = |defs: &[(String, String)]| {
+                if let Some(clear) = fns.clear_data_def {
+                    let hr = clear(h_sc, DEF_LVAR);
+                    if hr < 0 {
+                        logs.push(format!(
+                            "SimConnect: ClearDataDefinition(LVAR) FAILED {}",
+                            hr_hex(hr)
+                        ));
+                    }
+                } else if !defs.is_empty() {
+                    logs.push(
+                        "SimConnect: ClearDataDefinition unavailable in this SimConnect build — custom LVAR list can only grow, not shrink/rename until reconnect".to_string(),
+                    );
+                }
+
+                if defs.is_empty() {
+                    return;
+                }
+
+                for (name, unit) in defs {
+                    match add_lvar(name, unit) {
+                        Some(hr) if hr < 0 => {
+                            logs.push(format!(
+                                "SimConnect: AddToDef LVAR {:?} [{}] FAILED {}",
+                                name,
+                                unit,
+                                hr_hex(hr)
+                            ));
+                        }
+                        None => {
+                            logs.push(format!(
+                                "SimConnect: custom LVAR {:?} [{}] skipped — name/unit contains a NUL byte",
+                                name, unit
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+
+                let hr = (fns.req_data)(
+                    h_sc,
+                    REQ_LVAR,
+                    DEF_LVAR,
+                    USER_OBJECT_ID,
+                    SIMCONNECT_PERIOD_SIM_FRAME,
+                    0,
+                    0,
+                    0,
+                    0,
+                );
+                if hr < 0 {
+                    logs.push(format!(
+                        "SimConnect: RequestDataOnSimObject LVAR FAILED {}",
+                        hr_hex(hr)
+                    ));
+                } else {
+                    logs.push(format!(
+                        "SimConnect: custom LVAR defs registered ({} vars)",
+                        defs.len()
+                    ));
+                }
             };
 
             // Registration order (and the corresponding elem[] read order in
@@ -608,7 +756,36 @@ pub fn sim_worker(
             let mut title_resolved = false;
             let mut last_title_request_time = Instant::now() - Duration::from_secs(10); // force immediate request first tick
 
+            // Пользовательские LVAR (DEF_LVAR/REQ_LVAR): lvar_names — вектор
+            // ИМЁН В ПОРЯДКЕ РЕГИСТРАЦИИ, используется для разбора пакета
+            // REQ_LVAR (см. parse_lvar_values); lvar_values — последний
+            // разобранный словарь, подмешивается в fv.lvars у каждого тика
+            // REQ_MAIN. lvar_last_rev начинается с 0, что заведомо не
+            // совпадает с CustomFxShared::current_rev() (стартует с 1) — это
+            // форсирует начальную регистрацию на первой же итерации лупы
+            // ниже, тем же путём, что и обычная пересборка при правке в UI.
+            let mut lvar_names: Vec<String> = Vec::new();
+            let mut lvar_values: BTreeMap<String, f64> = BTreeMap::new();
+            let mut lvar_last_rev: u64 = 0;
+
             loop {
+                // Проверка дешёвая (одно атомарное чтение) — делается на
+                // каждой итерации лупы диспетчера, а не только там, где
+                // приходит REQ_MAIN, потому что часть веток match ниже
+                // делает `continue` и пропускает код после матча. Только
+                // так изменение списка эффектов в UI подхватывается
+                // гарантированно, а не «когда повезёт».
+                let cfx_rev = custom_fx.current_rev();
+                if cfx_rev != lvar_last_rev {
+                    let (defs, warnings) = collect_lvar_defs(&custom_fx.get());
+                    for w in &warnings {
+                        logs.push(format!("Custom LVAR: {w}"));
+                    }
+                    apply_lvar_defs(&defs);
+                    lvar_names = defs.into_iter().map(|(name, _)| name).collect();
+                    lvar_last_rev = cfx_rev;
+                }
+
                 let mut p_recv: *mut SimRecv = std::ptr::null_mut();
                 let mut cb: DWord = 0;
                 let hr = (fns.next_dispatch)(h_sc, &mut p_recv, &mut cb);
@@ -631,7 +808,9 @@ pub fn sim_worker(
                                 in_flight = true;
                                 *last_vars.lock() = None;
                                 rumble_engine.reset();
+                                custom_engine.reset();
                                 effects.clear_all();
+                                active_custom_ids.lock().clear();
 
                                 // When simulation starts, we trigger title retrieval.
                                 // Instead of making a continuous subscription right here, we reset the resolution flag
@@ -656,6 +835,7 @@ pub fn sim_worker(
                                 });
                                 *last_vars.lock() = None;
                                 effects.clear_all();
+                                active_custom_ids.lock().clear();
                             } else if ev.u_event_id == EVT_PAUSE_SYS {
                                 paused_event_flag = ev.dw_data != 0;
                             } else if ev.u_event_id == EVT_PAUSE_EX1_SYS {
@@ -715,6 +895,21 @@ pub fn sim_worker(
                                 continue;
                             }
 
+                            if sod.dw_request_id == REQ_LVAR {
+                                // Порядок чтения ОБЯЗАН совпадать с порядком
+                                // регистрации — lvar_names хранит именно этот
+                                // порядок (см. apply_lvar_defs выше и
+                                // parse_lvar_values doc-комментарий).
+                                let count = sod.dw_define_count as usize;
+                                if count > 0 && !lvar_names.is_empty() && payload_len >= count * 8 {
+                                    let n = count.min(lvar_names.len());
+                                    let values =
+                                        std::slice::from_raw_parts(data_ptr as *const f64, n);
+                                    lvar_values = parse_lvar_values(&lvar_names[..n], values);
+                                }
+                                continue;
+                            }
+
                             if sod.dw_request_id == REQ_MAIN {
                                 // Слот мог быть занят WT в момент Open() —
                                 // пробуем повторно на каждом полученном пакете
@@ -749,6 +944,7 @@ pub fn sim_worker(
                                             throttle_right: 0,
                                         });
                                         effects.clear_all();
+                                        active_custom_ids.lock().clear();
                                     }
                                     continue;
                                 }
@@ -794,16 +990,38 @@ pub fn sim_worker(
                                     paused_event_flag || (paused_ex1_bits != 0);
                                 let cfg_now = config.get();
                                 let title_snapshot = aircraft_title.lock().clone();
-                                let fv = parse_main_elems(
+                                let mut fv = parse_main_elems(
                                     &elem,
                                     paused_from_events,
                                     cfg_now.ias_deadband_kn,
                                     &title_snapshot,
                                 );
+                                // parse_main_elems ничего не знает про
+                                // динамический список пользовательских LVAR
+                                // (см. её doc-комментарий на поле lvars) —
+                                // подмешиваем последний разобранный пакет
+                                // REQ_LVAR здесь.
+                                fv.lvars = lvar_values.clone();
 
                                 if owns_slot {
-                                    *last_vars.lock() = Some(fv);
+                                    // FlightVars больше не Copy (добавлен
+                                    // словарь lvars, custom_fx) — явный
+                                    // .clone(), fv ниже используется ещё
+                                    // несколько раз по ссылке и по значению.
+                                    *last_vars.lock() = Some(fv.clone());
                                     *status.lock() = flight_status(&fv);
+                                    // Запись сессии (тот же тумблер, что у WT,
+                                    // см. wt_link::worker) — только пока слот
+                                    // реально наш, иначе на диск попадали бы
+                                    // кадры MSFS в момент, когда HID-каналом
+                                    // фактически владеет WT/X-Plane.
+                                    recorder.tick_flightvars(
+                                        recording.load(Ordering::Relaxed),
+                                        fv.sim_time_s,
+                                        &fv,
+                                        "msfs",
+                                        &logs,
+                                    );
                                 }
 
                                 // War Thunder может владеть слотом одновременно
@@ -814,24 +1032,103 @@ pub fn sim_worker(
                                 // последнем значении.
                                 if !owns_slot {
                                     effects.clear_all();
+                                    active_custom_ids.lock().clear();
                                     let _ = tx_hid.send(HidCmd::SendIntensity {
                                         joystick: 0,
                                         throttle_left: 0,
                                         throttle_right: 0,
                                     });
+                                } else if preview.is_held() {
+                                    // Редактор эффектов держит HID-канал под
+                                    // предпросмотр — воркер обязан молчать (см.
+                                    // game_state::PreviewLock), иначе оба
+                                    // источника 20 раз в секунду переписывали бы
+                                    // друг друга на моторе. Один раз на ФРОНТЕ
+                                    // захвата шлём нули, чтобы не застыло
+                                    // последнее значение rumble/custom-движка —
+                                    // дальше просто молчим, пока не отпустят.
+                                    if !preview_was_held {
+                                        let _ = tx_hid.send(HidCmd::SendIntensity {
+                                            joystick: 0,
+                                            throttle_left: 0,
+                                            throttle_right: 0,
+                                        });
+                                        preview_was_held = true;
+                                    }
                                 } else {
-                                    let out = rumble_engine.step(
-                                        &fv,
-                                        &cfg_now,
-                                        config.current_rev(),
-                                        hold.load(Ordering::Relaxed),
-                                    );
-                                    effects.apply_snapshot(&out.effects);
-                                    let _ = tx_hid.send(HidCmd::SendIntensity {
-                                        joystick: out.joystick_intensity,
-                                        throttle_left: out.throttle_left_intensity,
-                                        throttle_right: out.throttle_right_intensity,
-                                    });
+                                    preview_was_held = false;
+
+                                    // Встроенный и пользовательский движки эффектов —
+                                    // ВЗАИМОИСКЛЮЧАЮЩИЕ (см. doc-комментарий
+                                    // types::EffectMode): два независимых движка,
+                                    // пишущих в одни и те же три мотора, давали бы
+                                    // непредсказуемое наложение, поэтому здесь именно
+                                    // ВЫБОР считающего движка, а не смешивание их
+                                    // выходов. При смене режима на лету — разовый
+                                    // сброс состояния ОБОИХ движков и кадр нулей: без
+                                    // него эффект, активный в момент переключения,
+                                    // застыл бы на моторе последним значением (тот же
+                                    // приём, что уже используется выше при потере
+                                    // владения слотом).
+                                    let mode_now = crate::settings::effect_mode();
+                                    if mode_now != last_effect_mode {
+                                        rumble_engine.reset();
+                                        custom_engine.reset();
+                                        effects.clear_all();
+                                        active_custom_ids.lock().clear();
+                                        let _ = tx_hid.send(HidCmd::SendIntensity {
+                                            joystick: 0,
+                                            throttle_left: 0,
+                                            throttle_right: 0,
+                                        });
+                                        last_effect_mode = mode_now;
+                                    }
+
+                                    match mode_now {
+                                        EffectMode::BuiltIn => {
+                                            let out = rumble_engine.step(
+                                                &fv,
+                                                &cfg_now,
+                                                config.current_rev(),
+                                                hold.load(Ordering::Relaxed),
+                                            );
+                                            effects.apply_snapshot(&out.effects);
+                                            active_custom_ids.lock().clear();
+                                            let _ = tx_hid.send(HidCmd::SendIntensity {
+                                                joystick: out.joystick_intensity,
+                                                throttle_left: out.throttle_left_intensity,
+                                                throttle_right: out.throttle_right_intensity,
+                                            });
+                                        }
+                                        EffectMode::Custom => {
+                                            // .clone() вместо неявного Copy —
+                                            // fv.sim_time_s ниже читается
+                                            // после этой точки.
+                                            let frame = TelemetryFrame::Flight(fv.clone());
+                                            let custom_effects = custom_fx.get();
+                                            let out = custom_engine.step(
+                                                &frame,
+                                                fv.sim_time_s,
+                                                &custom_effects,
+                                                custom_fx.current_rev(),
+                                                &title_snapshot,
+                                                ActiveGame::Msfs,
+                                                hold.load(Ordering::Relaxed),
+                                                cfg_now.max_output,
+                                            );
+                                            // Встроенный EffectsSnapshot в режиме
+                                            // Custom заведомо пуст — Live Monitor
+                                            // подсвечивает активность через
+                                            // active_custom_ids, а не через effects.
+                                            effects.clear_all();
+                                            *active_custom_ids.lock() = out.active_ids;
+                                            let _ = tx_hid.send(HidCmd::SendIntensity {
+                                                joystick: out.joystick,
+                                                throttle_left: out.throttle_left,
+                                                throttle_right: out.throttle_right,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }

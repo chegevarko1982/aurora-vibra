@@ -1,11 +1,23 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// Сырая телеметрия из симулятора: нужна для записи сессий в JSONL и прогона
+/// их в редакторе эффектов. `#[serde(default)]` — чтобы записи, сделанные
+/// старой версией, читались после добавления новых полей.
+///
+/// Больше не `Copy`: поле `lvars` ниже — владеющий `BTreeMap`, а Rust не
+/// позволяет `Copy` для типа с не-`Copy` полем. Места, которые раньше
+/// полагались на неявное копирование значения (`*last_vars.lock()`,
+/// повторное использование `fv` после перемещения в `TelemetryFrame::Flight`
+/// и т.п.), переведены на явный `.clone()` — сам `FlightVars` по-прежнему
+/// дешёво клонируется, пока пользователь не завёл ни одной LVAR.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FlightVars {
     pub sim_time_s: f64,
     pub airspeed_indicated: f64,
@@ -127,6 +139,20 @@ pub struct FlightVars {
     // с L:EngineStart1b/2b_Ext в UI).
     pub eng1_starter_active: bool,
     pub eng2_starter_active: bool,
+    // Значения пользовательских LVAR (custom_fx, SourceId::Lvar): ключ — имя
+    // переменной ровно так, как его вписал пользователь в UI (например
+    // "L:A320_Gear_Nose"), значение — то, что вернул SimConnect по её
+    // `AddToDataDefinition` (единица — из LvarSpec::unit на самом эффекте, не
+    // здесь). Только MSFS: у X-Plane и War Thunder своя система переменных,
+    // конвертации в произвольный L-var там нет и не планируется, поэтому
+    // конвейеры xp_link/wt_link оставляют этот словарь пустым. BTreeMap (не
+    // HashMap) — детерминированный порядок ключей в JSON, иначе один и тот
+    // же кадр записи сессии сериализовался бы каждый раз по-разному и диффы
+    // записей стали бы нечитаемы. `skip_serializing_if` — пока у пользователя
+    // нет ни одной кастомной переменной, формат JSONL-записи не меняется НИ
+    // НА БАЙТ (на нём завязаны tests/wt_*_replay.rs и tests/custom_fx_replay.rs).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub lvars: BTreeMap<String, f64>,
 }
 
 /// Привязка одного эффекта вибрации к устройствам вывода.
@@ -783,6 +809,17 @@ impl GameOverride {
     }
 }
 
+/// Какой движок эффектов сейчас ведёт моторы. Встроенный набор и пользовательские
+/// эффекты — ВЗАИМОИСКЛЮЧАЮЩИЕ режимы, а не два слоя: два независимых движка на одних
+/// и тех же трёх моторах давали бы непредсказуемое наложение.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EffectMode {
+    #[default]
+    BuiltIn,
+    Custom,
+}
+
 #[cfg(test)]
 mod game_override_tests {
     use super::*;
@@ -818,5 +855,70 @@ mod game_override_tests {
         assert!(!GameOverride::ForceXplane.vetoes(ActiveGame::Xplane));
         assert!(GameOverride::ForceXplane.vetoes(ActiveGame::Msfs));
         assert!(GameOverride::ForceXplane.vetoes(ActiveGame::Wt));
+    }
+}
+
+#[cfg(test)]
+mod effect_mode_tests {
+    use super::*;
+
+    #[test]
+    fn default_is_builtin() {
+        assert_eq!(EffectMode::default(), EffectMode::BuiltIn);
+    }
+
+    #[test]
+    fn serde_round_trip_builtin() {
+        let original = EffectMode::BuiltIn;
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: EffectMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn serde_round_trip_custom() {
+        let original = EffectMode::Custom;
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: EffectMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn serde_round_trip_flight_vars() {
+        let original = FlightVars::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: FlightVars = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn flight_vars_without_lvars_serializes_without_the_field() {
+        // Гарантия неизменности формата записи сессии: пока ни одна
+        // пользовательская LVAR не заведена, ключ "lvars" не должен появляться
+        // в JSON вообще (не просто "пустой объект") — иначе диффы старых и
+        // новых записей отличались бы даже без реального изменения данных.
+        let json = serde_json::to_string(&FlightVars::default()).unwrap();
+        assert!(
+            !json.contains("lvars"),
+            "формат записи не должен меняться, пока LVAR не заведены: {json}"
+        );
+    }
+
+    #[test]
+    fn flight_vars_with_lvars_round_trips_and_old_records_without_the_field_still_parse() {
+        let mut original = FlightVars::default();
+        original
+            .lvars
+            .insert("L:A320_Gear_Nose".to_string(), 1000.0);
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains("L:A320_Gear_Nose"));
+        let restored: FlightVars = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+
+        // Старая запись сессии без поля "lvars" вообще — обязана читаться
+        // (`#[serde(default)]` на структуре).
+        let old_record = "{}";
+        let restored_old: FlightVars = serde_json::from_str(old_record).unwrap();
+        assert!(restored_old.lvars.is_empty());
     }
 }

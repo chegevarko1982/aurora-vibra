@@ -15,20 +15,27 @@ use std::{
 use windows::Win32::Foundation::HWND;
 
 use crate::{
-    ActiveGame, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, GameOverride, HidCmd,
-    LogBuffer, RumbleConfig, SimStatus, UiCmd,
+    ActiveGame, ConfigShared, EffectDeviceTarget, EffectMode, EffectsShared, FlightVars,
+    GameOverride, HidCmd, LogBuffer, RumbleConfig, SimStatus, UiCmd,
     aircraft_profiles::{self, AircraftProfile, AircraftProfiles},
+    custom_fx::{sources::TelemetryFrame, store::CustomFxShared},
+    game_state::PreviewLock,
     i18n::{self, Lang, Strings},
     profiles::ProfileState,
     tray, updater,
     wt_link::vars::WtVars,
 };
 
+// Редактор пользовательских эффектов ("Редактор эффектов") — отдельный подмодуль,
+// а не ещё несколько сотен строк в этом и без того большом файле (см.
+// doc-комментарий effects_editor.rs).
+mod effects_editor;
+
 /// Цветовая палитра карточек эффектов и Live Monitor. Раньше цвета были
 /// разбросаны литералами (`Color32::from_rgb(...)`) по десятку мест — свели
 /// в одно место, чтобы контраст карточка/фон и роли акцентов (primary vs
 /// live vs warning) были согласованы по всему приложению.
-mod palette {
+pub(crate) mod palette {
     use egui::Color32;
 
     // Фоны. Раньше BG_APP был почти чистый чёрный (#0B0E14) — на неоткалиброванных
@@ -164,6 +171,11 @@ pub enum Section {
     // nav_panel и dispatch ниже). Telemetry остаётся общей секцией для обоих
     // режимов, но её содержимое переключается на WT-поля.
     Wt,
+    // Конструктор пользовательских эффектов ("Редактор эффектов") — как и
+    // Telemetry, общая секция для всех игр (в отличие от Rumble/Taxi/
+    // Engines/Gear/Wt, которые переключаются по active_game), поэтому пункт
+    // навигации виден всегда, см. nav_panel ниже.
+    Effects,
 }
 
 /// Placeholder device glyph kind — see `UiState::device_icon_button`.
@@ -300,6 +312,42 @@ fn effects_legend(ui: &mut egui::Ui, t: &Strings, show_devices: bool) {
     ui.add_space(6.0);
 }
 
+/// Плашка "сейчас активны пользовательские эффекты" — рисуется наверху
+/// встроенных разделов (Rumble/Taxi/Engines/Gear/Wt), ДО заголовка раздела,
+/// когда включён EffectMode::Custom: движок в этом режиме встроенные эффекты
+/// не считает вообще (гейт в sim/worker.rs, wt_link/worker.rs, xp_link/worker.rs),
+/// а карточки раздела при этом выглядят полностью рабочими — крутить их можно,
+/// но на вибрацию это не влияет, и без явного предупреждения это не очевидно.
+///
+/// Возвращает true, если пользователь нажал кнопку возврата на встроенные
+/// эффекты. Само переключение режима (+персист) делает вызывающий код ПОСЛЕ
+/// `self.config.with_mut(...)` — здесь `self` недоступен, эта функция вызвана
+/// изнутри `with_mut`, где занят только `cfg`.
+fn builtin_muted_banner(ui: &mut egui::Ui, t: &Strings) -> bool {
+    let mut clicked = false;
+    egui::Frame::new()
+        .fill(palette::BG_CARD)
+        .stroke(egui::Stroke::new(1.0, palette::STATUS_ATTENTION))
+        .corner_radius(6u8)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .outer_margin(egui::Margin::symmetric(0, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(t.msg_builtin_section_inactive)
+                        .color(palette::STATUS_ATTENTION)
+                        .strong(),
+                );
+                if ui.button(t.btn_enable_builtin_effects).clicked() {
+                    clicked = true;
+                }
+            });
+        });
+    ui.add_space(4.0);
+    clicked
+}
+
 /// Статус-бейдж карточки эффекта: круглый маркер И слово рядом с ним.
 /// Раньше во включённом состоянии здесь был только кружок, а что он значит,
 /// знала лишь всплывающая подсказка — тестировщик не смог разобраться в
@@ -423,6 +471,25 @@ pub struct UiState {
     pub config: Arc<ConfigShared>,
     pub effects: EffectsShared,
 
+    // Конструктор пользовательских эффектов ("Редактор эффектов", см.
+    // ui/effects_editor.rs): список эффектов — общий с воркерами через
+    // CustomFxShared (тот же rev-приём, что у ConfigShared), живой список id
+    // эффектов, реально дающих отдачу сейчас (для точки-индикатора в списке
+    // слева), и локальная копия режима эффектов для биндинга к
+    // radio-кнопкам. Воркеры читают режим НЕ отсюда, а из глобального
+    // атомика settings::effect_mode() (у них нет доступа к UiState) — оба
+    // источника синхронизируются в момент переключения, см.
+    // effects_editor::show_mode_header.
+    pub custom_fx: Arc<CustomFxShared>,
+    pub active_custom_ids: Arc<Mutex<Vec<String>>>,
+    pub effect_mode: EffectMode,
+    pub fx_editor: effects_editor::EditorState,
+    // Перехват HID-канала на время предпросмотра эффекта (кнопка "Играть" в
+    // редакторе) — тот же клон, что получили все три воркера в main.rs.
+    // Владение самим предпросмотром (что играет, когда шлём кадр) живёт в
+    // fx_editor::EditorState, здесь только сам замок.
+    pub preview_lock: PreviewLock,
+
     #[cfg(debug_assertions)]
     pub test_level: u8,
     #[cfg(debug_assertions)]
@@ -502,6 +569,7 @@ impl UiState {
             // миграции файлов, сохранённых сборкой до этой фичи.
             wt_enabled: self.game_override == GameOverride::ForceWt,
             game_override: self.game_override,
+            effect_mode: crate::settings::effect_mode(),
         });
     }
 
@@ -832,6 +900,21 @@ impl eframe::App for UiState {
         {
             const TARGET_FPS: u64 = 30;
             ctx.request_repaint_after(Duration::from_millis(1000 / TARGET_FPS));
+        }
+
+        // Страховка для предпросмотра эффектов (см. effects_editor.rs): это
+        // ЕДИНСТВЕННОЕ место, которое гарантированно выполняется каждый кадр
+        // независимо от того, что сейчас отрисовано — сам редактор рисуется
+        // (и потому мог бы сам себя остановить) только когда одновременно
+        // активны вкладка Main И секция Effects. Если предпросмотр всё ещё
+        // считается включённым, а хотя бы одно из двух условий уже не
+        // выполняется (ушли на другую секцию/вкладку любым путём — клик по
+        // навигации, смена активной игры, переключение на Debug), глушим
+        // здесь. stop_preview идемпотентен, так что при выключенном
+        // предпросмотре это просто no-op каждый кадр.
+        if !(self.active_tab == Tab::Main && self.active_section == Section::Effects) {
+            self.fx_editor
+                .stop_preview(&self.tx_hid, &self.preview_lock);
         }
 
         // Close to tray: перехватываем закрытие окна крестиком, если включено
@@ -1219,144 +1302,244 @@ impl eframe::App for UiState {
             }
 
             if ag == ActiveGame::None {
-                // Ни одна игра не обнаружена — нейтральный экран ожидания
-                // вместо секций эффектов/nav/Live Monitor (той телеметрии,
-                // которую они показывали бы, всё равно ниоткуда взять).
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(80.0);
-                        ui.heading(t.heading_game_not_detected);
-                        ui.add_space(8.0);
-                        ui.label(t.msg_game_not_detected);
+                // Ни одна игра не обнаружена — все секции, завязанные на
+                // телеметрию конкретной игры (Rumble/Taxi/Engines/Gear/Wt/
+                // Telemetry), по-прежнему недоступны: показывать им нечего.
+                // НО конструктор пользовательских эффектов ("Редактор эффектов")
+                // от игры не зависит — его собирают и отлаживают заранее,
+                // поэтому навигация всё же рисуется (не прячется целиком, как
+                // было раньше), просто с единственным включённым пунктом.
+                // Live Monitor по-прежнему скрыт: показывать в нём нечего же.
+                let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
+                egui::Panel::left("nav_panel")
+                    .resizable(false)
+                    .exact_size(nav_panel_width)
+                    .frame(egui::Frame::side_top_panel(ui.style()).fill(palette::BG_SIDEBAR))
+                    .show(ui, |ui| {
+                        ui.add_space(4.0);
+                        let nav_item_disabled = |ui: &mut egui::Ui, label: &str| {
+                            let w = ui.available_width();
+                            ui.add_enabled(
+                                false,
+                                egui::Button::new(label).wrap().min_size(Vec2::new(w, 0.0)),
+                            );
+                        };
+                        nav_item_disabled(ui, t.nav_rumble);
+                        nav_item_disabled(ui, t.nav_taxi);
+                        nav_item_disabled(ui, t.nav_engines);
+                        nav_item_disabled(ui, t.nav_gear);
+                        ui.separator();
+                        nav_item_disabled(ui, t.nav_telemetry);
+                        let w = ui.available_width();
+                        if ui
+                            .add(
+                                egui::Button::new(t.nav_effects)
+                                    .selected(self.active_section == Section::Effects)
+                                    .wrap()
+                                    .min_size(Vec2::new(w, 0.0)),
+                            )
+                            .clicked()
+                        {
+                            self.active_section = Section::Effects;
+                        }
                     });
+
+                egui::CentralPanel::default().show(ui, |ui| {
+                    if self.active_section == Section::Effects {
+                        // Живой телеметрии нет ни для одного источника — та же
+                        // ветка ActiveGame::None, что и ниже в основном
+                        // dispatch'е секций (см. её комментарий). Все графики
+                        // источника корректно показывают lbl_fx_no_signal.
+                        let active_ids_guard = self.active_custom_ids.lock();
+                        let mut mode_changed = false;
+                        let mut ectx = effects_editor::EditorCtx {
+                            effects: &self.custom_fx,
+                            active_ids: active_ids_guard.as_slice(),
+                            live: None,
+                            active_game: ag,
+                            effect_mode: &mut self.effect_mode,
+                            mode_changed: &mut mode_changed,
+                            t,
+                            lang: self.lang,
+                            logs: &self.logs,
+                            tx_hid: &self.tx_hid,
+                            preview: &self.preview_lock,
+                        };
+                        effects_editor::show(ui, &mut self.fx_editor, &mut ectx);
+                        drop(active_ids_guard);
+                        if mode_changed {
+                            self.save_global_settings();
+                        }
+                    } else {
+                        // Тот же нейтральный экран ожидания, что и раньше —
+                        // просто теперь виден только пока не выбрана Effects.
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(80.0);
+                            ui.heading(t.heading_game_not_detected);
+                            ui.add_space(8.0);
+                            ui.label(t.msg_game_not_detected);
+                        });
+                    }
                 });
             } else {
                 // Общий снимок "включён/активен" для каждого эффекта — используется и
                 // бейджами счётчика в навигации слева, и списком Live Monitor справа,
                 // чтобы не считать дважды.
                 let mon = self.config.get();
+                // Снимок пользовательских эффектов — нужен ТОЛЬКО когда движок реально
+                // на них переключён (EffectMode::Custom): встроенные эффекты в этом
+                // режиме движком не считаются вообще (гейт в sim/worker.rs и
+                // wt_link/worker.rs), а старый список ниже показывал бы их все
+                // погашенными — вводит в заблуждение ("почему ничего не работает").
+                // Берём его заранее (а не внутри ветки rows), чтобы у &str внутри rows
+                // было куда занимать borrowed lifetime — сам Vec живёт до конца этого
+                // блока show_main, дольше, чем нужно rows.
+                let custom_snapshot = if self.effect_mode == EffectMode::Custom {
+                    self.custom_fx.get()
+                } else {
+                    Vec::new()
+                };
                 // Порядок элементов соответствует новой группировке по разделам
                 // (Aerodynamics / Taxi / Engines / Gears) — см. диапазоны ниже.
                 // Четвёртое поле — текущая интенсивность эффекта в процентах (та же
                 // формула val/native_max*100, что использует слайдер самой карточки),
                 // None — для triggered-по-порогу эффектов без единого "уровня"
-                // (Gear Transit). Используется компактным Live Monitor, чтобы
-                // показывать не только "включён/активен", но и реальное число.
+                // (Gear Transit, а также ЛЮБОЙ пользовательский эффект — у них нет
+                // единого "уровня", кривая+форма произвольные). Используется компактным
+                // Live Monitor, чтобы показывать не только "включён/активен", но и
+                // реальное число.
                 //
-                // War Thunder (ag == ActiveGame::Wt): список полностью заменяется
-                // на 4 эффекта этого режима — MSFS-эффекты в этот момент не
-                // считаются (см. гейт в sim/worker.rs), показывать их в Live
-                // Monitor было бы вводящим в заблуждение.
-                let rows: Vec<(&str, bool, bool, Option<f32>)> = if ag == ActiveGame::Wt {
-                    vec![
-                        (
-                            t.name_wt_weapon1,
-                            mon.wt.weapon1_enabled,
-                            self.effects.wt_weapon1_active.load(Ordering::Relaxed),
-                            None,
-                        ),
-                        (
-                            t.name_wt_weapon2,
-                            mon.wt.weapon2_enabled,
-                            self.effects.wt_weapon2_active.load(Ordering::Relaxed),
-                            None,
-                        ),
-                        (
-                            t.name_flaps,
-                            mon.wt.flaps_enabled,
-                            self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                            Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.lbl_gear_transit,
-                            mon.wt.gear_transit_enabled,
-                            self.effects.gear_transit_active.load(Ordering::Relaxed),
-                            None,
-                        ),
-                        (
-                            t.name_wt_stall,
-                            mon.wt.stall_enabled,
-                            self.effects.stall_active.load(Ordering::Relaxed),
-                            Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_wt_engine_start,
-                            mon.wt.engine_start_enabled,
-                            self.effects.engine_start_active.load(Ordering::Relaxed),
-                            Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                    ]
-                } else {
-                    vec![
-                        (
-                            t.overspeed_effect_name,
-                            mon.overspeed_enabled,
-                            self.effects.overspeed_active.load(Ordering::Relaxed),
-                            Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_stall,
-                            mon.stall_enabled,
-                            self.effects.stall_active.load(Ordering::Relaxed),
-                            Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_spoilers,
-                            mon.spoilers_enabled,
-                            self.effects.spoilers_active.load(Ordering::Relaxed),
-                            Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_flaps,
-                            mon.flaps_enabled,
-                            self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                            Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.lbl_bank_turb,
-                            mon.bank_enabled,
-                            self.effects.bank_active.load(Ordering::Relaxed),
-                            Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_engine_start,
-                            mon.enable_engine_start,
-                            self.effects.engine_start_active.load(Ordering::Relaxed),
-                            Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_ground_roll,
-                            mon.ground_enabled,
-                            self.effects.ground_active.load(Ordering::Relaxed)
-                                || self.effects.ground_thump_active.load(Ordering::Relaxed),
-                            Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_left_peak,
-                            mon.gear_comp_left_enabled,
-                            self.effects.gear_comp_left_active.load(Ordering::Relaxed),
-                            Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_nose_peak,
-                            mon.gear_comp_nose_enabled,
-                            self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
-                            Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.name_right_peak,
-                            mon.gear_comp_right_enabled,
-                            self.effects.gear_comp_right_active.load(Ordering::Relaxed),
-                            Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                        ),
-                        (
-                            t.lbl_gear_transit,
-                            mon.gear_transit_enabled,
-                            self.effects.gear_transit_active.load(Ordering::Relaxed),
-                            None,
-                        ),
-                    ]
-                };
+                // EffectMode::Custom: список полностью заменяется на пользовательские
+                // эффекты (см. doc-комментарий custom_snapshot выше). War Thunder
+                // (ag == ActiveGame::Wt, встроенный движок): список заменяется на 4
+                // эффекта этого режима — MSFS-эффекты в этот момент не считаются (см.
+                // гейт в sim/worker.rs), показывать их в Live Monitor было бы вводящим
+                // в заблуждение.
+                let rows: Vec<(&str, bool, bool, Option<f32>)> =
+                    if self.effect_mode == EffectMode::Custom {
+                        // Гвард мьютекса живёт ТОЛЬКО внутри этого блока — держать его
+                        // дольше нельзя: чуть ниже по кадру (CentralPanel, Section::Effects)
+                        // тот же self.active_custom_ids снова блокируется, и parking_lot::
+                        // Mutex не реентерабелен даже в одном потоке (реальный deadlock,
+                        // не гипотетический — оба места выполняются в одном кадре egui).
+                        let active_guard = self.active_custom_ids.lock();
+                        custom_snapshot
+                            .iter()
+                            .map(|e| {
+                                let active = active_guard.iter().any(|id| id == &e.id);
+                                (e.name.as_str(), e.enabled, active, None)
+                            })
+                            .collect()
+                    } else if ag == ActiveGame::Wt {
+                        vec![
+                            (
+                                t.name_wt_weapon1,
+                                mon.wt.weapon1_enabled,
+                                self.effects.wt_weapon1_active.load(Ordering::Relaxed),
+                                None,
+                            ),
+                            (
+                                t.name_wt_weapon2,
+                                mon.wt.weapon2_enabled,
+                                self.effects.wt_weapon2_active.load(Ordering::Relaxed),
+                                None,
+                            ),
+                            (
+                                t.name_flaps,
+                                mon.wt.flaps_enabled,
+                                self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                                Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.lbl_gear_transit,
+                                mon.wt.gear_transit_enabled,
+                                self.effects.gear_transit_active.load(Ordering::Relaxed),
+                                None,
+                            ),
+                            (
+                                t.name_wt_stall,
+                                mon.wt.stall_enabled,
+                                self.effects.stall_active.load(Ordering::Relaxed),
+                                Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_wt_engine_start,
+                                mon.wt.engine_start_enabled,
+                                self.effects.engine_start_active.load(Ordering::Relaxed),
+                                Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                        ]
+                    } else {
+                        vec![
+                            (
+                                t.overspeed_effect_name,
+                                mon.overspeed_enabled,
+                                self.effects.overspeed_active.load(Ordering::Relaxed),
+                                Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_stall,
+                                mon.stall_enabled,
+                                self.effects.stall_active.load(Ordering::Relaxed),
+                                Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_spoilers,
+                                mon.spoilers_enabled,
+                                self.effects.spoilers_active.load(Ordering::Relaxed),
+                                Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_flaps,
+                                mon.flaps_enabled,
+                                self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                                Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.lbl_bank_turb,
+                                mon.bank_enabled,
+                                self.effects.bank_active.load(Ordering::Relaxed),
+                                Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_engine_start,
+                                mon.enable_engine_start,
+                                self.effects.engine_start_active.load(Ordering::Relaxed),
+                                Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_ground_roll,
+                                mon.ground_enabled,
+                                self.effects.ground_active.load(Ordering::Relaxed)
+                                    || self.effects.ground_thump_active.load(Ordering::Relaxed),
+                                Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_left_peak,
+                                mon.gear_comp_left_enabled,
+                                self.effects.gear_comp_left_active.load(Ordering::Relaxed),
+                                Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_nose_peak,
+                                mon.gear_comp_nose_enabled,
+                                self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
+                                Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.name_right_peak,
+                                mon.gear_comp_right_enabled,
+                                self.effects.gear_comp_right_active.load(Ordering::Relaxed),
+                                Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                            ),
+                            (
+                                t.lbl_gear_transit,
+                                mon.gear_transit_enabled,
+                                self.effects.gear_transit_active.load(Ordering::Relaxed),
+                                None,
+                            ),
+                        ]
+                    };
                 let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
                 egui::Panel::left("nav_panel")
                     .resizable(false)
@@ -1372,32 +1555,75 @@ impl eframe::App for UiState {
                         // у selectable невыбранная кнопка рисуется вообще без рамки
                         // и заливки, поэтому пункты навигации проявлялись только под
                         // курсором. Здесь рамка есть всегда, на всю ширину панели.
-                        let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str| -> bool {
-                            let w = ui.available_width();
-                            ui.add(
-                                egui::Button::new(label)
-                                    .selected(selected)
-                                    .wrap()
-                                    .min_size(Vec2::new(w, 0.0)),
-                            )
-                            .clicked()
-                        };
+                        // `muted`: приглушает пункт (текст TEXT_SECONDARY вместо обычного)
+                        // и вешает hover-подсказку — используется для встроенных разделов
+                        // (Rumble/Taxi/Engines/Gear/Wt), когда движок реально переключён на
+                        // пользовательские эффекты (EffectMode::Custom) и их настройки на
+                        // вибрацию не влияют (см. builtin_muted_banner выше). Пункт при этом
+                        // остаётся кликабельным — пользователь вправе зайти и настроить его
+                        // заранее, до переключения режима обратно.
+                        let nav_item =
+                            |ui: &mut egui::Ui, selected: bool, label: &str, muted: bool| -> bool {
+                                let w = ui.available_width();
+                                let text = if muted {
+                                    RichText::new(label).color(palette::TEXT_SECONDARY)
+                                } else {
+                                    RichText::new(label)
+                                };
+                                let resp = ui.add(
+                                    egui::Button::new(text)
+                                        .selected(selected)
+                                        .wrap()
+                                        .min_size(Vec2::new(w, 0.0)),
+                                );
+                                let resp = if muted {
+                                    resp.on_hover_text(t.msg_builtin_section_inactive)
+                                } else {
+                                    resp
+                                };
+                                resp.clicked()
+                            };
+                        let builtin_nav_muted = self.effect_mode == EffectMode::Custom;
                         if ag == ActiveGame::Wt {
-                            if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
+                            if nav_item(
+                                ui,
+                                self.active_section == Section::Wt,
+                                t.nav_wt,
+                                builtin_nav_muted,
+                            ) {
                                 self.active_section = Section::Wt;
                             }
                         } else {
-                            if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
+                            if nav_item(
+                                ui,
+                                self.active_section == Section::Rumble,
+                                t.nav_rumble,
+                                builtin_nav_muted,
+                            ) {
                                 self.active_section = Section::Rumble;
                             }
-                            if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
+                            if nav_item(
+                                ui,
+                                self.active_section == Section::Taxi,
+                                t.nav_taxi,
+                                builtin_nav_muted,
+                            ) {
                                 self.active_section = Section::Taxi;
                             }
-                            if nav_item(ui, self.active_section == Section::Engines, t.nav_engines)
-                            {
+                            if nav_item(
+                                ui,
+                                self.active_section == Section::Engines,
+                                t.nav_engines,
+                                builtin_nav_muted,
+                            ) {
                                 self.active_section = Section::Engines;
                             }
-                            if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
+                            if nav_item(
+                                ui,
+                                self.active_section == Section::Gear,
+                                t.nav_gear,
+                                builtin_nav_muted,
+                            ) {
                                 self.active_section = Section::Gear;
                             }
                         }
@@ -1406,8 +1632,19 @@ impl eframe::App for UiState {
                             ui,
                             self.active_section == Section::Telemetry,
                             t.nav_telemetry,
+                            false,
                         ) {
                             self.active_section = Section::Telemetry;
+                        }
+                        // Как и Telemetry, виден во ВСЕХ играх — конструктор
+                        // не привязан к конкретному конвейеру телеметрии.
+                        if nav_item(
+                            ui,
+                            self.active_section == Section::Effects,
+                            t.nav_effects,
+                            false,
+                        ) {
+                            self.active_section = Section::Effects;
                         }
 
                         ui.separator();
@@ -1673,12 +1910,27 @@ impl eframe::App for UiState {
                         let throttle_hw_connected = self.throttle_connected.load(Ordering::Relaxed);
                         let split_touchdown_auto = joystick_hw_connected && throttle_hw_connected;
 
+                        // Задача 2: считаем ДО with_mut — self.config.with_mut(|cfg| ...)
+                        // ниже занимает `self` через захват других полей (active_section,
+                        // effects, logs, tx_hid...) внутри замыкания, так что менять
+                        // self.effect_mode прямо там нельзя. Клик по кнопке "Включить
+                        // встроенные эффекты" в плашке (см. builtin_muted_banner) только
+                        // взводит этот локальный флаг — реальное переключение режима и
+                        // персист происходят ПОСЛЕ закрытия with_mut.
+                        let show_builtin_muted_banner = self.effect_mode == EffectMode::Custom;
+                        let mut switch_to_builtin_clicked = false;
+
                         self.config.with_mut(|cfg| {
                             cfg.split_touchdown = split_touchdown_auto;
                             cfg.joystick_hw_connected = joystick_hw_connected;
                             cfg.throttle_hw_connected = throttle_hw_connected;
                             match self.active_section {
                                 Section::Rumble => {
+                                    if show_builtin_muted_banner
+                                        && builtin_muted_banner(ui, t)
+                                    {
+                                        switch_to_builtin_clicked = true;
+                                    }
                                     ui.heading(t.nav_rumble);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -1960,6 +2212,11 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Taxi => {
+                                    if show_builtin_muted_banner
+                                        && builtin_muted_banner(ui, t)
+                                    {
+                                        switch_to_builtin_clicked = true;
+                                    }
                                     ui.heading(t.nav_taxi);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -2084,6 +2341,11 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Engines => {
+                                    if show_builtin_muted_banner
+                                        && builtin_muted_banner(ui, t)
+                                    {
+                                        switch_to_builtin_clicked = true;
+                                    }
                                     ui.heading(t.nav_engines);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, false);
@@ -2206,6 +2468,11 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Gear => {
+                                    if show_builtin_muted_banner
+                                        && builtin_muted_banner(ui, t)
+                                    {
+                                        switch_to_builtin_clicked = true;
+                                    }
                                     ui.heading(t.nav_gear);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -2380,6 +2647,11 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Wt => {
+                                    if show_builtin_muted_banner
+                                        && builtin_muted_banner(ui, t)
+                                    {
+                                        switch_to_builtin_clicked = true;
+                                    }
                                     ui.heading(t.nav_wt);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -2639,12 +2911,31 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Telemetry => {}
+                                // Собственная отрисовка — см. else-if чуть ниже (после
+                                // закрытия этого with_mut): конструктору эффектов не
+                                // нужен cfg (RumbleConfig), а нужен доступ к десятку
+                                // других полей self одновременно, который проще
+                                // получить уже после того, как self.config
+                                // разблокируется.
+                                Section::Effects => {}
                             }
 
                             if _changed {
                                 // Конфиг уже обновлен через with_mut
                             }
                         });
+
+                        // Клик по кнопке в плашке (см. builtin_muted_banner выше) —
+                        // теперь, когда with_mut закрыт, self снова полностью
+                        // доступен: переключаем движок обратно на встроенный и
+                        // персистим выбор (та же связка, что и в
+                        // effects_editor::show_mode_header / задача 1), иначе
+                        // выбор не переживёт перезапуск приложения.
+                        if switch_to_builtin_clicked {
+                            self.effect_mode = EffectMode::BuiltIn;
+                            crate::settings::set_effect_mode(EffectMode::BuiltIn);
+                            self.save_global_settings();
+                        }
 
                         ui.add_space(8.0);
                         if ui.button(t.btn_reset_defaults).clicked() {
@@ -2749,7 +3040,9 @@ impl eframe::App for UiState {
                                     .num_columns(2)
                                     .spacing(Vec2::new(20.0, 4.0))
                                     .show(ui, |ui| {
-                                        let v = *self.last_vars.lock();
+                                        // FlightVars больше не Copy (добавлен
+                                        // словарь lvars) — явный .clone().
+                                        let v = self.last_vars.lock().clone();
                                         match v {
                                             Some(v) => {
                                                 ui.label(t.lbl_airspeed);
@@ -2861,7 +3154,7 @@ impl eframe::App for UiState {
                                     .num_columns(2)
                                     .spacing(Vec2::new(20.0, 4.0))
                                     .show(ui, |ui| {
-                                        let v = *self.last_vars.lock();
+                                        let v = self.last_vars.lock().clone();
                                         match v {
                                             Some(v) => {
                                                 let combustion_label =
@@ -3017,6 +3310,42 @@ impl eframe::App for UiState {
                                         }
                                     });
                             });
+                        } else if self.active_section == Section::Effects {
+                            // Живой снимок телеметрии для конструктора — та же пара
+                            // last_vars/last_wt_vars, что и у обычной секции Telemetry
+                            // чуть выше, просто завёрнутая в TelemetryFrame, который
+                            // понимает custom_fx::sources::read.
+                            let live = match ag {
+                                ActiveGame::Wt => {
+                                    self.last_wt_vars.lock().clone().map(TelemetryFrame::Wt)
+                                }
+                                ActiveGame::None => None,
+                                ActiveGame::Msfs | ActiveGame::Xplane => self
+                                    .last_vars
+                                    .lock()
+                                    .clone()
+                                    .map(TelemetryFrame::Flight),
+                            };
+                            let active_ids_guard = self.active_custom_ids.lock();
+                            let mut mode_changed = false;
+                            let mut ectx = effects_editor::EditorCtx {
+                                effects: &self.custom_fx,
+                                active_ids: active_ids_guard.as_slice(),
+                                live,
+                                active_game: ag,
+                                effect_mode: &mut self.effect_mode,
+                                mode_changed: &mut mode_changed,
+                                t,
+                                lang: self.lang,
+                                logs: &self.logs,
+                                tx_hid: &self.tx_hid,
+                                preview: &self.preview_lock,
+                            };
+                            effects_editor::show(ui, &mut self.fx_editor, &mut ectx);
+                            drop(active_ids_guard);
+                            if mode_changed {
+                                self.save_global_settings();
+                            }
                         }
                     });
             });

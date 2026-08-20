@@ -353,7 +353,12 @@ fn pipeline_pause_zeros_output() {
     let active = engine.step(&fv, &cfg, 1, false);
     assert!(active.joystick_intensity > 0);
 
-    let paused_fv = FlightVars { paused: true, ..fv };
+    // FlightVars больше не Copy (добавлен словарь lvars) — ..fv занял бы
+    // fv.lvars, и `fv` дальше уже нельзя было бы использовать. .clone().
+    let paused_fv = FlightVars {
+        paused: true,
+        ..fv.clone()
+    };
     let paused = engine.step(&paused_fv, &cfg, 1, false);
     assert_eq!(paused.joystick_intensity, 0);
 

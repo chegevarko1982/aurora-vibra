@@ -210,7 +210,10 @@ windows = { version = "0.56", features = [
   "Win32_System_LibraryLoader",
   "Win32_Storage_FileSystem",
   "Win32_Devices_HumanInterfaceDevice",
-  "Win32_System_Threading"
+  "Win32_System_Threading",
+  # GetOpenFileNameW/GetSaveFileNameW (comdlg32) для file_dialog.rs — родная
+  # замена rfd, которого в проекте нет и добавлять нельзя.
+  "Win32_UI_Controls_Dialogs"
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

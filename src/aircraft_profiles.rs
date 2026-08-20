@@ -154,6 +154,7 @@ pub fn save_active(
         // game_override, wt_enabled существует только для миграции старых файлов.
         wt_enabled: game_override == crate::types::GameOverride::ForceWt,
         game_override,
+        effect_mode: settings::effect_mode(),
     })
 }
 

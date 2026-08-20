@@ -1,4 +1,9 @@
-use crate::{RumbleConfig, aircraft_profiles::AircraftProfile, i18n::Lang, types::GameOverride};
+use crate::{
+    RumbleConfig,
+    aircraft_profiles::AircraftProfile,
+    i18n::Lang,
+    types::{EffectMode, GameOverride},
+};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -63,6 +68,26 @@ pub fn set_game_override(v: GameOverride) {
     GAME_OVERRIDE.store(raw, Ordering::Relaxed);
 }
 
+// Тот же приём, что и у GAME_OVERRIDE: читается воркерами на каждом тике, у них
+// нет доступа к UiState — ровно та же причина, что у GAME_OVERRIDE. Хранит режим
+// эффектов (встроенные vs пользовательские).
+static EFFECT_MODE: AtomicU8 = AtomicU8::new(0); // 0=BuiltIn, 1=Custom
+
+pub fn effect_mode() -> EffectMode {
+    match EFFECT_MODE.load(Ordering::Relaxed) {
+        1 => EffectMode::Custom,
+        _ => EffectMode::BuiltIn,
+    }
+}
+
+pub fn set_effect_mode(v: EffectMode) {
+    let raw = match v {
+        EffectMode::BuiltIn => 0,
+        EffectMode::Custom => 1,
+    };
+    EFFECT_MODE.store(raw, Ordering::Relaxed);
+}
+
 // Тот же приём, что и у CLOSE_TO_TRAY: путь к SimConnect.dll, выбранный
 // пользователем вручную, нужен sim::worker::load_simconnect, у которого нет
 // доступа ни к SettingsFile, ни к UiState. Путь, а не флаг, поэтому Mutex.
@@ -116,6 +141,11 @@ pub struct SettingsFile {
     // благодаря #[serde(default)] на всей структуре, миграция ниже поднимает
     // его в ForceWt, если на диске сохранился старый wt_enabled: true.
     pub game_override: GameOverride,
+    // Режим эффектов: встроенный набор или пользовательские. Глобальная
+    // настройка (не привязана к самолёту/профилю). Старые файлы без этого
+    // поля десериализуются в EffectMode::BuiltIn благодаря #[serde(default)]
+    // на всей структуре.
+    pub effect_mode: EffectMode,
 }
 
 /// Возвращает список путей, где может лежать файл настроек, в порядке приоритета:
@@ -189,6 +219,7 @@ pub fn load() -> Option<SettingsFile> {
                     monitor_collapsed: false,
                     wt_enabled: false,
                     game_override: GameOverride::default(),
+                    effect_mode: EffectMode::default(),
                 };
                 migrate_wt_enabled(&mut file);
                 return Some(file);
