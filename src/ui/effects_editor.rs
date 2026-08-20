@@ -48,7 +48,10 @@ const EFFECT_LIST_SCROLL_HEIGHT: f32 = 220.0;
 const LIVE_HISTORY_SECONDS: f64 = 15.0;
 const MINI_GRAPH_HEIGHT: f32 = 56.0;
 const CURVE_CANVAS_HEIGHT: f32 = 150.0;
-const OSCILLOSCOPE_HEIGHT: f32 = 70.0;
+// Высота выбрана так, чтобы форму импульса (скважность, нарастание) было
+// реально видно и можно было настраивать на глаз, а не угадывать по
+// нескольким пикселям — вдвое выше исходных 70px.
+const OSCILLOSCOPE_HEIGHT: f32 = 140.0;
 const OSCILLOSCOPE_WINDOW_S: f64 = 2.0;
 const OSCILLOSCOPE_SAMPLES: usize = 240;
 
@@ -909,7 +912,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
         draw_mini_graph(
             ui,
             &st.live_history,
-            def.default_range,
+            curve_x_bounds(&effect.curve, def.default_range),
             MINI_GRAPH_HEIGHT,
             TriggerOverlay::None,
             cx.t.lbl_fx_no_signal,
@@ -1110,8 +1113,13 @@ fn trigger_kind_label(k: TriggerKind, t: &Strings) -> &'static str {
     }
 }
 
-fn default_trigger_for_kind(k: TriggerKind, def: &SourceDef) -> Trigger {
-    let (lo, hi) = def.default_range;
+/// `bounds` — уже посчитанные вызывающей стороной границы (обычно
+/// `curve_x_bounds(&effect.curve, def.default_range)`), а не сам `SourceDef`:
+/// для `SourceId::Lvar` `default_range` — заглушка 0..1, реальный диапазон
+/// живёт в кривой отклика эффекта, поэтому новый триггер должен создаваться
+/// уже в правильном (расширенном кривой) диапазоне.
+fn default_trigger_for_kind(k: TriggerKind, bounds: (f64, f64)) -> Trigger {
+    let (lo, hi) = bounds;
     let mid = (lo + hi) / 2.0;
     let span = (hi - lo).abs().max(1.0);
     match k {
@@ -1159,6 +1167,12 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
         ui.add_space(4.0);
 
         let def = sources::def(effect.source);
+        // Задача B: для SourceId::Lvar def.default_range — заглушка 0..1;
+        // реальный рабочий диапазон живёт в кривой отклика эффекта (см.
+        // curve_x_bounds). Считаем ОДИН раз ДО match, потому что дальше
+        // effect.curve заимствовать уже нельзя — effect.trigger занят
+        // изменяемым match &mut effect.trigger.
+        let bounds = curve_x_bounds(&effect.curve, def.default_range);
         let cur_kind = trigger_kind_of(&effect.trigger);
         let mut new_kind = None;
         egui::ComboBox::from_id_salt("fx_trigger_select")
@@ -1177,13 +1191,13 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
                 }
             });
         if let Some(k) = new_kind {
-            effect.trigger = default_trigger_for_kind(k, def);
+            effect.trigger = default_trigger_for_kind(k, bounds);
         }
 
         match &mut effect.trigger {
             Trigger::Always | Trigger::IsTrue => {}
             Trigger::Above { value, hysteresis } | Trigger::Below { value, hysteresis } => {
-                let (lo, hi) = def.default_range;
+                let (lo, hi) = bounds;
                 let span = (hi - lo).abs().max(1.0);
                 ui.horizontal(|ui| {
                     ui.label(cx.t.lbl_fx_threshold);
@@ -1196,7 +1210,7 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
                 });
             }
             Trigger::Between { lo: rlo, hi: rhi } => {
-                let (lo, hi) = def.default_range;
+                let (lo, hi) = bounds;
                 ui.horizontal(|ui| {
                     ui.label(cx.t.lbl_fx_range_lo);
                     ui.add(egui::Slider::new(rlo, lo.min(hi)..=lo.max(hi)));
@@ -1210,7 +1224,7 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
                 }
             }
             Trigger::Changed { eps, hold_s } => {
-                let (lo, hi) = def.default_range;
+                let (lo, hi) = bounds;
                 let span = (hi - lo).abs().max(1.0);
                 ui.horizontal(|ui| {
                     ui.label(cx.t.lbl_fx_eps);
@@ -1230,7 +1244,7 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
         draw_mini_graph(
             ui,
             &st.live_history,
-            def.default_range,
+            bounds,
             MINI_GRAPH_HEIGHT,
             overlay_for_trigger(&effect.trigger),
             cx.t.lbl_fx_no_signal,
@@ -1575,17 +1589,19 @@ fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
         // будет отработано железом.
         effect.shape.clamp_freq();
 
-        let raw = cx
-            .live
-            .as_ref()
-            .and_then(|f| read_effect_value(effect, f))
-            .unwrap_or_else(|| {
-                let (lo, hi) = sources::def(effect.source).default_range;
-                (lo + hi) / 2.0
-            });
-        let samples =
-            engine::preview_waveform(effect, raw, OSCILLOSCOPE_WINDOW_S, OSCILLOSCOPE_SAMPLES);
+        // Задача A: график формы считается "на полном отклике" (пик кривой,
+        // триггер взведён всегда), а не от текущего сырого значения источника
+        // — иначе он схлопывался бы в пустой прямоугольник, стоило значению
+        // попасть в нижнюю часть кривой или не пройти триггер (см.
+        // doc-комментарий engine::shape_waveform). Шаг 4 настраивает частоту/
+        // скважность/нарастание — форму, а не уровень срабатывания.
+        let samples = engine::shape_waveform(effect, OSCILLOSCOPE_WINDOW_S, OSCILLOSCOPE_SAMPLES);
         draw_oscilloscope(ui, &samples, OSCILLOSCOPE_HEIGHT);
+        ui.label(
+            RichText::new(cx.t.lbl_fx_oscilloscope_hint)
+                .italics()
+                .color(palette::TEXT_DISABLED),
+        );
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -2629,7 +2645,7 @@ mod tests {
     #[test]
     fn default_trigger_for_kind_between_is_never_inverted() {
         let def = sources::def(SourceId::FlightBankDeg); // диапазон (-90.0, 90.0)
-        match default_trigger_for_kind(TriggerKind::Between, def) {
+        match default_trigger_for_kind(TriggerKind::Between, def.default_range) {
             Trigger::Between { lo, hi } => assert!(lo <= hi),
             _ => panic!("expected Between"),
         }

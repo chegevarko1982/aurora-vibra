@@ -12,7 +12,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::custom_fx::model::{CustomEffect, MAX_SHAPE_FREQ_HZ, MixMode, Shape, Trigger};
+use crate::custom_fx::model::{
+    CustomEffect, MAX_SHAPE_FREQ_HZ, MixMode, ResponseCurve, Shape, Trigger,
+};
 use crate::custom_fx::sources::{self, SourceId, TelemetryFrame};
 use crate::types::ActiveGame;
 
@@ -464,24 +466,49 @@ fn preview_trigger_active(trigger: &Trigger, x: f64, t: f64) -> bool {
     }
 }
 
-fn preview_tick(effect: &CustomEffect, raw_value: f64, t: f64, state: &mut EffectState) -> f64 {
-    let is_active = preview_trigger_active(&effect.trigger, raw_value, t);
+/// Общее ядро одного превью-тика, вынесенное из `preview_tick`, чтобы
+/// `shape_waveform` могла посчитать ту же цепочку (EMA -> форма -> сила) без
+/// копипасты. `is_active` и `curve_value` уже посчитаны вызывающей стороной —
+/// `preview_tick` берёт их из триггера/кривой по реальному `raw_value`,
+/// `shape_waveform` подставляет свои константы (см. её doc-комментарий).
+fn tick_core(
+    effect: &CustomEffect,
+    t: f64,
+    is_active: bool,
+    curve_value: f64,
+    state: &mut EffectState,
+) -> f64 {
     if is_active && !state.was_active {
         state.active_since_t = t;
         state.oneshot_fired_at = Some(t);
     }
     state.was_active = is_active;
 
-    let raw_curve = if is_active {
-        effect.curve.eval(raw_value)
-    } else {
-        0.0
-    };
+    let raw_curve = if is_active { curve_value } else { 0.0 };
     let alpha = (effect.smoothing_alpha as f64).clamp(0.0, 1.0);
     state.ema = state.ema * alpha + raw_curve * (1.0 - alpha);
 
     let shape_mul = shape_multiplier(&effect.shape, t, state);
     (state.ema * shape_mul * (effect.strength_pct as f64 / 100.0) * 255.0).clamp(0.0, 255.0)
+}
+
+fn preview_tick(effect: &CustomEffect, raw_value: f64, t: f64, state: &mut EffectState) -> f64 {
+    let is_active = preview_trigger_active(&effect.trigger, raw_value, t);
+    let curve_value = effect.curve.eval(raw_value);
+    tick_core(effect, t, is_active, curve_value, state)
+}
+
+/// Пик кривой отклика (максимум `y` по всем точкам), зажатый в 0..=1 — сила
+/// эффекта "на полном отклике", без привязки к тому, какое значение сейчас
+/// пришло с источника телеметрии. Пустая кривая (вырожденный случай) даёт 0.0
+/// тем же `fold`, без паники на пустом итераторе.
+fn curve_peak_y(curve: &ResponseCurve) -> f64 {
+    curve
+        .points
+        .iter()
+        .map(|p| p.y)
+        .fold(0.0_f64, f64::max)
+        .clamp(0.0, 1.0)
 }
 
 /// Одна точка формы во времени для осциллографа в UI: чистая функция без
@@ -500,6 +527,32 @@ pub fn preview_waveform(
     for i in 0..samples {
         let t = i as f64 * dt;
         out.push(preview_tick(effect, raw_value, t, &mut state) as f32);
+    }
+    out
+}
+
+/// Форма сигнала "на полном отклике" для осциллографа шага 4 (частота,
+/// скважность, нарастание) — принципиально ИГНОРИРУЕТ и текущее значение
+/// источника, и его триггер. Причина: у `SourceId::Lvar` реальный рабочий
+/// диапазон живёт в кривой эффекта (например 0..400 узлов), а не в
+/// заглушке `SourceDef::default_range` (0..1) — стоило текущему сырому
+/// значению попасть в нижнюю часть кривой или не пройти триггер (самолёт
+/// сейчас просто стоит на месте), `preview_waveform` честно считал реальный
+/// вклад и схлопывался в пустой график. Шаг 4 настраивает ФОРМУ, а не
+/// уровень срабатывания — она обязана быть видна всегда, поэтому здесь
+/// триггер считается взведённым на всём окне, а вклад кривой берётся как её
+/// пик (`curve_peak_y`), а не `curve.eval(текущее_значение)`. EMA-сглаживание,
+/// `shape_multiplier` и `strength_pct` применяются как обычно — график
+/// по-прежнему честно показывает и силу, и сглаживание, и форму.
+pub fn shape_waveform(effect: &CustomEffect, duration_s: f64, samples: usize) -> Vec<f32> {
+    let samples = samples.max(1);
+    let dt = duration_s.max(0.0) / samples as f64;
+    let mut state = EffectState::new();
+    let peak = curve_peak_y(&effect.curve);
+    let mut out = Vec::with_capacity(samples);
+    for i in 0..samples {
+        let t = i as f64 * dt;
+        out.push(tick_core(effect, t, true, peak, &mut state) as f32);
     }
     out
 }
@@ -997,6 +1050,62 @@ mod tests {
 
         let out = engine.step(&frame, 0.0, &effects, 1, "", ActiveGame::Xplane, false, 255);
         assert_eq!(out.joystick, 0, "SourceId::Lvar осмыслен только в MSFS");
+    }
+
+    #[test]
+    fn shape_waveform_ignores_trigger_and_current_value_unlike_preview_waveform() {
+        let mut effect = new_effect("Test".into(), SourceId::Lvar);
+        effect.trigger = Trigger::Above {
+            value: 100.0,
+            hysteresis: 5.0,
+        };
+        effect.curve = ResponseCurve::linear(0.0, 400.0);
+        effect.smoothing_alpha = 0.0;
+        effect.shape = Shape::Pulse {
+            freq_hz: 2.0,
+            duty_pct: 50.0,
+            jitter_pct: 0.0,
+            floor_pct: 0.0,
+            attack_ms: 0.0,
+        };
+        effect.strength_pct = 50.0;
+
+        // Заглушка default_range у Lvar — 0..1: значение 0.5 попадает в самый
+        // низ реальной кривой (0..400) и вдобавок не проходит триггер
+        // (Above 100.0) — preview_waveform честно молчит целиком.
+        let preview = preview_waveform(&effect, 0.5, 1.0, 20);
+        assert!(
+            preview.iter().all(|&v| v == 0.0),
+            "триггер не взведён и значение внизу кривой — preview_waveform молчит"
+        );
+
+        let shape = shape_waveform(&effect, 1.0, 20);
+        assert!(
+            shape.iter().any(|&v| v > 0.0),
+            "shape_waveform игнорирует триггер и берёт пик кривой — форма видна"
+        );
+    }
+
+    #[test]
+    fn shape_waveform_silent_when_curve_peak_is_zero() {
+        let mut effect = new_effect("Test".into(), SourceId::Lvar);
+        effect.trigger = Trigger::Always;
+        effect.curve = flat_curve(0.0);
+        effect.smoothing_alpha = 0.0;
+        effect.shape = Shape::Pulse {
+            freq_hz: 2.0,
+            duty_pct: 50.0,
+            jitter_pct: 0.0,
+            floor_pct: 0.0,
+            attack_ms: 0.0,
+        };
+        effect.strength_pct = 100.0;
+
+        let shape = shape_waveform(&effect, 1.0, 20);
+        assert!(
+            shape.iter().all(|&v| v == 0.0),
+            "пик кривой честно равен нулю — эффект и правда ничего не даёт"
+        );
     }
 
     #[test]
