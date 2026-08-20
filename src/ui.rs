@@ -1294,10 +1294,19 @@ impl eframe::App for UiState {
             // смены владельца слота.
             let ag = *self.active_game.lock();
             if ag != self.last_seen_game {
-                self.active_section = match ag {
-                    ActiveGame::Wt => Section::Wt,
-                    _ => Section::Rumble,
-                };
+                // Редактор эффектов — единственная секция, не привязанная к
+                // конкретной игре: его открывают, чтобы СОБРАТЬ эффект, и
+                // запуск симулятора посреди работы не должен выкидывать из
+                // него (наблюдалось вживую: MSFS подключился, и открытая
+                // страница сменилась на Аэродинамику вместе с потерей места в
+                // прокрутке). Остальные секции показывают телеметрию активной
+                // игры, поэтому для них переключение по-прежнему верное.
+                if self.active_section != Section::Effects {
+                    self.active_section = match ag {
+                        ActiveGame::Wt => Section::Wt,
+                        _ => Section::Rumble,
+                    };
+                }
                 self.last_seen_game = ag;
             }
 
