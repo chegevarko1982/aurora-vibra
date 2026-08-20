@@ -117,6 +117,32 @@ impl EffectState {
             pulse_rng: Xorshift32::seeded(0x9E37_79B9),
         }
     }
+
+    /// Состояние для ПРЕДПРОСМОТРА — то же самое, но с ФИКСИРОВАННЫМ зерном
+    /// генератора «неровности» (`Shape::Pulse::jitter_pct`).
+    ///
+    /// Все три превью-функции ниже (`preview_waveform`, `shape_waveform`,
+    /// `preview_level`) не продолжают чужое состояние, а каждый раз гоняют
+    /// симуляцию С НУЛЯ. С зерном по времени (`Xorshift32::seeded`, как в
+    /// `new`) это означало новую случайную последовательность на КАЖДЫЙ
+    /// вызов, а вызываются они на каждом кадре отрисовки: осциллограф формы
+    /// при ненулевой «неровности» мерцал (столбики прыгали по высоте, хотя
+    /// настройки не менялись), а предпросмотр на устройстве, пересчитывающий
+    /// себя каждые 20 мс, выдавал вместо задуманного разброса ПО ЦИКЛАМ
+    /// несвязный шум — соседние вызовы принадлежали разным реализациям
+    /// случайного процесса.
+    ///
+    /// В живом движке (`CustomFxEngine::step`) состояние наоборот ЖИВЁТ между
+    /// тиками в карте по id эффекта, и зерно по времени там осмысленно: два
+    /// одинаково настроенных эффекта не должны дрожать синхронно.
+    fn new_preview() -> Self {
+        Self {
+            // Ненулевое (Xorshift32 залипает в нуле) и то же, что салт в
+            // `new` — конкретное значение не важно, важна повторяемость.
+            pulse_rng: Xorshift32(0x9E37_79B9),
+            ..Self::new()
+        }
+    }
 }
 
 /// Подстрочный фильтр по борту — РОВНО та же семантика, что
@@ -537,7 +563,7 @@ pub fn preview_waveform(
 ) -> Vec<f32> {
     let samples = samples.max(1);
     let dt = duration_s.max(0.0) / samples as f64;
-    let mut state = EffectState::new();
+    let mut state = EffectState::new_preview();
     let mut out = Vec::with_capacity(samples);
     for i in 0..samples {
         let t = i as f64 * dt;
@@ -562,7 +588,7 @@ pub fn preview_waveform(
 pub fn shape_waveform(effect: &CustomEffect, duration_s: f64, samples: usize) -> Vec<f32> {
     let samples = samples.max(1);
     let dt = duration_s.max(0.0) / samples as f64;
-    let mut state = EffectState::new();
+    let mut state = EffectState::new_preview();
     let peak = curve_peak_y(&effect.curve);
     let mut out = Vec::with_capacity(samples);
     for i in 0..samples {
@@ -586,7 +612,7 @@ pub fn preview_level(effect: &CustomEffect, raw_value: f64, t: f64) -> (u8, u8, 
     let t = t.max(0.0);
     let steps = ((t / STEP).ceil() as usize).clamp(1, MAX_STEPS);
 
-    let mut state = EffectState::new();
+    let mut state = EffectState::new_preview();
     let mut intensity = 0.0;
     for i in 0..steps {
         let tt = if i + 1 == steps { t } else { i as f64 * STEP };
@@ -1102,6 +1128,63 @@ mod tests {
             shape.iter().any(|&v| v > 0.0),
             "shape_waveform игнорирует триггер и берёт пик кривой — форма видна"
         );
+    }
+
+    /// Регрессия на мерцание осциллографа: с ненулевой «неровностью»
+    /// (`jitter_pct`) два вызова подряд обязаны дать БИТ-В-БИТ одинаковый
+    /// ряд. Раньше зерно генератора бралось из системных часов, состояние
+    /// создавалось заново на каждом кадре отрисовки — и столбики графика
+    /// прыгали по высоте сами по себе, хотя пользователь ничего не менял.
+    #[test]
+    fn shape_waveform_is_repeatable_with_jitter() {
+        let mut effect = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        effect.curve = ResponseCurve::linear(0.0, 400.0);
+        effect.strength_pct = 100.0;
+        effect.shape = Shape::Pulse {
+            freq_hz: 4.0,
+            duty_pct: 50.0,
+            // Ровно тот параметр, на котором проявлялось мерцание.
+            jitter_pct: 60.0,
+            floor_pct: 0.0,
+            attack_ms: 0.0,
+        };
+
+        let a = shape_waveform(&effect, 2.0, 100);
+        let b = shape_waveform(&effect, 2.0, 100);
+        assert_eq!(a, b, "два вызова подряд обязаны совпасть бит-в-бит");
+        assert!(
+            a.iter().any(|&v| v > 0.0),
+            "ряд не должен быть пустым, иначе тест ничего не проверяет"
+        );
+        // И сам джиттер обязан быть виден: не все ненулевые отсчёты равны.
+        let peaks: Vec<f32> = a.iter().copied().filter(|&v| v > 0.0).collect();
+        assert!(
+            peaks.windows(2).any(|w| w[0] != w[1]),
+            "при jitter_pct=60 высоты импульсов обязаны различаться"
+        );
+    }
+
+    /// Тот же детерминизм для предпросмотра на устройстве: он пересчитывает
+    /// симуляцию с нуля каждые 20 мс, и без фиксированного зерна соседние
+    /// вызовы принадлежали бы разным реализациям случайного процесса.
+    #[test]
+    fn preview_level_is_repeatable_with_jitter() {
+        let mut effect = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        effect.curve = ResponseCurve::linear(0.0, 400.0);
+        effect.strength_pct = 100.0;
+        effect.shape = Shape::Pulse {
+            freq_hz: 4.0,
+            duty_pct: 50.0,
+            jitter_pct: 60.0,
+            floor_pct: 0.0,
+            attack_ms: 0.0,
+        };
+
+        for t in [0.0, 0.13, 0.51, 1.27] {
+            let a = preview_level(&effect, 200.0, t);
+            let b = preview_level(&effect, 200.0, t);
+            assert_eq!(a, b, "t={t}: два вызова подряд обязаны совпасть");
+        }
     }
 
     #[test]
