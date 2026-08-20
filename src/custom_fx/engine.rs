@@ -227,9 +227,18 @@ fn shape_multiplier(shape: &Shape, t: f64, state: &mut EffectState) -> f64 {
             let floor = (*floor_pct as f64 / 100.0).clamp(0.0, 1.0);
             let attack_s = (*attack_ms as f64 / 1000.0).max(0.0);
 
-            let period = 1.0 / freq;
-            let phase = (t / period).rem_euclid(1.0);
-            let cycle_idx = (t / period).floor() as i64;
+            // Фаза считается УМНОЖЕНИЕМ на частоту, а не делением на период
+            // (`t / (1.0 / freq)`): период — это уже округлённое значение, и
+            // деление на него добавляет второе округление. На частотах, чей
+            // период кратен такту выхода (20 мс), из-за этого фаза на самой
+            // границе скважности прыгала то чуть выше, то чуть ниже порога, и
+            // РОВНЫЙ по построению паттерн получался рваным. Пример: 5 Гц,
+            // скважность 50% — вместо десяти импульсов по 100 мс выходило
+            // 100/120/100/80/100/100/80/... Через `t * freq` результат
+            // совпадает с точной (дробной) арифметикой.
+            let cycles = t * freq;
+            let phase = cycles.rem_euclid(1.0);
+            let cycle_idx = cycles.floor() as i64;
             if cycle_idx != state.pulse_last_cycle_idx {
                 state.pulse_last_cycle_idx = cycle_idx;
                 let jitter = (*jitter_pct as f64 / 100.0).clamp(0.0, 1.0);
@@ -1184,6 +1193,52 @@ mod tests {
             let a = preview_level(&effect, 200.0, t);
             let b = preview_level(&effect, 200.0, t);
             assert_eq!(a, b, "t={t}: два вызова подряд обязаны совпасть");
+        }
+    }
+
+    /// Регрессия на «рваный» ШИМ: если период формы кратен такту выхода,
+    /// импульсы обязаны получаться РОВНО одинаковой длины. 5 Гц = 200 мс =
+    /// ровно 10 тактов по 20 мс, скважность 50% -> 5 отсчётов импульс,
+    /// 5 пауза, и так все 10 циклов на двухсекундном окне.
+    ///
+    /// Раньше фаза считалась делением на период (`t / (1.0 / freq)`) — два
+    /// округления подряд, из-за чего на самой границе скважности фаза
+    /// прыгала вокруг порога и ряд выходил 5/6/5/4/5/5/4/... Тест ловит
+    /// возврат к делению.
+    #[test]
+    fn pulse_is_exactly_uniform_when_period_divides_output_tick() {
+        let mut effect = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        effect.curve = ResponseCurve::linear(0.0, 400.0);
+        effect.strength_pct = 100.0;
+        effect.shape = Shape::Pulse {
+            freq_hz: 5.0,
+            duty_pct: 50.0,
+            jitter_pct: 0.0,
+            floor_pct: 0.0,
+            attack_ms: 0.0,
+        };
+
+        // Ровно та же сетка, что у выхода на устройство и у осциллографа:
+        // 2 с шагом 20 мс.
+        let samples = shape_waveform(&effect, 2.0, 100);
+
+        let mut runs: Vec<(bool, usize)> = Vec::new();
+        for &v in &samples {
+            let on = v > 0.0;
+            match runs.last_mut() {
+                Some((prev_on, n)) if *prev_on == on => *n += 1,
+                _ => runs.push((on, 1)),
+            }
+        }
+
+        assert_eq!(runs.len(), 20, "10 циклов = 20 участков, получили {runs:?}");
+        for (on, n) in &runs {
+            assert_eq!(
+                *n,
+                5,
+                "участок ({}) длиной {n} отсчётов вместо 5: {runs:?}",
+                if *on { "импульс" } else { "пауза" }
+            );
         }
     }
 

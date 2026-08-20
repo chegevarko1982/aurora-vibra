@@ -87,8 +87,14 @@ impl Xorshift32 {
     }
 }
 
+/// Умножение на частоту, а не деление на период (`t / (1.0 / f)`): период —
+/// уже округлённое значение, деление на него добавляет второе округление, и
+/// на границе скважности фаза начинает прыгать вокруг порога. Ровный по
+/// построению ШИМ из-за этого выходил рваным — см. подробный комментарий у
+/// `Shape::Pulse` в `custom_fx::engine`, там тот же дефект был найден на
+/// пользовательском эффекте 5 Гц.
 fn gun_cycle_index(t: f64, carrier_freq_hz: f64) -> i64 {
-    (t / (1.0 / carrier_freq_hz)).floor() as i64
+    (t * carrier_freq_hz).floor() as i64
 }
 
 /// Огибающая одного цикла несущей: скважность `preset.duty_pct` на пике (с
@@ -106,7 +112,8 @@ fn gun_pulse(t: f64, fire_started_t: f64, preset: &GunPreset, cycle_jitter_mul: 
     let duty = (preset.duty_pct as f64 / 100.0).clamp(0.0, 1.0);
     let attack_s = (preset.attack_ms as f64 / 1000.0).max(0.0);
 
-    let phase = (t / (1.0 / carrier_freq_hz)).fract();
+    // См. gun_cycle_index выше — та же причина считать умножением.
+    let phase = (t * carrier_freq_hz).fract();
     let since_fire = (t - fire_started_t).max(0.0);
     let attack_ramp = if attack_s <= 0.0 {
         1.0
