@@ -129,6 +129,12 @@ pub struct EditorState {
     /// смене источника слайдер держал бы число из чужих единиц/диапазона.
     test_value: f64,
     test_value_source: Option<SourceId>,
+    /// id эффекта, под который `test_value` был выставлен в последний раз.
+    /// Одного `test_value_source` мало: два эффекта на ОДНОМ источнике
+    /// (особенно на `Lvar`) могут иметь кривые с совершенно разными
+    /// диапазонами по X, и число, осмысленное для одного, для другого
+    /// оказывается прижатым к нулю.
+    test_value_effect: Option<String>,
 
     /// id эффекта, который СЕЙЧАС реально играет на железе — `None` значит
     /// "предпросмотр выключен", единый источник истины (вместо отдельных
@@ -209,6 +215,7 @@ impl Default for EditorState {
             last_save_at: now,
             test_value: 0.0,
             test_value_source: None,
+            test_value_effect: None,
             preview_effect_id: None,
             preview_started_at: now,
             preview_last_sent: now,
@@ -1642,12 +1649,28 @@ fn step_preview(
         ui.add_space(4.0);
 
         let def = sources::def(effect.source);
-        let (lo, hi) = def.default_range;
-        if st.test_value_source != Some(effect.source) {
-            // Смена источника (в шаге 1) — старое пробное значение было бы в
-            // чужих единицах/диапазоне, начинаем с середины нового.
+        // Диапазон слайдера берём из КРИВОЙ эффекта (тот же `curve_x_bounds`,
+        // по которому нарисована ось X в шаге 3), а не из статического
+        // `default_range` источника. У `Lvar` этот статический диапазон —
+        // заглушка 0..1, потому что реальные единицы своей переменной знает
+        // только пользователь: слайдер стоял в 0..1, кривая жила в 0..400, и
+        // предпросмотр честно отдавал на моторы ноль при любом положении
+        // ползунка — выглядело как "кнопка не работает".
+        let (lo, hi) = curve_x_bounds(&effect.curve, def.default_range);
+        if st.test_value_source != Some(effect.source)
+            || st.test_value_effect.as_deref() != Some(effect.id.as_str())
+        {
+            // Другой эффект или другой источник — старое пробное значение было
+            // бы в чужих единицах/диапазоне, начинаем с середины нового.
             st.test_value = (lo + hi) / 2.0;
             st.test_value_source = Some(effect.source);
+            st.test_value_effect = Some(effect.id.clone());
+        } else {
+            // Тот же эффект, но пользователь мог утащить точку кривой за
+            // прежние границы прямо сейчас — не сбрасываем значение (это
+            // дёргало бы ползунок посреди перетаскивания), только вводим его
+            // обратно в допустимые пределы.
+            st.test_value = st.test_value.clamp(lo.min(hi), lo.max(hi));
         }
         ui.horizontal(|ui| {
             ui.label(cx.t.lbl_fx_test_value);
