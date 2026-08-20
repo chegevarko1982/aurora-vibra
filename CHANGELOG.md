@@ -13,11 +13,14 @@ that you name yourself.
   each with its own graph: pick a telemetry source (32 of them across the three simulators),
   choose when it fires (threshold with hysteresis, range, boolean, "while changing"), draw the
   response curve by dragging points, and pick the vibration shape and the motors it drives.
-- **Built-in and custom effects are a choice, not a mixture.** The two engines are mutually
-  exclusive: whichever one is selected drives the motors, and the other is silent. Two
-  independent engines feeding the same three motors would overlap unpredictably. The active
-  engine is stated at the top of the editor, the switch survives a restart, and while custom
-  effects are active the built-in sections carry a banner saying their settings do not apply.
+- **Built-in and custom effects run side by side.** Most people want to change one or two
+  effects, not rebuild the whole set, so both engines run at once and their outputs are
+  combined per motor the same way the built-in effects have always combined among themselves.
+  Where the two would collide there is a rule rather than an overlap: a custom effect built on
+  a telemetry source silences the built-in effect driven by that same source. Build your own
+  effect on indicated airspeed and the built-in Overspeed steps aside for it. The built-in
+  effect's card then dims and names the effect of yours that took it over, so nothing ever
+  goes quiet without saying why.
 - **Four starting templates** — *Impact*, *Hum*, *Pulsation*, *Growing*. The numbers are not
   invented: the impact envelope comes from the gear-touchdown effect and the hum from the
   gunfire preset, both already calibrated on real hardware.
@@ -39,9 +42,10 @@ that you name yourself.
 - Vibration frequency is capped at 6.5 Hz throughout, including on imported files. The device
   channel updates every 50 ms, so anything above that limit aliases into noise instead of
   producing a faster vibration.
-- Built-in effects, their calibration, telemetry handling, and device output are untouched.
-  Settings and aircraft profiles carry over. An installation that never opens the new section
-  behaves exactly as v4.4.0 did, and recordings made by it are byte-identical.
+- Built-in effects, their calibration, telemetry handling, and device output are untouched —
+  a custom effect suppresses a built-in one by switching it off for that tick, not by altering
+  its formula. Settings and aircraft profiles carry over. An installation that never opens the
+  new section behaves exactly as v4.4.0 did, and recordings made by it are byte-identical.
 - Custom effects are a construction kit, not a set of presets: a freshly built effect vibrates
   exactly as you configured it, including continuously if you leave it without a threshold.
   The editor warns about that case rather than preventing it.

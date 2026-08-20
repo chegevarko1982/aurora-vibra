@@ -21,9 +21,7 @@ use crate::game_state::{GameSlot, PreviewLock};
 use crate::recorder::SessionRecorder;
 use crate::sim::elem_idx::ElemIdx;
 use crate::sim::parse::{collect_lvar_defs, flight_status, parse_lvar_values, parse_main_elems};
-use crate::{
-    ActiveGame, ConfigShared, EffectMode, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus,
-};
+use crate::{ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, SimStatus};
 
 type DWord = u32;
 // Имя намеренно совпадает с типом из Win32 SDK — так подписи FFI ниже читаются
@@ -442,15 +440,13 @@ pub fn sim_worker(
 
             let mut in_flight: bool = true;
             let mut rumble_engine = RumbleEngine::new();
-            // Взаимоисключающий движок пользовательских эффектов (см.
-            // custom_fx::engine) — своё состояние (EMA/гистерезис/фаза Pulse),
-            // независимое от rumble_engine, живёт рядом с ним и так же
-            // пересоздаётся при каждом переподключении SimConnect.
+            // Пользовательский движок эффектов (см. custom_fx::engine) — своё
+            // состояние (EMA/гистерезис/фаза Pulse), независимое от
+            // rumble_engine, живёт рядом с ним и так же пересоздаётся при
+            // каждом переподключении SimConnect. Оба движка теперь считаются
+            // КАЖДЫЙ тик одновременно (не режимы) — см.
+            // custom_fx::overrides для того, как их выходы сводятся.
             let mut custom_engine = CustomFxEngine::new();
-            // Режим предыдущего тика — нужен только чтобы поймать МОМЕНТ
-            // переключения BuiltIn<->Custom и сделать разовый сброс (см. ниже
-            // у точки отправки HID), а не сравнивать на каждый тик впустую.
-            let mut last_effect_mode = crate::settings::effect_mode();
             // Фронт захвата PreviewLock — редактору эффектов нужно ОДИН раз
             // получить нули на моторы в момент захвата канала, а не каждый
             // тик, пока он держит канал (см. game_state::PreviewLock).
@@ -1058,77 +1054,73 @@ pub fn sim_worker(
                                 } else {
                                     preview_was_held = false;
 
-                                    // Встроенный и пользовательский движки эффектов —
-                                    // ВЗАИМОИСКЛЮЧАЮЩИЕ (см. doc-комментарий
-                                    // types::EffectMode): два независимых движка,
-                                    // пишущих в одни и те же три мотора, давали бы
-                                    // непредсказуемое наложение, поэтому здесь именно
-                                    // ВЫБОР считающего движка, а не смешивание их
-                                    // выходов. При смене режима на лету — разовый
-                                    // сброс состояния ОБОИХ движков и кадр нулей: без
-                                    // него эффект, активный в момент переключения,
-                                    // застыл бы на моторе последним значением (тот же
-                                    // приём, что уже используется выше при потере
-                                    // владения слотом).
-                                    let mode_now = crate::settings::effect_mode();
-                                    if mode_now != last_effect_mode {
-                                        rumble_engine.reset();
-                                        custom_engine.reset();
-                                        effects.clear_all();
-                                        active_custom_ids.lock().clear();
-                                        let _ = tx_hid.send(HidCmd::SendIntensity {
-                                            joystick: 0,
-                                            throttle_left: 0,
-                                            throttle_right: 0,
-                                        });
-                                        last_effect_mode = mode_now;
-                                    }
+                                    // Встроенный и пользовательский движки эффектов
+                                    // больше НЕ взаимоисключающие режимы (см.
+                                    // custom_fx::overrides) — оба считаются каждый
+                                    // тик. Вытеснение точечное: пользовательский
+                                    // эффект гасит ТОЛЬКО тот встроенный, для
+                                    // которого его источник телеметрии основной
+                                    // (см. doc-комментарий overrides.rs), остальные
+                                    // встроенные эффекты продолжают работать как
+                                    // обычно. Подавление применяется к КОПИИ
+                                    // конфига, сам rumble_engine не в курсе, что
+                                    // что-то подавлено — движок вибрации не тронут.
+                                    // Обе стороны сами обнуляют свой вклад на этом
+                                    // же тике, когда флаг выключен/эффект
+                                    // неактивен — отдельного кадра нулей на "смену
+                                    // режима" тут больше не нужно, режима нет.
+                                    let custom_effects = custom_fx.get();
+                                    let overridden =
+                                        crate::custom_fx::overrides::overridden_builtins(
+                                            &custom_effects,
+                                            ActiveGame::Msfs,
+                                            &title_snapshot,
+                                        );
+                                    let mut suppressed_cfg = cfg_now.clone();
+                                    overridden.apply_to_rumble_config(&mut suppressed_cfg);
 
-                                    match mode_now {
-                                        EffectMode::BuiltIn => {
-                                            let out = rumble_engine.step(
-                                                &fv,
-                                                &cfg_now,
-                                                config.current_rev(),
-                                                hold.load(Ordering::Relaxed),
-                                            );
-                                            effects.apply_snapshot(&out.effects);
-                                            active_custom_ids.lock().clear();
-                                            let _ = tx_hid.send(HidCmd::SendIntensity {
-                                                joystick: out.joystick_intensity,
-                                                throttle_left: out.throttle_left_intensity,
-                                                throttle_right: out.throttle_right_intensity,
-                                            });
-                                        }
-                                        EffectMode::Custom => {
-                                            // .clone() вместо неявного Copy —
-                                            // fv.sim_time_s ниже читается
-                                            // после этой точки.
-                                            let frame = TelemetryFrame::Flight(fv.clone());
-                                            let custom_effects = custom_fx.get();
-                                            let out = custom_engine.step(
-                                                &frame,
-                                                fv.sim_time_s,
-                                                &custom_effects,
-                                                custom_fx.current_rev(),
-                                                &title_snapshot,
-                                                ActiveGame::Msfs,
-                                                hold.load(Ordering::Relaxed),
+                                    let builtin_out = rumble_engine.step(
+                                        &fv,
+                                        &suppressed_cfg,
+                                        config.current_rev(),
+                                        hold.load(Ordering::Relaxed),
+                                    );
+
+                                    // .clone() вместо неявного Copy — fv.sim_time_s
+                                    // ниже читается после этой точки.
+                                    let frame = TelemetryFrame::Flight(fv.clone());
+                                    let custom_out = custom_engine.step(
+                                        &frame,
+                                        fv.sim_time_s,
+                                        &custom_effects,
+                                        custom_fx.current_rev(),
+                                        &title_snapshot,
+                                        ActiveGame::Msfs,
+                                        hold.load(Ordering::Relaxed),
+                                        cfg_now.max_output,
+                                    );
+
+                                    effects.apply_snapshot(&builtin_out.effects);
+                                    *active_custom_ids.lock() = custom_out.active_ids;
+
+                                    let _ = tx_hid.send(HidCmd::SendIntensity {
+                                        joystick: crate::custom_fx::overrides::combine_channel(
+                                            builtin_out.joystick_intensity,
+                                            custom_out.joystick,
+                                            cfg_now.max_output,
+                                        ),
+                                        throttle_left: crate::custom_fx::overrides::combine_channel(
+                                            builtin_out.throttle_left_intensity,
+                                            custom_out.throttle_left,
+                                            cfg_now.max_output,
+                                        ),
+                                        throttle_right:
+                                            crate::custom_fx::overrides::combine_channel(
+                                                builtin_out.throttle_right_intensity,
+                                                custom_out.throttle_right,
                                                 cfg_now.max_output,
-                                            );
-                                            // Встроенный EffectsSnapshot в режиме
-                                            // Custom заведомо пуст — Live Monitor
-                                            // подсвечивает активность через
-                                            // active_custom_ids, а не через effects.
-                                            effects.clear_all();
-                                            *active_custom_ids.lock() = out.active_ids;
-                                            let _ = tx_hid.send(HidCmd::SendIntensity {
-                                                joystick: out.joystick,
-                                                throttle_left: out.throttle_left,
-                                                throttle_right: out.throttle_right,
-                                            });
-                                        }
-                                    }
+                                            ),
+                                    });
                                 }
                             }
                         }

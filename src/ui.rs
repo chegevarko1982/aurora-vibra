@@ -15,10 +15,15 @@ use std::{
 use windows::Win32::Foundation::HWND;
 
 use crate::{
-    ActiveGame, ConfigShared, EffectDeviceTarget, EffectMode, EffectsShared, FlightVars,
-    GameOverride, HidCmd, LogBuffer, RumbleConfig, SimStatus, UiCmd,
+    ActiveGame, ConfigShared, EffectDeviceTarget, EffectsShared, FlightVars, GameOverride, HidCmd,
+    LogBuffer, RumbleConfig, SimStatus, UiCmd,
     aircraft_profiles::{self, AircraftProfile, AircraftProfiles},
-    custom_fx::{sources::TelemetryFrame, store::CustomFxShared},
+    custom_fx::{
+        model::{CustomEffect, new_effect},
+        overrides::{self, BuiltinEffect, BuiltinMask},
+        sources::{SourceId, TelemetryFrame},
+        store::CustomFxShared,
+    },
     game_state::PreviewLock,
     i18n::{self, Lang, Strings},
     profiles::ProfileState,
@@ -312,40 +317,163 @@ fn effects_legend(ui: &mut egui::Ui, t: &Strings, show_devices: bool) {
     ui.add_space(6.0);
 }
 
-/// Плашка "сейчас активны пользовательские эффекты" — рисуется наверху
-/// встроенных разделов (Rumble/Taxi/Engines/Gear/Wt), ДО заголовка раздела,
-/// когда включён EffectMode::Custom: движок в этом режиме встроенные эффекты
-/// не считает вообще (гейт в sim/worker.rs, wt_link/worker.rs, xp_link/worker.rs),
-/// а карточки раздела при этом выглядят полностью рабочими — крутить их можно,
-/// но на вибрацию это не влияет, и без явного предупреждения это не очевидно.
-///
-/// Возвращает true, если пользователь нажал кнопку возврата на встроенные
-/// эффекты. Само переключение режима (+персист) делает вызывающий код ПОСЛЕ
-/// `self.config.with_mut(...)` — здесь `self` недоступен, эта функция вызвана
-/// изнутри `with_mut`, где занят только `cfg`.
-fn builtin_muted_banner(ui: &mut egui::Ui, t: &Strings) -> bool {
-    let mut clicked = false;
-    egui::Frame::new()
-        .fill(palette::BG_CARD)
-        .stroke(egui::Stroke::new(1.0, palette::STATUS_ATTENTION))
-        .corner_radius(6u8)
-        .inner_margin(egui::Margin::symmetric(10, 8))
-        .outer_margin(egui::Margin::symmetric(0, 6))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(t.msg_builtin_section_inactive)
-                        .color(palette::STATUS_ATTENTION)
-                        .strong(),
-                );
-                if ui.button(t.btn_enable_builtin_effects).clicked() {
-                    clicked = true;
-                }
-            });
-        });
+/// Пометка внутри карточки ВСТРОЕННОГО эффекта, вытесненного пользовательским
+/// на том же источнике телеметрии (см. `custom_fx::overrides`) — задача 1б:
+/// молча погасший встроенный эффект был тем самым "почему у меня ничего не
+/// вибрирует", от которого в этом проекте избавлялись весь день. Рисуется
+/// ПЕРВОЙ строкой внутри `add_contents` карточки, ДО остального содержимого;
+/// сама карточка при этом передаётся в `UiState::effect_card` с приглушённым
+/// видом (см. вызовы ниже — `enabled && overridden.is_none()`), а не через
+/// отдельный параметр эффект_card — сигнатура у неё и так используется
+/// редактором эффектов (`ui/effects_editor.rs`) для шагов мастера, не
+/// имеющих отношения к вытеснению.
+fn overridden_by_note(ui: &mut egui::Ui, t: &Strings, custom_effect_name: &str) {
+    ui.label(
+        RichText::new(format!(
+            "{} {custom_effect_name}",
+            t.lbl_builtin_overridden_by
+        ))
+        .color(palette::STATUS_ATTENTION)
+        .italics(),
+    );
     ui.add_space(4.0);
-    clicked
+}
+
+/// Отображаемое имя встроенного эффекта для UI-пометок задачи 1 — единая
+/// точка соответствия `BuiltinEffect -> имя из Strings`, используется и
+/// карточками встроенных эффектов (задача 1б, этот файл), и шагом 1
+/// редактора пользовательских эффектов (задача 1а, `ui/effects_editor.rs`,
+/// вызывается оттуда как `super::builtin_effect_display_name`). Исчерпывающий
+/// матч без `_ =>` НАМЕРЕННО — тот же приём, что `primary_builtin_for` в
+/// `custom_fx::overrides`: новый вариант `BuiltinEffect` обязан ломать
+/// сборку здесь, а не тихо остаться безымянным.
+///
+/// Имена переиспользуются из УЖЕ существующих строк `Strings` везде, где они
+/// были — второго "Flaps"/"Gear Transit & Doors" для WT-варианта того же
+/// видимого эффекта не заводим (тот же текст, что у MSFS-версии, это и в
+/// остальном UI так). Единственное собственное имя — `name_gear_bump`, у
+/// скрытого (временно отключённого, см. `RumbleConfig::gear_enabled`)
+/// эффекта "касание шасси", которому раньше вообще не было под каким
+/// показаться пользователю.
+fn builtin_effect_display_name(effect: BuiltinEffect, t: &Strings) -> &'static str {
+    match effect {
+        BuiltinEffect::Overspeed => t.overspeed_effect_name,
+        BuiltinEffect::GearComp => t.heading_gear_comp,
+        BuiltinEffect::GearTransit => t.lbl_gear_transit,
+        BuiltinEffect::Bank => t.lbl_bank_turb,
+        BuiltinEffect::Taxi => t.heading_taxi_thump,
+        BuiltinEffect::Ground => t.name_ground_roll,
+        BuiltinEffect::Flaps => t.name_flaps,
+        BuiltinEffect::Gear => t.name_gear_bump,
+        BuiltinEffect::Stall => t.name_stall,
+        BuiltinEffect::Spoilers => t.name_spoilers,
+        BuiltinEffect::EngineStart => t.name_engine_start,
+        BuiltinEffect::WtWeapon1 => t.name_wt_weapon1,
+        BuiltinEffect::WtWeapon2 => t.name_wt_weapon2,
+        BuiltinEffect::WtFlaps => t.name_flaps,
+        BuiltinEffect::WtGearTransit => t.lbl_gear_transit,
+        BuiltinEffect::WtStall => t.name_wt_stall,
+        BuiltinEffect::WtEngineStart => t.name_wt_engine_start,
+        BuiltinEffect::WtOverspeed => t.name_wt_overspeed,
+        BuiltinEffect::WtGearOverspeed => t.name_wt_gear_overspeed,
+    }
+}
+
+/// Реверс `BuiltinMask -> BuiltinEffect` для одиночной пометки на карточке —
+/// маска из `overrides::overridden_builtins` устроена как плоский набор
+/// bool-полей (см. её doc-комментарий: так `apply_to_*_config` остаются
+/// прямыми присваиваниями без матчинга по enum), а карточке нужен только тот
+/// один вариант, который относится именно к ней. Вызывается ТОЛЬКО когда уже
+/// известно, что маска для одиночного эффекта (см. `overriding_effect_name`
+/// ниже) — тогда истинно ровно одно поле, и порядок веток не важен.
+fn builtin_effect_from_mask(mask: &BuiltinMask) -> Option<BuiltinEffect> {
+    if mask.overspeed {
+        Some(BuiltinEffect::Overspeed)
+    } else if mask.gear_comp {
+        Some(BuiltinEffect::GearComp)
+    } else if mask.gear_transit {
+        Some(BuiltinEffect::GearTransit)
+    } else if mask.bank {
+        Some(BuiltinEffect::Bank)
+    } else if mask.taxi {
+        Some(BuiltinEffect::Taxi)
+    } else if mask.ground {
+        Some(BuiltinEffect::Ground)
+    } else if mask.flaps {
+        Some(BuiltinEffect::Flaps)
+    } else if mask.gear {
+        Some(BuiltinEffect::Gear)
+    } else if mask.stall {
+        Some(BuiltinEffect::Stall)
+    } else if mask.spoilers {
+        Some(BuiltinEffect::Spoilers)
+    } else if mask.engine_start {
+        Some(BuiltinEffect::EngineStart)
+    } else if mask.wt_weapon1 {
+        Some(BuiltinEffect::WtWeapon1)
+    } else if mask.wt_weapon2 {
+        Some(BuiltinEffect::WtWeapon2)
+    } else if mask.wt_flaps {
+        Some(BuiltinEffect::WtFlaps)
+    } else if mask.wt_gear_transit {
+        Some(BuiltinEffect::WtGearTransit)
+    } else if mask.wt_stall {
+        Some(BuiltinEffect::WtStall)
+    } else if mask.wt_engine_start {
+        Some(BuiltinEffect::WtEngineStart)
+    } else if mask.wt_overspeed {
+        Some(BuiltinEffect::WtOverspeed)
+    } else if mask.wt_gear_overspeed {
+        Some(BuiltinEffect::WtGearOverspeed)
+    } else {
+        None
+    }
+}
+
+/// Какой встроенный эффект вытесняет источник `source` В ПРИНЦИПЕ — не
+/// зависит от того, включён ли КОНКРЕТНЫЙ эффект пользователя сейчас, для
+/// какой игры/борта он настроен и т.п. (задача 1а, шаг 1 редактора: связь
+/// нужно показать ДО того, как пользователь вообще включит и сохранит
+/// эффект). Реализовано через синтетический одиночный ВКЛЮЧЁННЫЙ эффект,
+/// прогнанный через настоящий `overrides::overridden_builtins` для каждой
+/// игры, которой физически принадлежит источник — единственный источник
+/// истины остаётся в `custom_fx::overrides::primary_builtin_for` (приватна,
+/// сюда не импортируется), а не второй скопированной таблицей "источник ->
+/// эффект", которая могла бы разойтись с оригиналом.
+fn static_primary_builtin_for(source: SourceId) -> Option<BuiltinEffect> {
+    let mut probe = new_effect(String::new(), source);
+    probe.enabled = true;
+    for game in [ActiveGame::Msfs, ActiveGame::Wt, ActiveGame::Xplane] {
+        let mask = overrides::overridden_builtins(std::slice::from_ref(&probe), game, "");
+        if let Some(effect) = builtin_effect_from_mask(&mask) {
+            return Some(effect);
+        }
+    }
+    None
+}
+
+/// Имя ПЕРВОГО включённого пользовательского эффекта из `effects`,
+/// вытесняющего встроенный эффект, для которого `field` возвращает `true` в
+/// его `BuiltinMask` (задача 1б/1в) — используется, только когда уже
+/// известно (`hit`), что этот встроенный эффект вообще вытеснен на текущем
+/// кадре (см. `builtin_override_mask`, посчитанный один раз на весь кадр):
+/// без этой проверки пришлось бы прогонять `overridden_builtins` по всему
+/// списку эффектов на КАЖДУЮ из ~20 карточек каждый кадр, а не только когда
+/// там реально что-то вытеснено.
+fn overriding_effect_name<'a>(
+    effects: &'a [CustomEffect],
+    game: ActiveGame,
+    aircraft: &str,
+    field: impl Fn(&BuiltinMask) -> bool,
+    hit: bool,
+) -> Option<&'a str> {
+    if !hit {
+        return None;
+    }
+    effects.iter().find_map(|e| {
+        let mask = overrides::overridden_builtins(std::slice::from_ref(e), game, aircraft);
+        field(&mask).then_some(e.name.as_str())
+    })
 }
 
 /// Статус-бейдж карточки эффекта: круглый маркер И слово рядом с ним.
@@ -475,14 +603,11 @@ pub struct UiState {
     // ui/effects_editor.rs): список эффектов — общий с воркерами через
     // CustomFxShared (тот же rev-приём, что у ConfigShared), живой список id
     // эффектов, реально дающих отдачу сейчас (для точки-индикатора в списке
-    // слева), и локальная копия режима эффектов для биндинга к
-    // radio-кнопкам. Воркеры читают режим НЕ отсюда, а из глобального
-    // атомика settings::effect_mode() (у них нет доступа к UiState) — оба
-    // источника синхронизируются в момент переключения, см.
-    // effects_editor::show_mode_header.
+    // слева). Глобального режима больше нет (см. custom_fx::overrides) —
+    // оба движка эффектов, встроенный и пользовательский, считаются каждый
+    // тик одновременно.
     pub custom_fx: Arc<CustomFxShared>,
     pub active_custom_ids: Arc<Mutex<Vec<String>>>,
-    pub effect_mode: EffectMode,
     pub fx_editor: effects_editor::EditorState,
     // Перехват HID-канала на время предпросмотра эффекта (кнопка "Играть" в
     // редакторе) — тот же клон, что получили все три воркера в main.rs.
@@ -569,7 +694,6 @@ impl UiState {
             // миграции файлов, сохранённых сборкой до этой фичи.
             wt_enabled: self.game_override == GameOverride::ForceWt,
             game_override: self.game_override,
-            effect_mode: crate::settings::effect_mode(),
         });
     }
 
@@ -1360,14 +1484,11 @@ impl eframe::App for UiState {
                         // dispatch'е секций (см. её комментарий). Все графики
                         // источника корректно показывают lbl_fx_no_signal.
                         let active_ids_guard = self.active_custom_ids.lock();
-                        let mut mode_changed = false;
                         let mut ectx = effects_editor::EditorCtx {
                             effects: &self.custom_fx,
                             active_ids: active_ids_guard.as_slice(),
                             live: None,
                             active_game: ag,
-                            effect_mode: &mut self.effect_mode,
-                            mode_changed: &mut mode_changed,
                             t,
                             lang: self.lang,
                             logs: &self.logs,
@@ -1376,9 +1497,6 @@ impl eframe::App for UiState {
                         };
                         effects_editor::show(ui, &mut self.fx_editor, &mut ectx);
                         drop(active_ids_guard);
-                        if mode_changed {
-                            self.save_global_settings();
-                        }
                     } else {
                         // Тот же нейтральный экран ожидания, что и раньше —
                         // просто теперь виден только пока не выбрана Effects.
@@ -1395,160 +1513,169 @@ impl eframe::App for UiState {
                 // бейджами счётчика в навигации слева, и списком Live Monitor справа,
                 // чтобы не считать дважды.
                 let mon = self.config.get();
-                // Снимок пользовательских эффектов — нужен ТОЛЬКО когда движок реально
-                // на них переключён (EffectMode::Custom): встроенные эффекты в этом
-                // режиме движком не считаются вообще (гейт в sim/worker.rs и
-                // wt_link/worker.rs), а старый список ниже показывал бы их все
-                // погашенными — вводит в заблуждение ("почему ничего не работает").
-                // Берём его заранее (а не внутри ветки rows), чтобы у &str внутри rows
-                // было куда занимать borrowed lifetime — сам Vec живёт до конца этого
-                // блока show_main, дольше, чем нужно rows.
-                let custom_snapshot = if self.effect_mode == EffectMode::Custom {
-                    self.custom_fx.get()
-                } else {
-                    Vec::new()
-                };
+                // Единый снимок пользовательских эффектов + текущего борта на этот
+                // кадр нужен ВСЕГДА: оба движка (встроенный и пользовательский) считаются
+                // одновременно (см. custom_fx::overrides), поэтому
+                // Live Monitor ниже сводит builtin- и custom-строки в один список, а
+                // `builtin_override_mask` отмечает, какие встроенные эффекты вытеснены
+                // (для пометки "заменён", а не "выключен") и переиспользуется дальше по
+                // кадру карточками встроенных эффектов в CentralPanel.
+                let custom_snapshot = self.custom_fx.get();
+                let aircraft_snapshot = self.aircraft_title.lock().clone();
+                let builtin_override_mask =
+                    overrides::overridden_builtins(&custom_snapshot, ag, &aircraft_snapshot);
                 // Порядок элементов соответствует новой группировке по разделам
                 // (Aerodynamics / Taxi / Engines / Gears) — см. диапазоны ниже.
                 // Четвёртое поле — текущая интенсивность эффекта в процентах (та же
                 // формула val/native_max*100, что использует слайдер самой карточки),
                 // None — для triggered-по-порогу эффектов без единого "уровня"
                 // (Gear Transit, а также ЛЮБОЙ пользовательский эффект — у них нет
-                // единого "уровня", кривая+форма произвольные). Используется компактным
-                // Live Monitor, чтобы показывать не только "включён/активен", но и
-                // реальное число.
-                //
-                // EffectMode::Custom: список полностью заменяется на пользовательские
-                // эффекты (см. doc-комментарий custom_snapshot выше). War Thunder
-                // (ag == ActiveGame::Wt, встроенный движок): список заменяется на 4
-                // эффекта этого режима — MSFS-эффекты в этот момент не считаются (см.
+                // единого "уровня", кривая+форма произвольные). Пятое поле — вытеснен ли
+                // этот встроенный эффект пользовательским на текущем кадре (задача 1в):
+                // всегда `false` для самих пользовательских строк, добавленных ниже.
+                // War Thunder (ag == ActiveGame::Wt, встроенный движок): builtin-список —
+                // 6 эффектов этого режима, MSFS-эффекты в этот момент не считаются (см.
                 // гейт в sim/worker.rs), показывать их в Live Monitor было бы вводящим
                 // в заблуждение.
-                let rows: Vec<(&str, bool, bool, Option<f32>)> =
-                    if self.effect_mode == EffectMode::Custom {
-                        // Гвард мьютекса живёт ТОЛЬКО внутри этого блока — держать его
-                        // дольше нельзя: чуть ниже по кадру (CentralPanel, Section::Effects)
-                        // тот же self.active_custom_ids снова блокируется, и parking_lot::
-                        // Mutex не реентерабелен даже в одном потоке (реальный deadlock,
-                        // не гипотетический — оба места выполняются в одном кадре egui).
-                        let active_guard = self.active_custom_ids.lock();
-                        custom_snapshot
-                            .iter()
-                            .map(|e| {
-                                let active = active_guard.iter().any(|id| id == &e.id);
-                                (e.name.as_str(), e.enabled, active, None)
-                            })
-                            .collect()
-                    } else if ag == ActiveGame::Wt {
-                        vec![
-                            (
-                                t.name_wt_weapon1,
-                                mon.wt.weapon1_enabled,
-                                self.effects.wt_weapon1_active.load(Ordering::Relaxed),
-                                None,
-                            ),
-                            (
-                                t.name_wt_weapon2,
-                                mon.wt.weapon2_enabled,
-                                self.effects.wt_weapon2_active.load(Ordering::Relaxed),
-                                None,
-                            ),
-                            (
-                                t.name_flaps,
-                                mon.wt.flaps_enabled,
-                                self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                                Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.lbl_gear_transit,
-                                mon.wt.gear_transit_enabled,
-                                self.effects.gear_transit_active.load(Ordering::Relaxed),
-                                None,
-                            ),
-                            (
-                                t.name_wt_stall,
-                                mon.wt.stall_enabled,
-                                self.effects.stall_active.load(Ordering::Relaxed),
-                                Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_wt_engine_start,
-                                mon.wt.engine_start_enabled,
-                                self.effects.engine_start_active.load(Ordering::Relaxed),
-                                Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                        ]
-                    } else {
-                        vec![
-                            (
-                                t.overspeed_effect_name,
-                                mon.overspeed_enabled,
-                                self.effects.overspeed_active.load(Ordering::Relaxed),
-                                Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_stall,
-                                mon.stall_enabled,
-                                self.effects.stall_active.load(Ordering::Relaxed),
-                                Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_spoilers,
-                                mon.spoilers_enabled,
-                                self.effects.spoilers_active.load(Ordering::Relaxed),
-                                Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_flaps,
-                                mon.flaps_enabled,
-                                self.effects.flaps_bump_active.load(Ordering::Relaxed),
-                                Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.lbl_bank_turb,
-                                mon.bank_enabled,
-                                self.effects.bank_active.load(Ordering::Relaxed),
-                                Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_engine_start,
-                                mon.enable_engine_start,
-                                self.effects.engine_start_active.load(Ordering::Relaxed),
-                                Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_ground_roll,
-                                mon.ground_enabled,
-                                self.effects.ground_active.load(Ordering::Relaxed)
-                                    || self.effects.ground_thump_active.load(Ordering::Relaxed),
-                                Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_left_peak,
-                                mon.gear_comp_left_enabled,
-                                self.effects.gear_comp_left_active.load(Ordering::Relaxed),
-                                Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_nose_peak,
-                                mon.gear_comp_nose_enabled,
-                                self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
-                                Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.name_right_peak,
-                                mon.gear_comp_right_enabled,
-                                self.effects.gear_comp_right_active.load(Ordering::Relaxed),
-                                Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
-                            ),
-                            (
-                                t.lbl_gear_transit,
-                                mon.gear_transit_enabled,
-                                self.effects.gear_transit_active.load(Ordering::Relaxed),
-                                None,
-                            ),
-                        ]
-                    };
+                let mut rows: Vec<(&str, bool, bool, Option<f32>, bool)> = if ag == ActiveGame::Wt {
+                    vec![
+                        (
+                            t.name_wt_weapon1,
+                            mon.wt.weapon1_enabled,
+                            self.effects.wt_weapon1_active.load(Ordering::Relaxed),
+                            None,
+                            builtin_override_mask.wt_weapon1,
+                        ),
+                        (
+                            t.name_wt_weapon2,
+                            mon.wt.weapon2_enabled,
+                            self.effects.wt_weapon2_active.load(Ordering::Relaxed),
+                            None,
+                            builtin_override_mask.wt_weapon2,
+                        ),
+                        (
+                            t.name_flaps,
+                            mon.wt.flaps_enabled,
+                            self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                            Some((mon.wt.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.wt_flaps,
+                        ),
+                        (
+                            t.lbl_gear_transit,
+                            mon.wt.gear_transit_enabled,
+                            self.effects.gear_transit_active.load(Ordering::Relaxed),
+                            None,
+                            builtin_override_mask.wt_gear_transit,
+                        ),
+                        (
+                            t.name_wt_stall,
+                            mon.wt.stall_enabled,
+                            self.effects.stall_active.load(Ordering::Relaxed),
+                            Some((mon.wt.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.wt_stall,
+                        ),
+                        (
+                            t.name_wt_engine_start,
+                            mon.wt.engine_start_enabled,
+                            self.effects.engine_start_active.load(Ordering::Relaxed),
+                            Some((mon.wt.engine_start_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.wt_engine_start,
+                        ),
+                    ]
+                } else {
+                    vec![
+                        (
+                            t.overspeed_effect_name,
+                            mon.overspeed_enabled,
+                            self.effects.overspeed_active.load(Ordering::Relaxed),
+                            Some((mon.overspeed_intensity / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.overspeed,
+                        ),
+                        (
+                            t.name_stall,
+                            mon.stall_enabled,
+                            self.effects.stall_active.load(Ordering::Relaxed),
+                            Some((mon.stall_ceiling / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.stall,
+                        ),
+                        (
+                            t.name_spoilers,
+                            mon.spoilers_enabled,
+                            self.effects.spoilers_active.load(Ordering::Relaxed),
+                            Some((mon.spoilers_intensity / 250.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.spoilers,
+                        ),
+                        (
+                            t.name_flaps,
+                            mon.flaps_enabled,
+                            self.effects.flaps_bump_active.load(Ordering::Relaxed),
+                            Some((mon.flaps_peak / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.flaps,
+                        ),
+                        (
+                            t.lbl_bank_turb,
+                            mon.bank_enabled,
+                            self.effects.bank_active.load(Ordering::Relaxed),
+                            Some((mon.bank_intensity / 200.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.bank,
+                        ),
+                        (
+                            t.name_engine_start,
+                            mon.enable_engine_start,
+                            self.effects.engine_start_active.load(Ordering::Relaxed),
+                            Some((mon.engine_start_strength / 255.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.engine_start,
+                        ),
+                        (
+                            t.name_ground_roll,
+                            mon.ground_enabled,
+                            self.effects.ground_active.load(Ordering::Relaxed)
+                                || self.effects.ground_thump_active.load(Ordering::Relaxed),
+                            Some((mon.ground_roll / 50.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.ground,
+                        ),
+                        (
+                            t.name_left_peak,
+                            mon.gear_comp_left_enabled,
+                            self.effects.gear_comp_left_active.load(Ordering::Relaxed),
+                            Some((mon.gear_comp_left_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.gear_comp,
+                        ),
+                        (
+                            t.name_nose_peak,
+                            mon.gear_comp_nose_enabled,
+                            self.effects.gear_comp_nose_active.load(Ordering::Relaxed),
+                            Some((mon.gear_comp_nose_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.gear_comp,
+                        ),
+                        (
+                            t.name_right_peak,
+                            mon.gear_comp_right_enabled,
+                            self.effects.gear_comp_right_active.load(Ordering::Relaxed),
+                            Some((mon.gear_comp_right_peak / 55.0 * 100.0).clamp(0.0, 100.0)),
+                            builtin_override_mask.gear_comp,
+                        ),
+                        (
+                            t.lbl_gear_transit,
+                            mon.gear_transit_enabled,
+                            self.effects.gear_transit_active.load(Ordering::Relaxed),
+                            None,
+                            builtin_override_mask.gear_transit,
+                        ),
+                    ]
+                };
+                // Пользовательские эффекты теперь ВСЕГДА показываются рядом со
+                // встроенными (не вместо них, см. doc-комментарий выше) — задача 1в.
+                // Гвард мьютекса живёт только на время этого блока: чуть ниже по кадру
+                // (CentralPanel, Section::Effects) тот же self.active_custom_ids снова
+                // блокируется, а parking_lot::Mutex не реентерабелен даже в одном потоке.
+                {
+                    let active_guard = self.active_custom_ids.lock();
+                    for e in &custom_snapshot {
+                        let active = active_guard.iter().any(|id| id == &e.id);
+                        rows.push((e.name.as_str(), e.enabled, active, None, false));
+                    }
+                }
                 let nav_panel_width = if self.lang == Lang::Ru { 190.0 } else { 150.0 };
                 egui::Panel::left("nav_panel")
                     .resizable(false)
@@ -1564,75 +1691,38 @@ impl eframe::App for UiState {
                         // у selectable невыбранная кнопка рисуется вообще без рамки
                         // и заливки, поэтому пункты навигации проявлялись только под
                         // курсором. Здесь рамка есть всегда, на всю ширину панели.
-                        // `muted`: приглушает пункт (текст TEXT_SECONDARY вместо обычного)
-                        // и вешает hover-подсказку — используется для встроенных разделов
-                        // (Rumble/Taxi/Engines/Gear/Wt), когда движок реально переключён на
-                        // пользовательские эффекты (EffectMode::Custom) и их настройки на
-                        // вибрацию не влияют (см. builtin_muted_banner выше). Пункт при этом
-                        // остаётся кликабельным — пользователь вправе зайти и настроить его
-                        // заранее, до переключения режима обратно.
-                        let nav_item =
-                            |ui: &mut egui::Ui, selected: bool, label: &str, muted: bool| -> bool {
-                                let w = ui.available_width();
-                                let text = if muted {
-                                    RichText::new(label).color(palette::TEXT_SECONDARY)
-                                } else {
-                                    RichText::new(label)
-                                };
-                                let resp = ui.add(
-                                    egui::Button::new(text)
-                                        .selected(selected)
-                                        .wrap()
-                                        .min_size(Vec2::new(w, 0.0)),
-                                );
-                                let resp = if muted {
-                                    resp.on_hover_text(t.msg_builtin_section_inactive)
-                                } else {
-                                    resp
-                                };
-                                resp.clicked()
-                            };
-                        let builtin_nav_muted = self.effect_mode == EffectMode::Custom;
+                        // Раньше здесь ещё был параметр `muted`, приглушавший встроенные
+                        // разделы целиком, пока активны пользовательские эффекты.
+                        // Глобального переключателя движков больше нет: движки работают
+                        // вместе, вытеснение точечное и видно в самой карточке
+                        // (см. custom_fx::overrides и `overridden_by_note` ниже),
+                        // поэтому разделы навигации всегда полноценные.
+                        let nav_item = |ui: &mut egui::Ui, selected: bool, label: &str| -> bool {
+                            let w = ui.available_width();
+                            ui.add(
+                                egui::Button::new(RichText::new(label))
+                                    .selected(selected)
+                                    .wrap()
+                                    .min_size(Vec2::new(w, 0.0)),
+                            )
+                            .clicked()
+                        };
                         if ag == ActiveGame::Wt {
-                            if nav_item(
-                                ui,
-                                self.active_section == Section::Wt,
-                                t.nav_wt,
-                                builtin_nav_muted,
-                            ) {
+                            if nav_item(ui, self.active_section == Section::Wt, t.nav_wt) {
                                 self.active_section = Section::Wt;
                             }
                         } else {
-                            if nav_item(
-                                ui,
-                                self.active_section == Section::Rumble,
-                                t.nav_rumble,
-                                builtin_nav_muted,
-                            ) {
+                            if nav_item(ui, self.active_section == Section::Rumble, t.nav_rumble) {
                                 self.active_section = Section::Rumble;
                             }
-                            if nav_item(
-                                ui,
-                                self.active_section == Section::Taxi,
-                                t.nav_taxi,
-                                builtin_nav_muted,
-                            ) {
+                            if nav_item(ui, self.active_section == Section::Taxi, t.nav_taxi) {
                                 self.active_section = Section::Taxi;
                             }
-                            if nav_item(
-                                ui,
-                                self.active_section == Section::Engines,
-                                t.nav_engines,
-                                builtin_nav_muted,
-                            ) {
+                            if nav_item(ui, self.active_section == Section::Engines, t.nav_engines)
+                            {
                                 self.active_section = Section::Engines;
                             }
-                            if nav_item(
-                                ui,
-                                self.active_section == Section::Gear,
-                                t.nav_gear,
-                                builtin_nav_muted,
-                            ) {
+                            if nav_item(ui, self.active_section == Section::Gear, t.nav_gear) {
                                 self.active_section = Section::Gear;
                             }
                         }
@@ -1641,18 +1731,12 @@ impl eframe::App for UiState {
                             ui,
                             self.active_section == Section::Telemetry,
                             t.nav_telemetry,
-                            false,
                         ) {
                             self.active_section = Section::Telemetry;
                         }
                         // Как и Telemetry, виден во ВСЕХ играх — конструктор
                         // не привязан к конкретному конвейеру телеметрии.
-                        if nav_item(
-                            ui,
-                            self.active_section == Section::Effects,
-                            t.nav_effects,
-                            false,
-                        ) {
+                        if nav_item(ui, self.active_section == Section::Effects, t.nav_effects) {
                             self.active_section = Section::Effects;
                         }
 
@@ -1727,9 +1811,15 @@ impl eframe::App for UiState {
                         if enabled_rows.is_empty() {
                             ui.weak(t.lbl_no_active_effects);
                         }
-                        for (name, enabled, active, pct) in enabled_rows {
+                        for (name, enabled, active, pct, replaced) in enabled_rows {
                             ui.horizontal(|ui| {
-                                let (dot_color, filled) = if *enabled && *active {
+                                // Задача 1в: вытесненный встроенный эффект помечается
+                                // отдельным состоянием "заменён", а не сливается с обычным
+                                // idle/active — иначе выглядел бы так, будто может
+                                // сработать, хотя вытеснение гарантирует, что он молчит.
+                                let (dot_color, filled) = if *replaced {
+                                    (palette::TEXT_DISABLED, false)
+                                } else if *enabled && *active {
                                     (palette::ACCENT_LIVE, true)
                                 } else {
                                     (palette::BORDER_ACTIVE, false)
@@ -1740,7 +1830,9 @@ impl eframe::App for UiState {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        let value_text = if *active {
+                                        let value_text = if *replaced {
+                                            t.lbl_replaced_by_custom.to_string()
+                                        } else if *active {
                                             match pct {
                                                 Some(p) => format!("{p:.0}%"),
                                                 None => t.status_active.to_string(),
@@ -1748,7 +1840,9 @@ impl eframe::App for UiState {
                                         } else {
                                             "—".to_string()
                                         };
-                                        let color = if *active {
+                                        let color = if *replaced {
+                                            palette::TEXT_DISABLED
+                                        } else if *active {
                                             palette::ACCENT_LIVE
                                         } else {
                                             palette::TEXT_SECONDARY
@@ -1787,7 +1881,7 @@ impl eframe::App for UiState {
                                 self.monitor_show_disabled = !self.monitor_show_disabled;
                             }
                             if self.monitor_show_disabled {
-                                for (name, _enabled, _active, _pct) in
+                                for (name, _enabled, _active, _pct, _replaced) in
                                     rows.iter().filter(|(_, enabled, ..)| !*enabled)
                                 {
                                     ui.horizontal(|ui| {
@@ -1919,15 +2013,140 @@ impl eframe::App for UiState {
                         let throttle_hw_connected = self.throttle_connected.load(Ordering::Relaxed);
                         let split_touchdown_auto = joystick_hw_connected && throttle_hw_connected;
 
-                        // Задача 2: считаем ДО with_mut — self.config.with_mut(|cfg| ...)
-                        // ниже занимает `self` через захват других полей (active_section,
-                        // effects, logs, tx_hid...) внутри замыкания, так что менять
-                        // self.effect_mode прямо там нельзя. Клик по кнопке "Включить
-                        // встроенные эффекты" в плашке (см. builtin_muted_banner) только
-                        // взводит этот локальный флаг — реальное переключение режима и
-                        // персист происходят ПОСЛЕ закрытия with_mut.
-                        let show_builtin_muted_banner = self.effect_mode == EffectMode::Custom;
-                        let mut switch_to_builtin_clicked = false;
+                        // Имена пользовательских эффектов, вытеснивших каждый встроенный
+                        // на этом кадре — считаем ДО with_mut, потому что self.config.
+                        // with_mut(|cfg| ...) ниже занимает `self` через захват других
+                        // полей (active_section, effects, logs, tx_hid...) внутри
+                        // замыкания, доступа к self.custom_fx/self.aircraft_title там
+                        // больше нет. builtin_override_mask/custom_snapshot/
+                        // aircraft_snapshot уже посчитаны выше для Live Monitor —
+                        // переиспользуем тот же снимок кадра, а не считаем ещё раз.
+                        let overspeed_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.overspeed,
+                            builtin_override_mask.overspeed,
+                        );
+                        let stall_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.stall,
+                            builtin_override_mask.stall,
+                        );
+                        let spoilers_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.spoilers,
+                            builtin_override_mask.spoilers,
+                        );
+                        let flaps_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.flaps,
+                            builtin_override_mask.flaps,
+                        );
+                        let bank_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.bank,
+                            builtin_override_mask.bank,
+                        );
+                        let taxi_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.taxi,
+                            builtin_override_mask.taxi,
+                        );
+                        let ground_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.ground,
+                            builtin_override_mask.ground,
+                        );
+                        let engine_start_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.engine_start,
+                            builtin_override_mask.engine_start,
+                        );
+                        let gear_comp_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.gear_comp,
+                            builtin_override_mask.gear_comp,
+                        );
+                        let gear_transit_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.gear_transit,
+                            builtin_override_mask.gear_transit,
+                        );
+                        let wt_weapon1_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_weapon1,
+                            builtin_override_mask.wt_weapon1,
+                        );
+                        let wt_weapon2_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_weapon2,
+                            builtin_override_mask.wt_weapon2,
+                        );
+                        let wt_stall_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_stall,
+                            builtin_override_mask.wt_stall,
+                        );
+                        let wt_overspeed_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_overspeed,
+                            builtin_override_mask.wt_overspeed,
+                        );
+                        let wt_gear_overspeed_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_gear_overspeed,
+                            builtin_override_mask.wt_gear_overspeed,
+                        );
+                        let wt_flaps_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_flaps,
+                            builtin_override_mask.wt_flaps,
+                        );
+                        let wt_gear_transit_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_gear_transit,
+                            builtin_override_mask.wt_gear_transit,
+                        );
+                        let wt_engine_start_overridden = overriding_effect_name(
+                            &custom_snapshot,
+                            ag,
+                            &aircraft_snapshot,
+                            |m| m.wt_engine_start,
+                            builtin_override_mask.wt_engine_start,
+                        );
 
                         self.config.with_mut(|cfg| {
                             cfg.split_touchdown = split_touchdown_auto;
@@ -1935,11 +2154,6 @@ impl eframe::App for UiState {
                             cfg.throttle_hw_connected = throttle_hw_connected;
                             match self.active_section {
                                 Section::Rumble => {
-                                    if show_builtin_muted_banner
-                                        && builtin_muted_banner(ui, t)
-                                    {
-                                        switch_to_builtin_clicked = true;
-                                    }
                                     ui.heading(t.nav_rumble);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -1957,9 +2171,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                overspeed_enabled,
+                                                overspeed_enabled && overspeed_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = overspeed_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::overspeed_row(
                                                         ui,
                                                         &mut overspeed_enabled,
@@ -2017,9 +2234,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                stall_enabled,
+                                                stall_enabled && stall_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = stall_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_stall,
@@ -2047,9 +2267,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                spoilers_enabled,
+                                                spoilers_enabled && spoilers_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = spoilers_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_spoilers,
@@ -2105,9 +2328,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                flaps_enabled,
+                                                flaps_enabled && flaps_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = flaps_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_flaps,
@@ -2131,7 +2357,14 @@ impl eframe::App for UiState {
                                             let active =
                                                 self.effects.bank_active.load(Ordering::Relaxed);
                                             let col = &mut *ui;
-                                            UiState::effect_card(col, bank_enabled, active, |ui| {
+                                            UiState::effect_card(
+                                                col,
+                                                bank_enabled && bank_overridden.is_none(),
+                                                active,
+                                                |ui| {
+                                                if let Some(name) = bank_overridden {
+                                                    overridden_by_note(ui, t, name);
+                                                }
                                                 ui.horizontal(|ui| {
                                                     if ui.checkbox(&mut bank_enabled, "").changed()
                                                     {
@@ -2221,11 +2454,6 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Taxi => {
-                                    if show_builtin_muted_banner
-                                        && builtin_muted_banner(ui, t)
-                                    {
-                                        switch_to_builtin_clicked = true;
-                                    }
                                     ui.heading(t.nav_taxi);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -2235,9 +2463,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                true,
+                                                taxi_overridden.is_none(),
                                                 taxi_start_crossed || taxi_end_crossed,
                                                 |ui| {
+                                                    if let Some(name) = taxi_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     ui.label(
                                                         RichText::new(t.heading_taxi_thump)
                                                             .strong(),
@@ -2327,9 +2558,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                ground_enabled,
+                                                ground_enabled && ground_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = ground_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_ground_roll,
@@ -2350,11 +2584,6 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Engines => {
-                                    if show_builtin_muted_banner
-                                        && builtin_muted_banner(ui, t)
-                                    {
-                                        switch_to_builtin_clicked = true;
-                                    }
                                     ui.heading(t.nav_engines);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, false);
@@ -2370,9 +2599,13 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                engine_start_enabled,
+                                                engine_start_enabled
+                                                    && engine_start_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = engine_start_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     ui.horizontal(|ui| {
                                                         let cb = ui.checkbox(
                                                             &mut engine_start_enabled,
@@ -2477,11 +2710,6 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Gear => {
-                                    if show_builtin_muted_banner
-                                        && builtin_muted_banner(ui, t)
-                                    {
-                                        switch_to_builtin_clicked = true;
-                                    }
                                     ui.heading(t.nav_gear);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -2514,9 +2742,12 @@ impl eframe::App for UiState {
                                             col.add_enabled_ui(gear_comp_enabled, |ui| {
                                                 UiState::effect_card(
                                                     ui,
-                                                    left_enabled,
+                                                    left_enabled && gear_comp_overridden.is_none(),
                                                     active,
                                                     |ui| {
+                                                        if let Some(name) = gear_comp_overridden {
+                                                            overridden_by_note(ui, t, name);
+                                                        }
                                                         UiState::effect_row_percent_hinted(
                                                             ui,
                                                             t.name_left_peak,
@@ -2607,9 +2838,13 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                gear_transit_enabled,
+                                                gear_transit_enabled
+                                                    && gear_transit_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = gear_transit_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     ui.horizontal(|ui| {
                                                         if ui
                                                             .checkbox(&mut gear_transit_enabled, "")
@@ -2656,11 +2891,6 @@ impl eframe::App for UiState {
                                 }
 
                                 Section::Wt => {
-                                    if show_builtin_muted_banner
-                                        && builtin_muted_banner(ui, t)
-                                    {
-                                        switch_to_builtin_clicked = true;
-                                    }
                                     ui.heading(t.nav_wt);
                                     ui.add_space(4.0);
                                     effects_legend(ui, t, true);
@@ -2675,27 +2905,37 @@ impl eframe::App for UiState {
                                                 .wt_weapon1_active
                                                 .load(Ordering::Relaxed);
                                             let col = &mut *ui;
-                                            UiState::effect_card(col, enabled, active, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    if ui.checkbox(&mut enabled, "").changed() {
-                                                        _changed = true;
+                                            UiState::effect_card(
+                                                col,
+                                                enabled && wt_weapon1_overridden.is_none(),
+                                                active,
+                                                |ui| {
+                                                    if let Some(name) = wt_weapon1_overridden {
+                                                        overridden_by_note(ui, t, name);
                                                     }
-                                                    ui.label(
-                                                        RichText::new(t.name_wt_weapon1).strong(),
-                                                    )
-                                                    .on_hover_text(t.hover_wt_weapon1);
-                                                    ui.with_layout(
-                                                        egui::Layout::right_to_left(
-                                                            egui::Align::Center,
-                                                        ),
-                                                        |ui| {
-                                                            effect_status_badge(
-                                                                ui, enabled, active, t,
-                                                            );
-                                                        },
-                                                    );
-                                                });
-                                            });
+                                                    ui.horizontal(|ui| {
+                                                        if ui.checkbox(&mut enabled, "").changed()
+                                                        {
+                                                            _changed = true;
+                                                        }
+                                                        ui.label(
+                                                            RichText::new(t.name_wt_weapon1)
+                                                                .strong(),
+                                                        )
+                                                        .on_hover_text(t.hover_wt_weapon1);
+                                                        ui.with_layout(
+                                                            egui::Layout::right_to_left(
+                                                                egui::Align::Center,
+                                                            ),
+                                                            |ui| {
+                                                                effect_status_badge(
+                                                                    ui, enabled, active, t,
+                                                                );
+                                                            },
+                                                        );
+                                                    });
+                                                },
+                                            );
                                             cfg.wt.weapon1_enabled = enabled;
                                         }
 
@@ -2708,27 +2948,37 @@ impl eframe::App for UiState {
                                                 .wt_weapon2_active
                                                 .load(Ordering::Relaxed);
                                             let col = &mut *ui;
-                                            UiState::effect_card(col, enabled, active, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    if ui.checkbox(&mut enabled, "").changed() {
-                                                        _changed = true;
+                                            UiState::effect_card(
+                                                col,
+                                                enabled && wt_weapon2_overridden.is_none(),
+                                                active,
+                                                |ui| {
+                                                    if let Some(name) = wt_weapon2_overridden {
+                                                        overridden_by_note(ui, t, name);
                                                     }
-                                                    ui.label(
-                                                        RichText::new(t.name_wt_weapon2).strong(),
-                                                    )
-                                                    .on_hover_text(t.hover_wt_weapon2);
-                                                    ui.with_layout(
-                                                        egui::Layout::right_to_left(
-                                                            egui::Align::Center,
-                                                        ),
-                                                        |ui| {
-                                                            effect_status_badge(
-                                                                ui, enabled, active, t,
-                                                            );
-                                                        },
-                                                    );
-                                                });
-                                            });
+                                                    ui.horizontal(|ui| {
+                                                        if ui.checkbox(&mut enabled, "").changed()
+                                                        {
+                                                            _changed = true;
+                                                        }
+                                                        ui.label(
+                                                            RichText::new(t.name_wt_weapon2)
+                                                                .strong(),
+                                                        )
+                                                        .on_hover_text(t.hover_wt_weapon2);
+                                                        ui.with_layout(
+                                                            egui::Layout::right_to_left(
+                                                                egui::Align::Center,
+                                                            ),
+                                                            |ui| {
+                                                                effect_status_badge(
+                                                                    ui, enabled, active, t,
+                                                                );
+                                                            },
+                                                        );
+                                                    });
+                                                },
+                                            );
                                             cfg.wt.weapon2_enabled = enabled;
                                         }
 
@@ -2741,9 +2991,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                stall_enabled,
+                                                stall_enabled && wt_stall_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = wt_stall_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_wt_stall,
@@ -2772,9 +3025,13 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                overspeed_enabled,
+                                                overspeed_enabled
+                                                    && wt_overspeed_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = wt_overspeed_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_wt_overspeed,
@@ -2804,9 +3061,15 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                gear_overspeed_enabled,
+                                                gear_overspeed_enabled
+                                                    && wt_gear_overspeed_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) =
+                                                        wt_gear_overspeed_overridden
+                                                    {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_wt_gear_overspeed,
@@ -2834,9 +3097,12 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                flaps_enabled,
+                                                flaps_enabled && wt_flaps_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = wt_flaps_overridden {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_flaps,
@@ -2865,9 +3131,14 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                gear_transit_enabled,
+                                                gear_transit_enabled
+                                                    && wt_gear_transit_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = wt_gear_transit_overridden
+                                                    {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.lbl_gear_transit,
@@ -2897,9 +3168,14 @@ impl eframe::App for UiState {
                                             let col = &mut *ui;
                                             UiState::effect_card(
                                                 col,
-                                                engine_start_enabled,
+                                                engine_start_enabled
+                                                    && wt_engine_start_overridden.is_none(),
                                                 active,
                                                 |ui| {
+                                                    if let Some(name) = wt_engine_start_overridden
+                                                    {
+                                                        overridden_by_note(ui, t, name);
+                                                    }
                                                     UiState::effect_row_percent_hinted(
                                                         ui,
                                                         t.name_wt_engine_start,
@@ -2933,18 +3209,6 @@ impl eframe::App for UiState {
                                 // Конфиг уже обновлен через with_mut
                             }
                         });
-
-                        // Клик по кнопке в плашке (см. builtin_muted_banner выше) —
-                        // теперь, когда with_mut закрыт, self снова полностью
-                        // доступен: переключаем движок обратно на встроенный и
-                        // персистим выбор (та же связка, что и в
-                        // effects_editor::show_mode_header / задача 1), иначе
-                        // выбор не переживёт перезапуск приложения.
-                        if switch_to_builtin_clicked {
-                            self.effect_mode = EffectMode::BuiltIn;
-                            crate::settings::set_effect_mode(EffectMode::BuiltIn);
-                            self.save_global_settings();
-                        }
 
                         ui.add_space(8.0);
                         if ui.button(t.btn_reset_defaults).clicked() {
@@ -3336,14 +3600,11 @@ impl eframe::App for UiState {
                                     .map(TelemetryFrame::Flight),
                             };
                             let active_ids_guard = self.active_custom_ids.lock();
-                            let mut mode_changed = false;
                             let mut ectx = effects_editor::EditorCtx {
                                 effects: &self.custom_fx,
                                 active_ids: active_ids_guard.as_slice(),
                                 live,
                                 active_game: ag,
-                                effect_mode: &mut self.effect_mode,
-                                mode_changed: &mut mode_changed,
                                 t,
                                 lang: self.lang,
                                 logs: &self.logs,
@@ -3352,9 +3613,6 @@ impl eframe::App for UiState {
                             };
                             effects_editor::show(ui, &mut self.fx_editor, &mut ectx);
                             drop(active_ids_guard);
-                            if mode_changed {
-                                self.save_global_settings();
-                            }
                         }
                     });
             });

@@ -171,8 +171,10 @@ test one.
   recording* runs a captured flight through the effect offline and plots the result.
 - **Start from a template** — *Impact*, *Hum*, *Pulsation*, *Growing* — carrying the numbers of
   effects already calibrated on real hardware, then adjust from there.
-- **Built-in or custom, never both at once:** the two engines are mutually exclusive, and the
-  active one is stated in plain text. Effects are shared as a plain JSON file.
+- **Keep the built-ins, replace only what you want:** both engines run together, so you can
+  build two effects of your own and leave the other eleven alone. A custom effect built on a
+  telemetry source takes that source over — the built-in effect using it steps aside, and its
+  card says by name which of your effects replaced it. Effects are shared as a plain JSON file.
 
 ---
 

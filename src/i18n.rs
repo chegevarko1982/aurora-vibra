@@ -168,6 +168,12 @@ pub struct Strings {
     pub name_right_peak: &'static str,
 
     pub lbl_gear_transit: &'static str,
+    // Скрытый встроенный эффект "касание шасси" (RumbleConfig::gear_enabled,
+    // временно отключён и скрыт из UI — см. типы.rs) — единственное имя,
+    // под которым он вообще где-либо показывается: шаг 1 редактора
+    // пользовательских эффектов, когда источник FlightGearHandle вытесняет
+    // именно его (см. custom_fx::overrides::primary_builtin_for).
+    pub name_gear_bump: &'static str,
 
     pub lbl_bank_turb: &'static str,
     pub hover_bank_intensity: &'static str,
@@ -290,19 +296,24 @@ pub struct Strings {
 
     // --- Конструктор эффектов («Мои эффекты») ---
     pub nav_effects: &'static str,
-    pub heading_effect_mode: &'static str,
-    pub opt_mode_builtin: &'static str,
-    pub opt_mode_custom: &'static str,
-    pub hover_effect_mode: &'static str,
-    pub msg_builtin_muted: &'static str,
-    pub msg_custom_muted: &'static str,
-    // Плашка в самих встроенных разделах (Rumble/Taxi/Engines/Gear/Wt) при
-    // EffectMode::Custom — предупреждает, что настройки раздела на вибрацию
-    // сейчас не влияют, т.к. движок в этом режиме встроенные эффекты не
-    // считает вообще. Тот же текст используется как hover-подсказка у
-    // приглушённых пунктов навигации (см. `nav_item` в ui.rs).
-    pub msg_builtin_section_inactive: &'static str,
-    pub btn_enable_builtin_effects: &'static str,
+    // Оба движка (встроенный набор и пользовательские эффекты) считаются
+    // ОДНОВРЕМЕННО, глобального переключателя режима больше нет (см.
+    // custom_fx::overrides) — короткое пояснение новой логики в шапке
+    // раздела «Мои эффекты» вместо удалённых radio-кнопок режима.
+    pub msg_fx_effects_coexist: &'static str,
+    // Шаг 1 редактора («Источник»): поясняет, какой встроенный эффект
+    // вытесняет ВЫБРАННЫЙ источник (см. `custom_fx::overrides::
+    // primary_builtin_for`), и что происходит, если он не вытесняет ничего.
+    pub lbl_fx_overrides_builtin: &'static str,
+    pub lbl_fx_overrides_builtin_none: &'static str,
+    // Пометка на карточке ВСТРОЕННОГО эффекта (разделы Аэродинамика/Стыки
+    // ВПП/Двигатели/Стойки шасси/War Thunder в ui.rs), когда его вытеснил
+    // пользовательский эффект на том же источнике телеметрии — карточка при
+    // этом приглушается визуально (см. UiState::effect_card).
+    pub lbl_builtin_overridden_by: &'static str,
+    // Короткая метка в Live Monitor для встроенного эффекта, вытесненного
+    // пользовательским — вместо обычной пустой "—"/выключенного вида.
+    pub lbl_replaced_by_custom: &'static str,
     pub btn_fx_new: &'static str,
     // Задача 1: заготовки нового эффекта — кнопка "+ Новый эффект" открывает
     // меню из 4 пунктов (см. `EffectPreset` в effects_editor.rs), каждый —
@@ -575,6 +586,7 @@ https://yoomoney.ru/to/410011348629282",
     name_right_peak: "Right Peak",
 
     lbl_gear_transit: "Gear Transit & Doors",
+    name_gear_bump: "Landing Gear (bump)",
 
     lbl_bank_turb: "Bank / Turb",
     hover_bank_intensity: "Vibration strength once past the bank threshold (below). Pulses get faster the more the angle exceeds the threshold",
@@ -689,14 +701,11 @@ https://yoomoney.ru/to/410011348629282",
     lbl_wt_altitude_ft: "Altitude (ft)",
 
     nav_effects: "Effect Editor",
-    heading_effect_mode: "Effect engine",
-    opt_mode_builtin: "Built-in effects",
-    opt_mode_custom: "My effects",
-    hover_effect_mode: "Built-in and custom effects are mutually exclusive: only the selected engine drives the motors.",
-    msg_builtin_muted: "Your own effects are driving the motors right now — the built-in sections on the left have no effect.",
-    msg_custom_muted: "The built-in set is driving the motors right now — nothing you build here will fire in the sim until you switch to My effects.",
-    msg_builtin_section_inactive: "My effects is active right now — this section's settings don't affect vibration.",
-    btn_enable_builtin_effects: "Enable built-in effects",
+    msg_fx_effects_coexist: "Built-in and custom effects run at the same time — your effect only replaces the built-in one on the same source.",
+    lbl_fx_overrides_builtin: "Overrides the built-in effect:",
+    lbl_fx_overrides_builtin_none: "This source doesn't override any built-in effect — both will run together.",
+    lbl_builtin_overridden_by: "Overridden by your effect:",
+    lbl_replaced_by_custom: "replaced",
     btn_fx_new: "+ New effect",
     preset_impact: "Impact",
     hover_preset_impact: "A short kick on an event — touchdown, gear extended. Fires once and fades.",
@@ -944,6 +953,7 @@ https://yoomoney.ru/to/410011348629282",
     name_right_peak: "Правая стойка",
 
     lbl_gear_transit: "Уборка/выпуск шасси",
+    name_gear_bump: "Касание шасси (удар)",
 
     lbl_bank_turb: "Крен / Турбулентность",
     hover_bank_intensity: "Сила вибрации при превышении порога крена (Порог ниже). Импульсы учащаются, чем больше угол превышает порог",
@@ -1058,14 +1068,11 @@ https://yoomoney.ru/to/410011348629282",
     lbl_wt_altitude_ft: "Высота (футы)",
 
     nav_effects: "Редактор эффектов",
-    heading_effect_mode: "Движок эффектов",
-    opt_mode_builtin: "Встроенные эффекты",
-    opt_mode_custom: "Мои эффекты",
-    hover_effect_mode: "Встроенные и пользовательские эффекты взаимоисключающие: моторы ведёт только выбранный движок.",
-    msg_builtin_muted: "Сейчас моторы ведут только ваши эффекты — встроенные разделы слева не действуют.",
-    msg_custom_muted: "Сейчас моторы ведёт встроенный набор — собранное здесь не сработает в игре, пока не выбрать «Мои эффекты».",
-    msg_builtin_section_inactive: "Сейчас активны пользовательские эффекты — настройки этого раздела на вибрацию не влияют.",
-    btn_enable_builtin_effects: "Включить встроенные эффекты",
+    msg_fx_effects_coexist: "Встроенные и пользовательские эффекты работают одновременно — ваш эффект лишь заменяет встроенный на том же источнике.",
+    lbl_fx_overrides_builtin: "Заменяет встроенный эффект:",
+    lbl_fx_overrides_builtin_none: "Этот источник не заменяет ничего встроенного — оба эффекта будут работать вместе.",
+    lbl_builtin_overridden_by: "Заменён вашим эффектом:",
+    lbl_replaced_by_custom: "заменён",
     btn_fx_new: "+ Новый эффект",
     preset_impact: "Удар",
     hover_preset_impact: "Короткий импульс на событие — касание ВПП, выпуск шасси. Срабатывает один раз и затухает.",

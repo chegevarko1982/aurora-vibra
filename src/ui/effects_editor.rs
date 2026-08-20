@@ -31,7 +31,7 @@ use crate::file_dialog;
 use crate::game_state::PreviewLock;
 use crate::i18n::{Lang, Strings};
 use crate::log::LogBuffer;
-use crate::types::{ActiveGame, EffectMode, HidCmd};
+use crate::types::{ActiveGame, HidCmd};
 
 use super::UiState;
 use super::palette;
@@ -259,14 +259,6 @@ pub struct EditorCtx<'a> {
     /// `None`, если игра не обнаружена или телеметрии ещё не было ни разу.
     pub live: Option<TelemetryFrame>,
     pub active_game: ActiveGame,
-    pub effect_mode: &'a mut EffectMode,
-    /// Взводится в `true`, когда режим эффектов реально сменился в этом
-    /// кадре — `set_effect_mode` ниже обновляет только процессный атомик
-    /// (settings.rs), на диск ничего не пишет. Вызывающий код (`ui.rs`)
-    /// обязан после `show()` проверить флаг и вызвать
-    /// `UiState::save_global_settings()`, иначе выбор не переживёт
-    /// перезапуск приложения.
-    pub mode_changed: &'a mut bool,
     pub t: &'a Strings,
     pub lang: Lang,
     pub logs: &'a LogBuffer,
@@ -296,8 +288,16 @@ pub fn show(ui: &mut egui::Ui, st: &mut EditorState, cx: &mut EditorCtx) {
         st.selected_id = effects.first().map(|e| e.id.clone());
     }
 
-    show_mode_header(ui, st, cx);
-    ui.add_space(8.0);
+    // Одна строка вместо снесённого переключателя режимов: раздел обязан
+    // с первого взгляда объяснять, что встроенный набор никуда не делся и
+    // продолжает работать рядом (см. custom_fx::overrides). Что именно
+    // вытесняет ВЫБРАННЫЙ источник — говорит шаг 1 по месту.
+    ui.label(
+        RichText::new(cx.t.msg_fx_effects_coexist)
+            .italics()
+            .color(palette::TEXT_SECONDARY),
+    );
+    ui.add_space(6.0);
 
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
@@ -387,40 +387,6 @@ pub fn show(ui: &mut egui::Ui, st: &mut EditorState, cx: &mut EditorCtx) {
         st.dirty = false;
         st.last_save_at = Instant::now();
     }
-}
-
-/// Переключатель движка эффектов + постоянная строка состояния — пользователь
-/// обязан в любой момент видеть, какой движок сейчас реально ведёт моторы
-/// (встроенные и пользовательские эффекты взаимоисключающие, см.
-/// `types::EffectMode`).
-fn show_mode_header(ui: &mut egui::Ui, st: &mut EditorState, cx: &mut EditorCtx) {
-    ui.heading(cx.t.heading_effect_mode);
-    let mut mode = *cx.effect_mode;
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut mode, EffectMode::BuiltIn, cx.t.opt_mode_builtin)
-            .on_hover_text(cx.t.hover_effect_mode);
-        ui.radio_value(&mut mode, EffectMode::Custom, cx.t.opt_mode_custom)
-            .on_hover_text(cx.t.hover_effect_mode);
-    });
-    if mode != *cx.effect_mode {
-        *cx.effect_mode = mode;
-        crate::settings::set_effect_mode(mode);
-        *cx.mode_changed = true;
-        // Предпросмотр имеет смысл только в контексте текущего движка —
-        // при переключении режима глушим, а не оставляем PreviewLock висеть
-        // поверх уже неактуального состояния (см. `stop_preview`).
-        st.stop_preview(cx.tx_hid, cx.preview);
-    }
-
-    let muted = match *cx.effect_mode {
-        EffectMode::Custom => cx.t.msg_builtin_muted,
-        EffectMode::BuiltIn => cx.t.msg_custom_muted,
-    };
-    ui.label(
-        RichText::new(muted)
-            .italics()
-            .color(palette::TEXT_SECONDARY),
-    );
 }
 
 // ---------------------------------------------------------------------
@@ -861,6 +827,30 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
             });
         if let Some(src) = new_source {
             effect.source = src;
+        }
+
+        // Задача 1а: показываем СВЯЗЬ источник -> встроенный эффект ещё до
+        // того, как пользователь включит и сохранит этот эффект (см.
+        // doc-комментарий `super::static_primary_builtin_for`).
+        match super::static_primary_builtin_for(effect.source) {
+            Some(builtin) => {
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        cx.t.lbl_fx_overrides_builtin,
+                        super::builtin_effect_display_name(builtin, cx.t)
+                    ))
+                    .color(palette::STATUS_ATTENTION)
+                    .italics(),
+                );
+            }
+            None => {
+                ui.label(
+                    RichText::new(cx.t.lbl_fx_overrides_builtin_none)
+                        .color(palette::TEXT_SECONDARY)
+                        .italics(),
+                );
+            }
         }
 
         if effect.source == SourceId::Lvar {

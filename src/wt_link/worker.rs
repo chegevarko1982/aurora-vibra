@@ -33,7 +33,7 @@ use crate::wt_link::http::WtClient;
 use crate::wt_link::rumble::WtRumbleState;
 use crate::wt_link::vars::{self, WtVars};
 use crate::wt_link::weapon_profiles;
-use crate::{ActiveGame, ConfigShared, EffectMode, EffectsShared, HidCmd, LogBuffer, SimStatus};
+use crate::{ActiveGame, ConfigShared, EffectsShared, HidCmd, LogBuffer, SimStatus};
 
 /// Ритм опроса /state и /indicators, пока WT жив — 20 Гц, как дефолт
 /// recon-инструмента (wt_probe/cli.rs) и как частота отправки HID в
@@ -69,17 +69,16 @@ pub fn wt_worker(
 
     let session_start = Instant::now();
     let mut engine = WtRumbleState::new();
-    // Взаимоисключающий движок пользовательских эффектов (см.
-    // custom_fx::engine) — своё состояние независимое от `engine` выше,
-    // сбрасывается отдельно (потеря владения слотом / смена режима).
+    // Пользовательский движок эффектов (см. custom_fx::engine) — своё
+    // состояние независимое от `engine` выше, сбрасывается отдельно (потеря
+    // владения слотом). Оба движка теперь считаются КАЖДЫЙ тик одновременно
+    // (не режимы) — см. custom_fx::overrides для того, как их выходы
+    // сводятся.
     let mut custom_engine = CustomFxEngine::new();
     let mut ammo = AmmoTracker::new();
     let mut recorder = SessionRecorder::new();
     let mut client: Option<WtClient> = None;
     let mut liveness = Liveness::new(GRACE_PERIOD);
-    // Режим предыдущего тика — ловим МОМЕНТ переключения BuiltIn<->Custom для
-    // разового сброса (см. точку отправки HID ниже), не сравниваем впустую.
-    let mut last_effect_mode = crate::settings::effect_mode();
     // Фронт захвата PreviewLock — один раз нули на моторы в момент захвата,
     // дальше молчим, пока не отпустят (см. game_state::PreviewLock).
     let mut preview_was_held = false;
@@ -249,76 +248,65 @@ pub fn wt_worker(
                     } else {
                         preview_was_held = false;
 
-                        // Встроенный и пользовательский движки эффектов —
-                        // ВЗАИМОИСКЛЮЧАЮЩИЕ (см. doc-комментарий types::EffectMode):
-                        // два независимых движка на одних и тех же трёх моторах
-                        // давали бы непредсказуемое наложение, поэтому здесь именно
-                        // ВЫБОР считающего движка, а не смешивание их выходов. При
-                        // смене режима на лету — разовый сброс состояния ОБОИХ
-                        // движков и кадр нулей: без него эффект, активный в момент
-                        // переключения, застыл бы на моторе последним значением (тот
-                        // же приём, что уже используется выше при потере владения
-                        // слотом).
+                        // Встроенный и пользовательский движки эффектов больше НЕ
+                        // взаимоисключающие режимы (см. custom_fx::overrides) —
+                        // оба считаются каждый тик. Вытеснение точечное:
+                        // пользовательский эффект гасит ТОЛЬКО тот встроенный, для
+                        // которого его источник телеметрии основной (см.
+                        // doc-комментарий overrides.rs). Подавление применяется к
+                        // КОПИИ full_cfg.wt — WtRumbleState::step не в курсе, что
+                        // что-то подавлено, движок вибрации не тронут. Отдельного
+                        // кадра нулей на "смену режима" тут больше не нужно —
+                        // режима нет, обе стороны сами обнуляют свой вклад на этом
+                        // же тике, когда флаг выключен/эффект неактивен.
                         let full_cfg = config.get();
-                        let mode_now = crate::settings::effect_mode();
-                        if mode_now != last_effect_mode {
-                            engine.reset();
-                            custom_engine.reset();
-                            effects.clear_all();
-                            active_custom_ids.lock().clear();
-                            let _ = tx_hid.send(HidCmd::SendIntensity {
-                                joystick: 0,
-                                throttle_left: 0,
-                                throttle_right: 0,
-                            });
-                            last_effect_mode = mode_now;
-                        }
+                        let t_now = wt_vars.t;
+                        let aircraft = wt_vars.vehicle_type.clone();
+                        let custom_effects = custom_fx.get();
+                        let overridden = crate::custom_fx::overrides::overridden_builtins(
+                            &custom_effects,
+                            ActiveGame::Wt,
+                            &aircraft,
+                        );
+                        let mut suppressed_wt_cfg = full_cfg.wt;
+                        overridden.apply_to_wt_config(&mut suppressed_wt_cfg);
 
-                        match mode_now {
-                            EffectMode::BuiltIn => {
-                                let out = engine.step(
-                                    &wt_vars,
-                                    &full_cfg.wt,
-                                    hold.load(Ordering::Relaxed),
-                                );
-                                *last_wt_vars.lock() = Some(wt_vars);
-                                effects.apply_snapshot(&out.effects);
-                                active_custom_ids.lock().clear();
-                                let _ = tx_hid.send(HidCmd::SendIntensity {
-                                    joystick: out.joystick_intensity,
-                                    throttle_left: out.throttle_left_intensity,
-                                    throttle_right: out.throttle_right_intensity,
-                                });
-                            }
-                            EffectMode::Custom => {
-                                let t_now = wt_vars.t;
-                                let aircraft = wt_vars.vehicle_type.clone();
-                                *last_wt_vars.lock() = Some(wt_vars.clone());
-                                let frame = TelemetryFrame::Wt(wt_vars);
-                                let custom_effects = custom_fx.get();
-                                let out = custom_engine.step(
-                                    &frame,
-                                    t_now,
-                                    &custom_effects,
-                                    custom_fx.current_rev(),
-                                    &aircraft,
-                                    ActiveGame::Wt,
-                                    hold.load(Ordering::Relaxed),
-                                    full_cfg.max_output,
-                                );
-                                // Встроенный EffectsSnapshot в режиме Custom
-                                // заведомо пуст — Live Monitor подсвечивает
-                                // активность через active_custom_ids, а не
-                                // через effects.
-                                effects.clear_all();
-                                *active_custom_ids.lock() = out.active_ids;
-                                let _ = tx_hid.send(HidCmd::SendIntensity {
-                                    joystick: out.joystick,
-                                    throttle_left: out.throttle_left,
-                                    throttle_right: out.throttle_right,
-                                });
-                            }
-                        }
+                        let builtin_out =
+                            engine.step(&wt_vars, &suppressed_wt_cfg, hold.load(Ordering::Relaxed));
+
+                        let frame = TelemetryFrame::Wt(wt_vars.clone());
+                        let custom_out = custom_engine.step(
+                            &frame,
+                            t_now,
+                            &custom_effects,
+                            custom_fx.current_rev(),
+                            &aircraft,
+                            ActiveGame::Wt,
+                            hold.load(Ordering::Relaxed),
+                            full_cfg.max_output,
+                        );
+
+                        *last_wt_vars.lock() = Some(wt_vars);
+                        effects.apply_snapshot(&builtin_out.effects);
+                        *active_custom_ids.lock() = custom_out.active_ids;
+
+                        let _ = tx_hid.send(HidCmd::SendIntensity {
+                            joystick: crate::custom_fx::overrides::combine_channel(
+                                builtin_out.joystick_intensity,
+                                custom_out.joystick,
+                                full_cfg.max_output,
+                            ),
+                            throttle_left: crate::custom_fx::overrides::combine_channel(
+                                builtin_out.throttle_left_intensity,
+                                custom_out.throttle_left,
+                                full_cfg.max_output,
+                            ),
+                            throttle_right: crate::custom_fx::overrides::combine_channel(
+                                builtin_out.throttle_right_intensity,
+                                custom_out.throttle_right,
+                                full_cfg.max_output,
+                            ),
+                        });
                     }
                 }
             }

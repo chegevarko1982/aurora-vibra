@@ -809,17 +809,6 @@ impl GameOverride {
     }
 }
 
-/// Какой движок эффектов сейчас ведёт моторы. Встроенный набор и пользовательские
-/// эффекты — ВЗАИМОИСКЛЮЧАЮЩИЕ режимы, а не два слоя: два независимых движка на одних
-/// и тех же трёх моторах давали бы непредсказуемое наложение.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum EffectMode {
-    #[default]
-    BuiltIn,
-    Custom,
-}
-
 #[cfg(test)]
 mod game_override_tests {
     use super::*;
@@ -859,29 +848,8 @@ mod game_override_tests {
 }
 
 #[cfg(test)]
-mod effect_mode_tests {
+mod flight_vars_tests {
     use super::*;
-
-    #[test]
-    fn default_is_builtin() {
-        assert_eq!(EffectMode::default(), EffectMode::BuiltIn);
-    }
-
-    #[test]
-    fn serde_round_trip_builtin() {
-        let original = EffectMode::BuiltIn;
-        let json = serde_json::to_string(&original).unwrap();
-        let restored: EffectMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, restored);
-    }
-
-    #[test]
-    fn serde_round_trip_custom() {
-        let original = EffectMode::Custom;
-        let json = serde_json::to_string(&original).unwrap();
-        let restored: EffectMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, restored);
-    }
 
     #[test]
     fn serde_round_trip_flight_vars() {

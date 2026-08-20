@@ -122,7 +122,6 @@ fn main() -> Result<()> {
     aurora_vibra::settings::set_monitor_collapsed(monitor_collapsed);
     let game_override = settings_file.game_override;
     aurora_vibra::settings::set_game_override(game_override);
-    aurora_vibra::settings::set_effect_mode(settings_file.effect_mode);
     aurora_vibra::settings::set_simconnect_dll_path(settings_file.simconnect_dll_path.clone());
 
     let config = Arc::new(ConfigShared::new_with(settings_file.default.clone()));
@@ -305,7 +304,6 @@ fn main() -> Result<()> {
 
         custom_fx: custom_fx.clone(),
         active_custom_ids: active_custom_ids.clone(),
-        effect_mode: settings_file.effect_mode,
         fx_editor: Default::default(),
         preview_lock,
 
