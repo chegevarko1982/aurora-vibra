@@ -345,6 +345,13 @@ pub struct Strings {
     pub opt_fx_lvar_unit_custom: &'static str,
     pub lbl_fx_lvar_unit_custom: &'static str,
     pub msg_fx_lvar_msfs_only: &'static str,
+    // Диапазон значений LVAR (шаг 1) — единственный способ задать реальную
+    // шкалу графиков/слайдеров эффекта для своей переменной, см.
+    // custom_fx/model.rs::LvarSpec::range_lo/range_hi.
+    pub lbl_fx_lvar_range: &'static str,
+    pub lbl_fx_lvar_range_from: &'static str,
+    pub lbl_fx_lvar_range_to: &'static str,
+    pub hint_fx_lvar_range: &'static str,
     // Заголовки групп в выпадающем списке "1. Источник" (fx_source_select) —
     // разделяют источники MSFS/X-Plane, War Thunder и MSFS-only LVAR, чтобы
     // было видно, к какой игре относится строка. См. effects_editor.rs.
@@ -741,6 +748,10 @@ https://yoomoney.ru/to/410011348629282",
     opt_fx_lvar_unit_custom: "Custom…",
     lbl_fx_lvar_unit_custom: "Custom unit name",
     msg_fx_lvar_msfs_only: "Custom variables only exist in MSFS — games are locked to MSFS.",
+    lbl_fx_lvar_range: "Value range",
+    lbl_fx_lvar_range_from: "from",
+    lbl_fx_lvar_range_to: "to",
+    hint_fx_lvar_range: "Sets the scale of the graphs and threshold sliders — only you know the units of your variable.",
     hdr_fx_source_group_flight: "MSFS / X-Plane — flight parameters",
     hdr_fx_source_group_wt: "War Thunder",
     hdr_fx_source_group_lvar: "Microsoft Flight Simulator — custom variable",
@@ -1112,6 +1123,10 @@ https://yoomoney.ru/to/410011348629282",
     opt_fx_lvar_unit_custom: "Своя…",
     lbl_fx_lvar_unit_custom: "Название своей единицы",
     msg_fx_lvar_msfs_only: "Пользовательские переменные существуют только в MSFS — маска игр зафиксирована на MSFS.",
+    lbl_fx_lvar_range: "Диапазон значений",
+    lbl_fx_lvar_range_from: "от",
+    lbl_fx_lvar_range_to: "до",
+    hint_fx_lvar_range: "Задаёт шкалу графиков и слайдеров порогов: единицы своей переменной известны только вам.",
     hdr_fx_source_group_flight: "MSFS / X-Plane — параметры полёта",
     hdr_fx_source_group_wt: "War Thunder",
     hdr_fx_source_group_lvar: "Microsoft Flight Simulator — своя переменная",

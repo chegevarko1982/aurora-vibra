@@ -6,7 +6,7 @@
 //! структуры напрямую и сохраняет их тем же каналом, что и `RumbleConfig`
 //! (см. `settings.rs`).
 
-use crate::custom_fx::sources::SourceId;
+use crate::custom_fx::sources::{self, SourceId};
 use crate::types::ActiveGame;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -112,7 +112,7 @@ pub fn new_effect(name: String, source: SourceId) -> CustomEffect {
 /// единицу измерения явно (`"Number"`, `"Percent"`, `"Bool"`, `"Knots"`,
 /// ...) — регистрация переменной (этап 2, `sim/worker.rs`) без неё
 /// невозможна.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LvarSpec {
     /// Имя переменной ровно как ввёл пользователь, например
@@ -120,6 +120,55 @@ pub struct LvarSpec {
     pub name: String,
     /// Единица SimConnect для `AddToDataDefinition`, например `"Number"`.
     pub unit: String,
+    /// Нижняя и верхняя границы значений переменной — заданы пользователем
+    /// РУКАМИ (шаг 1 конструктора, `show_lvar_source_fields`), а не взяты из
+    /// статической таблицы: `SourceDef::default_range` для `SourceId::Lvar`
+    /// — заглушка `(0.0, 1.0)`, потому что программа физически не может
+    /// знать единицы и разумный диапазон ЧУЖОЙ переменной (это может быть
+    /// что угодно — узлы, литры топлива, произвольный счётчик 0..255).
+    ///
+    /// Эта пара — не просто подсказка для отрисовки: она и есть шкала ВСЕХ
+    /// графиков и слайдеров порога/гистерезиса/eps этого эффекта (см.
+    /// `effect_bounds` ниже, единственное место, которое их читает).
+    pub range_lo: f64,
+    pub range_hi: f64,
+}
+
+impl Default for LvarSpec {
+    fn default() -> Self {
+        // `#[derive(Default)]` дал бы `range_lo/range_hi == 0.0/0.0` —
+        // вырожденный диапазон, с которым делить дальше (слайдеры, перевод
+        // значения в пиксели) было бы либо панике, либо произволу — поэтому
+        // ручной `impl` с тем же (0.0, 1.0), что и заглушка
+        // `SourceDef::default_range` у `SourceId::Lvar`.
+        Self {
+            name: String::new(),
+            unit: String::new(),
+            range_lo: 0.0,
+            range_hi: 1.0,
+        }
+    }
+}
+
+/// Единственная точка "границы этого эффекта" — диапазон, который задаёт
+/// шкалу ВСЕХ графиков/слайдеров эффекта (мини-график шага 1, слайдеры
+/// порога/гистерезиса/eps шага 2, холст кривой шага 3, слайдер пробного
+/// значения шага "Предпросмотр"). Для `SourceId::Lvar` это то, что
+/// пользователь вписал в `LvarSpec::range_lo/range_hi` (единицы своей
+/// переменной знает только он), для остальных источников — статический
+/// `SourceDef::default_range`.
+///
+/// Результат нормализован: `hi <= lo` (например, пользователь ещё не
+/// поправил вырожденные поля "от/до" или руками отредактировал экспортный
+/// JSON) заменяется на `(lo, lo + 1.0)`, чтобы дальше по коду (перевод
+/// значения в пиксели, ширина слайдера) никогда не делить на ноль и не
+/// получать инвертированную шкалу.
+pub fn effect_bounds(effect: &CustomEffect) -> (f64, f64) {
+    let (lo, hi) = match (effect.source, effect.lvar.as_ref()) {
+        (SourceId::Lvar, Some(lvar)) => (lvar.range_lo, lvar.range_hi),
+        _ => sources::def(effect.source).default_range,
+    };
+    if hi <= lo { (lo, lo + 1.0) } else { (lo, hi) }
 }
 
 /// Для каких конвейеров телеметрии активен эффект. Отдельно от
@@ -271,6 +320,32 @@ impl ResponseCurve {
     pub fn sorted(&mut self) {
         self.points
             .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    /// Зажимает X всех точек в `bounds` — самолечение кривых, у которых
+    /// точки остались за пределами объявленного диапазона эффекта (старый
+    /// файл, сохранённый до того как `effect_bounds` перестал растягиваться
+    /// под точки кривой; либо руками отредактированный экспортный JSON).
+    /// После зажима несколько точек могут схлопнуться в один и тот же X
+    /// (например, все точки, ушедшие за верхнюю границу, зажмутся в неё) —
+    /// сортирует и выкидывает дубликаты по X, оставляя ПЕРВУЮ из них
+    /// (`sorted()` — стабильная сортировка, так что "первая" — та, что была
+    /// раньше в исходном порядке точек).
+    ///
+    /// Кривая обязана остаться валидной для `eval`/отрисовки: если после
+    /// зачистки точек меньше двух (пустая кривая, одна точка, либо все
+    /// точки схлопнулись в одну), пересобирает её прямой линией по
+    /// `bounds` — тот же смысл, что у `Default`/`linear`.
+    pub fn clamp_x_into(&mut self, bounds: (f64, f64)) {
+        let (lo, hi) = (bounds.0.min(bounds.1), bounds.0.max(bounds.1));
+        for p in &mut self.points {
+            p.x = p.x.clamp(lo, hi);
+        }
+        self.sorted();
+        self.points.dedup_by(|a, b| a.x == b.x);
+        if self.points.len() < 2 {
+            *self = Self::linear(lo, hi);
+        }
     }
 }
 
@@ -471,6 +546,8 @@ mod tests {
         fx.lvar = Some(LvarSpec {
             name: "L:A320_Gear_Nose".into(),
             unit: "Number".into(),
+            range_lo: -10.0,
+            range_hi: 250.0,
         });
         let json = serde_json::to_string(&fx).unwrap();
         let back: CustomEffect = serde_json::from_str(&json).unwrap();
@@ -503,5 +580,130 @@ mod tests {
         assert!(!mask.allows(ActiveGame::Xplane));
         assert!(mask.allows(ActiveGame::Wt));
         assert!(!mask.allows(ActiveGame::None));
+    }
+
+    // -------------------------------------------------------------
+    // LvarSpec::range_lo/range_hi + effect_bounds
+    // -------------------------------------------------------------
+
+    #[test]
+    fn lvar_spec_old_json_without_range_fields_defaults_to_0_1() {
+        // Файл, сохранённый до появления range_lo/range_hi, не содержит их в
+        // JSON вообще — обязаны читаться как 0.0/1.0 (LvarSpec::default), а
+        // НЕ как вырожденный 0.0/0.0, который дал бы derive(Default).
+        let spec = LvarSpec {
+            name: "L:Test".into(),
+            unit: "Number".into(),
+            range_lo: 0.0,
+            range_hi: 1.0,
+        };
+        let mut value = serde_json::to_value(&spec).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("range_lo");
+        obj.remove("range_hi");
+        let json = serde_json::to_string(&value).unwrap();
+        assert!(!json.contains("range_lo"));
+
+        let restored: LvarSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.range_lo, 0.0);
+        assert_eq!(restored.range_hi, 1.0);
+        assert!(restored.range_hi > restored.range_lo);
+    }
+
+    #[test]
+    fn effect_bounds_uses_source_default_range_for_builtin_source() {
+        let effect = new_effect("T".into(), SourceId::FlightBankDeg);
+        assert_eq!(
+            effect_bounds(&effect),
+            sources::def(SourceId::FlightBankDeg).default_range
+        );
+    }
+
+    #[test]
+    fn effect_bounds_uses_lvar_spec_range_for_lvar_source() {
+        let mut effect = new_effect("T".into(), SourceId::Lvar);
+        effect.lvar = Some(LvarSpec {
+            name: "L:Test".into(),
+            unit: "Number".into(),
+            range_lo: -20.0,
+            range_hi: 340.0,
+        });
+        assert_eq!(effect_bounds(&effect), (-20.0, 340.0));
+    }
+
+    #[test]
+    fn effect_bounds_normalizes_degenerate_range() {
+        let mut effect = new_effect("T".into(), SourceId::Lvar);
+        effect.lvar = Some(LvarSpec {
+            name: "L:Test".into(),
+            unit: "Number".into(),
+            range_lo: 5.0,
+            range_hi: 5.0,
+        });
+        let (lo, hi) = effect_bounds(&effect);
+        assert!(hi > lo);
+        assert_eq!(lo, 5.0);
+    }
+
+    #[test]
+    fn effect_bounds_falls_back_to_default_range_when_lvar_source_has_no_spec() {
+        // effect.source == Lvar, но effect.lvar ещё None (пользователь только
+        // что переключился и ничего не вписал) — не должно паниковать.
+        let effect = new_effect("T".into(), SourceId::Lvar);
+        let (lo, hi) = effect_bounds(&effect);
+        assert!(hi > lo);
+    }
+
+    #[test]
+    fn clamp_x_into_clamps_sorts_and_dedups_user_file_case() {
+        // Ровно случай из реального файла пользователя: источник когда-то
+        // сменился с крена (-90) на приборную скорость (400) и обратно на
+        // LVAR — точки кривой накопили мусор от обоих.
+        let mut curve = ResponseCurve {
+            points: vec![
+                CurvePoint { x: -90.0, y: 0.0 },
+                CurvePoint { x: 170.6, y: 0.5 },
+                CurvePoint { x: 400.0, y: 1.0 },
+            ],
+        };
+        curve.clamp_x_into((0.0, 100.0));
+
+        assert!(curve.points.len() >= 2);
+        for p in &curve.points {
+            assert!(
+                (0.0..=100.0).contains(&p.x),
+                "точка x={} вышла за границы 0..=100",
+                p.x
+            );
+        }
+        // Отсортированы и без дубликатов по X.
+        for w in curve.points.windows(2) {
+            assert!(w[0].x < w[1].x);
+        }
+    }
+
+    #[test]
+    fn clamp_x_into_rebuilds_linear_when_all_points_collapse() {
+        // Все точки за одной и той же границей — после зажима и дедупа
+        // осталась бы одна точка (или ноль), кривая обязана пересобраться
+        // прямой линией, а не остаться недействительной.
+        let mut curve = ResponseCurve {
+            points: vec![
+                CurvePoint { x: 500.0, y: 0.0 },
+                CurvePoint { x: 600.0, y: 1.0 },
+            ],
+        };
+        curve.clamp_x_into((0.0, 100.0));
+        assert_eq!(curve.points.len(), 2);
+        assert_eq!(curve.points[0].x, 0.0);
+        assert_eq!(curve.points[1].x, 100.0);
+    }
+
+    #[test]
+    fn clamp_x_into_is_noop_when_points_already_inside_bounds() {
+        let mut curve = ResponseCurve::linear(10.0, 90.0);
+        let before = curve.clone();
+        curve.clamp_x_into((0.0, 100.0));
+        assert_eq!(curve, before);
     }
 }

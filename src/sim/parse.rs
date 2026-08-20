@@ -644,6 +644,7 @@ mod tests {
             e.lvar = Some(LvarSpec {
                 name: name.to_string(),
                 unit: unit.to_string(),
+                ..Default::default()
             });
             e
         }

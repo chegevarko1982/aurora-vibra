@@ -962,6 +962,7 @@ mod tests {
         effect.lvar = Some(crate::custom_fx::model::LvarSpec {
             name: "L:A320_Gear_Nose".into(),
             unit: "Number".into(),
+            ..Default::default()
         });
         effect.trigger = Trigger::Always;
         effect.curve = ResponseCurve::linear(0.0, 1000.0);
@@ -988,6 +989,7 @@ mod tests {
         effect.lvar = Some(crate::custom_fx::model::LvarSpec {
             name: "L:Unknown_Var".into(),
             unit: "Number".into(),
+            ..Default::default()
         });
         effect.trigger = Trigger::Always;
         effect.curve = flat_curve(1.0);
@@ -1034,6 +1036,7 @@ mod tests {
         effect.lvar = Some(crate::custom_fx::model::LvarSpec {
             name: "L:A320_Gear_Nose".into(),
             unit: "Number".into(),
+            ..Default::default()
         });
         effect.trigger = Trigger::Always;
         effect.curve = flat_curve(1.0);

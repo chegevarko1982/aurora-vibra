@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 
 use crate::custom_fx::model::{CustomEffect, new_effect};
+use crate::custom_fx::sources::SourceId;
 
 const FILE_NAME: &str = "AuroraVibra.effects.json";
 
@@ -121,12 +122,54 @@ fn local_appdata_path() -> Option<PathBuf> {
 pub fn load() -> Option<Vec<CustomEffect>> {
     for path in candidate_paths() {
         if let Ok(data) = std::fs::read_to_string(&path)
-            && let Ok(effects) = serde_json::from_str::<Vec<CustomEffect>>(&data)
+            && let Ok(mut effects) = serde_json::from_str::<Vec<CustomEffect>>(&data)
         {
+            migrate_lvar_ranges(&mut effects);
             return Some(effects);
         }
     }
     None
+}
+
+/// Миграция для файлов, сохранённых ДО того, как у LVAR появился явный
+/// диапазон (`LvarSpec::range_lo/range_hi`, см. `custom_fx/model.rs`). Такой
+/// файл читается с диапазоном по умолчанию `0.0..1.0` (`LvarSpec::default`),
+/// а реальная кривая эффекта при этом вполне может быть построена совсем на
+/// других числах — раньше ось X сама растягивалась под точки кривой
+/// (`curve_x_bounds` в `ui/effects_editor.rs`, теперь убрана), так что
+/// пользователь мог годами накапливать кривую в единицах то одного, то
+/// другого источника, которым когда-то пробовал LVAR.
+///
+/// Расширяет диапазон эффекта до фактического размаха точек его кривой —
+/// НЕ трогает диапазон, если он уже покрывает все точки. Так пользователь
+/// увидит в полях "от/до" (шаг 1 конструктора) те числа, которые фактически
+/// есть в его кривой, и сможет поправить их руками на настоящие единицы
+/// переменной — вместо того чтобы молча потерять настроенную кривую при
+/// первом же зажиме (`ResponseCurve::clamp_x_into`, шаг 3).
+fn migrate_lvar_ranges(effects: &mut [CustomEffect]) {
+    for effect in effects.iter_mut() {
+        if effect.source != SourceId::Lvar {
+            continue;
+        }
+        let points = &effect.curve.points;
+        if points.is_empty() {
+            continue;
+        }
+        let mut lo = points[0].x;
+        let mut hi = points[0].x;
+        for p in points {
+            lo = lo.min(p.x);
+            hi = hi.max(p.x);
+        }
+        if let Some(lvar) = effect.lvar.as_mut() {
+            if lo < lvar.range_lo {
+                lvar.range_lo = lo;
+            }
+            if hi > lvar.range_hi {
+                lvar.range_hi = hi;
+            }
+        }
+    }
 }
 
 /// Сохраняет список эффектов на диск. Порядок фолбэков — тот же, что у
@@ -320,5 +363,66 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // -------------------------------------------------------------
+    // Задача C: миграция диапазона LVAR
+    // -------------------------------------------------------------
+
+    #[test]
+    fn migrate_lvar_ranges_expands_default_range_to_cover_curve_points() {
+        use crate::custom_fx::model::{CurvePoint, LvarSpec, ResponseCurve};
+
+        let mut e = new_effect("T".into(), SourceId::Lvar);
+        // Диапазон по умолчанию, как у файла, сохранённого ДО появления
+        // range_lo/range_hi (LvarSpec::default даёт ровно 0.0..1.0).
+        e.lvar = Some(LvarSpec {
+            name: "L:A320_Gear_Nose".into(),
+            unit: "Number".into(),
+            ..LvarSpec::default()
+        });
+        e.curve = ResponseCurve {
+            points: vec![
+                CurvePoint { x: -90.0, y: 0.0 },
+                CurvePoint { x: 170.6, y: 0.5 },
+                CurvePoint { x: 400.0, y: 1.0 },
+            ],
+        };
+        let mut effects = vec![e];
+
+        migrate_lvar_ranges(&mut effects);
+
+        let lvar = effects[0].lvar.as_ref().unwrap();
+        assert_eq!(lvar.range_lo, -90.0);
+        assert_eq!(lvar.range_hi, 400.0);
+    }
+
+    #[test]
+    fn migrate_lvar_ranges_does_not_shrink_an_already_wide_range() {
+        use crate::custom_fx::model::{LvarSpec, ResponseCurve};
+
+        let mut e = new_effect("T".into(), SourceId::Lvar);
+        e.lvar = Some(LvarSpec {
+            name: "L:Test".into(),
+            unit: "Number".into(),
+            range_lo: -1000.0,
+            range_hi: 1000.0,
+        });
+        e.curve = ResponseCurve::linear(0.0, 10.0);
+        let mut effects = vec![e];
+
+        migrate_lvar_ranges(&mut effects);
+
+        let lvar = effects[0].lvar.as_ref().unwrap();
+        assert_eq!(lvar.range_lo, -1000.0);
+        assert_eq!(lvar.range_hi, 1000.0);
+    }
+
+    #[test]
+    fn migrate_lvar_ranges_ignores_non_lvar_effects() {
+        let mut effects = vec![new_effect("T".into(), SourceId::FlightAirspeedKn)];
+        // Не должно паниковать и не должно трогать effect.lvar (остаётся None).
+        migrate_lvar_ranges(&mut effects);
+        assert!(effects[0].lvar.is_none());
     }
 }

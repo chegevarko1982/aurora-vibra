@@ -22,7 +22,7 @@ use egui::{Color32, Rect, RichText, Sense, Vec2};
 use crate::custom_fx::engine;
 use crate::custom_fx::model::{
     CurvePoint, CustomEffect, GameMask, LvarSpec, MAX_SHAPE_FREQ_HZ, MixMode, ResponseCurve, Shape,
-    Trigger, new_effect,
+    Trigger, effect_bounds, new_effect,
 };
 use crate::custom_fx::player::{self, Session, SessionFrame};
 use crate::custom_fx::sources::{self, SOURCES, SourceDef, SourceId, SourceKind, TelemetryFrame};
@@ -850,7 +850,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
                 }
             });
         if let Some(src) = new_source {
-            effect.source = src;
+            apply_source_change(effect, src);
         }
 
         // Задача 1а: показываем СВЯЗЬ источник -> встроенный эффект ещё до
@@ -912,7 +912,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
         draw_mini_graph(
             ui,
             &st.live_history,
-            curve_x_bounds(&effect.curve, def.default_range),
+            effect_bounds(effect),
             MINI_GRAPH_HEIGHT,
             TriggerOverlay::None,
             cx.t.lbl_fx_no_signal,
@@ -972,6 +972,41 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
     });
 }
 
+/// Применяет смену источника на шаге 1: переустанавливает `effect.source` и,
+/// если источник РЕАЛЬНО изменился (не повторный клик на уже выбранный),
+/// пересобирает `curve`/`trigger` под диапазон нового источника. Старые
+/// числа были в единицах ПРЕЖНЕГО источника (узлы, градусы, проценты...) —
+/// оставлять их как есть значит показывать пользователю бессмысленную ось
+/// (тот самый баг из задачи: LVAR с точками -90/170.6/400, оставшимися от
+/// крена и приборной скорости).
+///
+/// Кривая всегда пересобирается ПРЯМОЙ ЛИНИЕЙ по новым границам — не
+/// пересчитывается пропорционально из старой (осознанное решение
+/// заказчика: пропорциональный пересчёт молча подсовывал бы форму, которую
+/// пользователь не рисовал). Тип триггера (`Above`/`Between`/...) сохраняется
+/// — пользователь выбирал его осознанно — а числовые поля сбрасываются в
+/// разумные дефолты для нового диапазона (`default_trigger_for_kind`),
+/// потому что число, осмысленное для узлов, бессмысленно для градусов.
+///
+/// Вынесена чистой функцией (без egui) ради юнит-теста — `step_source`
+/// только вызывает её.
+fn apply_source_change(effect: &mut CustomEffect, new_source: SourceId) {
+    if effect.source == new_source {
+        return;
+    }
+    let old_trigger_kind = trigger_kind_of(&effect.trigger);
+    effect.source = new_source;
+    if new_source == SourceId::Lvar && effect.lvar.is_none() {
+        effect.lvar = Some(LvarSpec {
+            unit: DEFAULT_LVAR_UNIT.to_string(),
+            ..LvarSpec::default()
+        });
+    }
+    let bounds = effect_bounds(effect);
+    effect.curve = ResponseCurve::linear(bounds.0, bounds.1);
+    effect.trigger = default_trigger_for_kind(old_trigger_kind, bounds);
+}
+
 /// Дополнительные поля шага 1 для `SourceId::Lvar` (задача 3, custom LVAR
 /// source): имя переменной + подсказка, где его искать в симуляторе (пункт
 /// 1 задачи), подсказка про типичный префикс `L:` (пункт 5), и единица
@@ -988,6 +1023,7 @@ fn show_lvar_source_fields(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut Custo
     let mut spec = effect.lvar.clone().unwrap_or_else(|| LvarSpec {
         name: String::new(),
         unit: DEFAULT_LVAR_UNIT.to_string(),
+        ..LvarSpec::default()
     });
 
     ui.horizontal(|ui| {
@@ -1044,6 +1080,27 @@ fn show_lvar_source_fields(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut Custo
             ui.text_edit_singleline(&mut spec.unit);
         });
     }
+
+    // Задача B/E: единственный способ задать реальный диапазон LVAR — этот
+    // эффект сам определяет свой `effect_bounds` из этих двух чисел (см.
+    // doc-комментарий `LvarSpec::range_lo/range_hi`). Программа не может
+    // предложить разумный дефолт сама — единицы чужой переменной известны
+    // только пользователю.
+    ui.horizontal(|ui| {
+        ui.label(cx.t.lbl_fx_lvar_range);
+        ui.label(cx.t.lbl_fx_lvar_range_from);
+        ui.add(egui::DragValue::new(&mut spec.range_lo).speed(1.0));
+        ui.label(cx.t.lbl_fx_lvar_range_to);
+        ui.add(egui::DragValue::new(&mut spec.range_hi).speed(1.0));
+    });
+    if spec.range_hi <= spec.range_lo {
+        spec.range_hi = spec.range_lo + 1.0;
+    }
+    ui.label(
+        RichText::new(cx.t.hint_fx_lvar_range)
+            .small()
+            .color(palette::TEXT_DISABLED),
+    );
 
     effect.lvar = Some(spec);
 }
@@ -1114,10 +1171,10 @@ fn trigger_kind_label(k: TriggerKind, t: &Strings) -> &'static str {
 }
 
 /// `bounds` — уже посчитанные вызывающей стороной границы (обычно
-/// `curve_x_bounds(&effect.curve, def.default_range)`), а не сам `SourceDef`:
-/// для `SourceId::Lvar` `default_range` — заглушка 0..1, реальный диапазон
-/// живёт в кривой отклика эффекта, поэтому новый триггер должен создаваться
-/// уже в правильном (расширенном кривой) диапазоне.
+/// `effect_bounds(effect)`), а не сам `SourceDef`: для `SourceId::Lvar`
+/// `default_range` — заглушка 0..1, реальный диапазон — то, что пользователь
+/// вписал в `LvarSpec::range_lo/range_hi`, поэтому новый триггер должен
+/// создаваться уже в правильном диапазоне.
 fn default_trigger_for_kind(k: TriggerKind, bounds: (f64, f64)) -> Trigger {
     let (lo, hi) = bounds;
     let mid = (lo + hi) / 2.0;
@@ -1166,13 +1223,12 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
         ui.label(RichText::new(cx.t.step_fx_when).strong().size(15.0));
         ui.add_space(4.0);
 
-        let def = sources::def(effect.source);
-        // Задача B: для SourceId::Lvar def.default_range — заглушка 0..1;
-        // реальный рабочий диапазон живёт в кривой отклика эффекта (см.
-        // curve_x_bounds). Считаем ОДИН раз ДО match, потому что дальше
-        // effect.curve заимствовать уже нельзя — effect.trigger занят
-        // изменяемым match &mut effect.trigger.
-        let bounds = curve_x_bounds(&effect.curve, def.default_range);
+        // Задача B: для SourceId::Lvar статический def.default_range —
+        // заглушка 0..1; реальный диапазон эффекта — то, что пользователь
+        // вписал в поля "от/до" шага 1 (см. `effect_bounds`). Считаем ОДИН
+        // раз ДО match, потому что дальше effect.trigger занят изменяемым
+        // match &mut effect.trigger.
+        let bounds = effect_bounds(effect);
         let cur_kind = trigger_kind_of(&effect.trigger);
         let mut new_kind = None;
         egui::ComboBox::from_id_salt("fx_trigger_select")
@@ -1262,7 +1318,26 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
         ui.add_space(4.0);
 
         let def = sources::def(effect.source);
-        let bounds = curve_x_bounds(&effect.curve, def.default_range);
+        let bounds = effect_bounds(effect);
+        // Задача C, пункт 2: ось X больше не растягивается под точки кривой
+        // (см. doc-комментарий `effect_bounds`) — точка за её пределами
+        // была бы невидима и недостижима мышью. Зажимаем перед отрисовкой
+        // холста — так старый файл, ручная правка JSON или кривая,
+        // оставшаяся от предыдущего источника (см. `apply_source_change`),
+        // самолечатся прямо на экране, без отдельной кнопки "Починить". На
+        // уже валидной кривой — no-op.
+        //
+        // Пропускаем это ТОЛЬКО пока где-то в UI идёт активное
+        // перетаскивание (`dragged_id`): сортировка внутри `clamp_x_into`
+        // может поменять порядок точек в массиве, а точки холста ниже
+        // идентифицируются по ПОЗИЦИОННОМУ индексу
+        // (`response.id.with(("fx_curve_point", i))`) — пересортировка
+        // прямо посреди перетаскивания незаметно подменила бы точку под
+        // курсором на другую. Сама сортировка на перетаскивание не влияет:
+        // `sorted()` там и так намеренно отложен до `drag_stopped()`.
+        if ui.ctx().dragged_id().is_none() {
+            effect.curve.clamp_x_into(bounds);
+        }
         let y_bounds = (0.0, 1.0);
 
         let desired = Vec2::new(ui.available_width(), CURVE_CANVAS_HEIGHT);
@@ -1665,14 +1740,14 @@ fn step_preview(
         ui.add_space(4.0);
 
         let def = sources::def(effect.source);
-        // Диапазон слайдера берём из КРИВОЙ эффекта (тот же `curve_x_bounds`,
-        // по которому нарисована ось X в шаге 3), а не из статического
-        // `default_range` источника. У `Lvar` этот статический диапазон —
-        // заглушка 0..1, потому что реальные единицы своей переменной знает
-        // только пользователь: слайдер стоял в 0..1, кривая жила в 0..400, и
+        // Диапазон слайдера берём через `effect_bounds` (та же точка правды,
+        // что и у оси X шага 3), а не из статического `default_range`
+        // источника. У `Lvar` этот статический диапазон — заглушка 0..1,
+        // потому что реальные единицы своей переменной знает только
+        // пользователь: слайдер стоял в 0..1, кривая жила в 0..400, и
         // предпросмотр честно отдавал на моторы ноль при любом положении
         // ползунка — выглядело как "кнопка не работает".
-        let (lo, hi) = curve_x_bounds(&effect.curve, def.default_range);
+        let (lo, hi) = effect_bounds(effect);
         if st.test_value_source != Some(effect.source)
             || st.test_value_effect.as_deref() != Some(effect.id.as_str())
         {
@@ -2310,7 +2385,7 @@ fn draw_session_graph(
 
 /// Диапазон оси X графика записи: 0..`duration_s`. Вырожденная (нулевая
 /// длительность — например, запись из одного кадра) сессия не должна
-/// ломать `map_range` делением на ноль, тот же приём, что `curve_x_bounds`.
+/// ломать `map_range` делением на ноль, тот же приём, что `effect_bounds`.
 fn session_x_bounds(duration_s: f64) -> (f64, f64) {
     if duration_s <= 0.0 {
         (0.0, 1.0)
@@ -2450,21 +2525,6 @@ fn unique_effect_name(base: &str, effects: &[CustomEffect]) -> String {
     }
 }
 
-/// Диапазон оси X холста кривой отклика: базовый диапазон источника,
-/// расширенный, если пользователь руками утащил точку за его пределы —
-/// иначе такую точку было бы физически не видно (и не за что схватить).
-fn curve_x_bounds(curve: &ResponseCurve, default_range: (f64, f64)) -> (f64, f64) {
-    let (mut lo, mut hi) = default_range;
-    for p in &curve.points {
-        lo = lo.min(p.x);
-        hi = hi.max(p.x);
-    }
-    if hi <= lo {
-        hi = lo + 1.0;
-    }
-    (lo, hi)
-}
-
 /// Линейно отображает `value` из `[in_lo, in_hi]` в `[out_lo, out_hi]` —
 /// общий примитив перевода "значение <-> пиксель" для всех трёх графиков
 /// модуля. Вырожденный входной диапазон (`in_hi == in_lo`) не делит на
@@ -2580,32 +2640,6 @@ mod tests {
     }
 
     #[test]
-    fn curve_x_bounds_keeps_default_range_when_points_inside() {
-        let curve = ResponseCurve::linear(10.0, 20.0);
-        assert_eq!(curve_x_bounds(&curve, (0.0, 100.0)), (0.0, 100.0));
-    }
-
-    #[test]
-    fn curve_x_bounds_expands_for_out_of_range_points() {
-        let curve = ResponseCurve {
-            points: vec![
-                CurvePoint { x: -50.0, y: 0.0 },
-                CurvePoint { x: 500.0, y: 1.0 },
-            ],
-        };
-        assert_eq!(curve_x_bounds(&curve, (0.0, 400.0)), (-50.0, 500.0));
-    }
-
-    #[test]
-    fn curve_x_bounds_never_degenerates() {
-        let curve = ResponseCurve {
-            points: vec![CurvePoint { x: 5.0, y: 0.0 }],
-        };
-        let (lo, hi) = curve_x_bounds(&curve, (5.0, 5.0));
-        assert!(hi > lo);
-    }
-
-    #[test]
     fn source_label_switches_by_language_and_appends_unit() {
         let def = sources::def(SourceId::FlightAirspeedKn);
         assert!(source_label(def, Lang::En).contains("kn"));
@@ -2649,6 +2683,91 @@ mod tests {
             Trigger::Between { lo, hi } => assert!(lo <= hi),
             _ => panic!("expected Between"),
         }
+    }
+
+    // -------------------------------------------------------------
+    // Задача D: пересборка curve/trigger при смене источника
+    // -------------------------------------------------------------
+
+    #[test]
+    fn apply_source_change_rebuilds_curve_and_keeps_trigger_kind_in_new_bounds() {
+        // Ровно случай из задачи: Airspeed (0..400) с Above{200.0} ->
+        // Flaps (0..100) — кривая обязана целиком лечь в 0..=100, а триггер
+        // остаться тем же ТИПОМ (Above), но с числом внутри нового диапазона.
+        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        e.trigger = Trigger::Above {
+            value: 200.0,
+            hysteresis: 5.0,
+        };
+        e.curve = ResponseCurve::linear(0.0, 400.0);
+
+        apply_source_change(&mut e, SourceId::FlightFlapsPct);
+
+        assert_eq!(e.source, SourceId::FlightFlapsPct);
+        for p in &e.curve.points {
+            assert!(
+                (0.0..=100.0).contains(&p.x),
+                "точка кривой x={} вышла за новый диапазон 0..=100",
+                p.x
+            );
+        }
+        match e.trigger {
+            Trigger::Above { value, .. } => {
+                assert!(
+                    (0.0..=100.0).contains(&value),
+                    "порог {value} вышел за новый диапазон 0..=100"
+                );
+            }
+            other => panic!("expected Trigger::Above, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_source_change_is_noop_when_source_unchanged() {
+        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        e.trigger = Trigger::Above {
+            value: 123.0,
+            hysteresis: 4.0,
+        };
+        let curve_before = e.curve.clone();
+        let trigger_before = e.trigger;
+
+        apply_source_change(&mut e, SourceId::FlightAirspeedKn);
+
+        assert_eq!(e.curve, curve_before);
+        assert_eq!(e.trigger, trigger_before);
+    }
+
+    #[test]
+    fn apply_source_change_to_lvar_creates_default_spec_with_0_1_range() {
+        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        apply_source_change(&mut e, SourceId::Lvar);
+
+        assert_eq!(e.source, SourceId::Lvar);
+        let lvar = e.lvar.as_ref().expect("lvar must be created");
+        assert_eq!(lvar.range_lo, 0.0);
+        assert_eq!(lvar.range_hi, 1.0);
+        assert_eq!(e.curve, ResponseCurve::linear(0.0, 1.0));
+    }
+
+    #[test]
+    fn apply_source_change_to_lvar_keeps_existing_spec_and_its_range() {
+        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        // Симулируем эффект, у которого lvar уже был заполнен раньше (был
+        // Lvar, переключили в другую сторону и обратно) — существующий
+        // диапазон не должен тереться новым дефолтом.
+        e.lvar = Some(LvarSpec {
+            name: "L:Custom".into(),
+            unit: "Number".into(),
+            range_lo: -50.0,
+            range_hi: 50.0,
+        });
+        apply_source_change(&mut e, SourceId::Lvar);
+
+        let lvar = e.lvar.as_ref().unwrap();
+        assert_eq!(lvar.range_lo, -50.0);
+        assert_eq!(lvar.range_hi, 50.0);
+        assert_eq!(e.curve, ResponseCurve::linear(-50.0, 50.0));
     }
 
     // -------------------------------------------------------------
@@ -2965,6 +3084,7 @@ mod tests {
         e.lvar = Some(LvarSpec {
             name: "L:A320_Gear_Nose".to_string(),
             unit: "Number".to_string(),
+            ..Default::default()
         });
         assert_eq!(read_effect_value(&e, &frame), Some(42.0));
     }
@@ -2983,6 +3103,7 @@ mod tests {
         e_blank.lvar = Some(LvarSpec {
             name: "   ".to_string(),
             unit: "Number".to_string(),
+            ..Default::default()
         });
         assert_eq!(read_effect_value(&e_blank, &frame), None);
     }
