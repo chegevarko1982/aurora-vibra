@@ -1,5 +1,51 @@
 # Changelog
 
+## v4.5.0
+
+Feature release. Until now the set of tactile effects was fixed in code: you could switch an
+effect on, set its strength, and choose which motors it drove — but if the effect you wanted
+did not exist, that was the end of it. This release adds an **Effect Editor**, where an effect
+is built from scratch with the mouse, and effects bound to **custom MSFS variables (L:Vars)**
+that you name yourself.
+
+**New:**
+- **Effect Editor.** A new section in the main window builds an effect in four numbered steps,
+  each with its own graph: pick a telemetry source (32 of them across the three simulators),
+  choose when it fires (threshold with hysteresis, range, boolean, "while changing"), draw the
+  response curve by dragging points, and pick the vibration shape and the motors it drives.
+- **Built-in and custom effects are a choice, not a mixture.** The two engines are mutually
+  exclusive: whichever one is selected drives the motors, and the other is silent. Two
+  independent engines feeding the same three motors would overlap unpredictably. The active
+  engine is stated at the top of the editor, the switch survives a restart, and while custom
+  effects are active the built-in sections carry a banner saying their settings do not apply.
+- **Four starting templates** — *Impact*, *Hum*, *Pulsation*, *Growing*. The numbers are not
+  invented: the impact envelope comes from the gear-touchdown effect and the hum from the
+  gunfire preset, both already calibrated on real hardware.
+- **Two ways to preview.** *Play on device* drives your hardware directly — the simulator
+  links hand over the output channel and fall silent while it runs. Event-driven effects
+  repeat on a loop during preview, so a single 0.5 s thump can actually be dialled in by
+  feel instead of firing once and going quiet. *Replay a recording* runs a captured flight
+  through the effect offline and plots the result, with a scrub bar and playback on hardware.
+- **Effects bound to your own MSFS variables.** Type a variable name (find it in the
+  simulator's own developer menu), pick its unit, and build an effect on it. Name and unit
+  travel inside the effect itself, so an exported effect still works for whoever you send it
+  to. Values are recorded into telemetry sessions, so such an effect can be replayed offline.
+- **Import and export.** Effects are shared as a plain JSON file; importing regenerates
+  colliding identifiers instead of overwriting what you already have.
+- **The session recorder now covers all three simulators**, not just War Thunder. War Thunder
+  files are written in exactly the same format as before.
+
+**Note:**
+- Vibration frequency is capped at 6.5 Hz throughout, including on imported files. The device
+  channel updates every 50 ms, so anything above that limit aliases into noise instead of
+  producing a faster vibration.
+- Built-in effects, their calibration, telemetry handling, and device output are untouched.
+  Settings and aircraft profiles carry over. An installation that never opens the new section
+  behaves exactly as v4.4.0 did, and recordings made by it are byte-identical.
+- Custom effects are a construction kit, not a set of presets: a freshly built effect vibrates
+  exactly as you configured it, including continuously if you leave it without a threshold.
+  The editor warns about that case rather than preventing it.
+
 ## v4.4.0
 
 Readability release. A tester reported being unable to use the application at all: outside of the red **Stop** button and the top bar, every label read as "gray-black on black", and the section list on the left only appeared when the mouse hovered over it. This release makes the interface legible, and self-explanatory where it previously relied on hover tooltips.

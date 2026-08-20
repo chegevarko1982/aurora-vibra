@@ -107,6 +107,9 @@ test one.
   areas) keeps physical vibration, cockpit instruments, and sound modules in sync.
 - Add-on-specific variables are read unconditionally and self-neutralise on aircraft that
   do not define them, so nothing has to be toggled per flight.
+- **Not limited to the add-ons listed here:** since v4.5.0 you can name an L:Var yourself in
+  the Effect Editor and build an effect on it, without waiting for the aircraft to be
+  supported explicitly. See feature 7 below.
 
 ### 2. 🛬 Progressive runway & taxi physics (Taxi & Takeoff Thump)
 - **Seamless speed blending:** a physical model turns individual runway-joint thumps
@@ -155,6 +158,22 @@ test one.
   per-aircraft profiles, a collapsible Live Monitor, tray integration with
   "close to tray", a single-instance guard, and an English/Russian language switch.
 
+### 7. 🛠️ Build your own effects (Effect Editor)
+- **An effect from scratch, with the mouse:** pick a telemetry source, set when it fires
+  (threshold with hysteresis, range, boolean, or "while the value is changing"), drag the
+  response curve into shape, choose the vibration form and the motors it drives. Four steps,
+  each with its own graph, so you can see what you are building rather than guess.
+- **Any MSFS variable you can name:** type an L:Var (the simulator's own developer menu lists
+  them), pick its unit, and drive an effect from it. The name travels inside the effect, so an
+  exported effect keeps working for whoever you share it with.
+- **Feel it before you fly:** *Play on device* drives your hardware straight from the editor —
+  event effects repeat on a loop so a half-second thump can be tuned by feel. *Replay a
+  recording* runs a captured flight through the effect offline and plots the result.
+- **Start from a template** — *Impact*, *Hum*, *Pulsation*, *Growing* — carrying the numbers of
+  effects already calibrated on real hardware, then adjust from there.
+- **Built-in or custom, never both at once:** the two engines are mutually exclusive, and the
+  active one is stated in plain text. Effects are shared as a plain JSON file.
+
 ---
 
 ## 🎮 Simulator support in detail
@@ -202,8 +221,9 @@ Eight effects: **Weapon 1** and **Weapon 2** gunfire, **Stall buffet**,
   learner works out on its own which counters belong to which weapon group.
 - **Per-vehicle Vne table** covering ~1300 vehicles, plus flap- and gear-position-aware
   overspeed windows.
-- **Built-in session recorder** (Options) captures raw telemetry sessions for tuning and
-  regression tests.
+- **Built-in session recorder** (Options) captures raw telemetry sessions from any of the
+  three simulators, for tuning, regression tests, and replaying a flight through an effect
+  you are building in the Effect Editor.
 
 ---
 
