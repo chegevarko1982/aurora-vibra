@@ -40,9 +40,21 @@ use crate::{
     ActiveGame, ConfigShared, EffectsShared, FlightVars, HidCmd, LogBuffer, RumbleEngine, SimStatus,
 };
 
-/// Ритм опроса, пока X-Plane жив — 20 Гц, тот же такт, что у WT-конвейера и
-/// у отправки HID (см. `hid/worker.rs`).
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Тик движка, пока X-Plane жив — 50 Гц (20 мс), тот же такт, что у
+/// HID-отправки (см. `hid::worker::SEND_INTERVAL`). UDP-сокет RREF полностью
+/// неблокирующий (см. `RrefClient::connect`), поэтому на каждом тике `drain`
+/// вычерпывает всё, что накопилось в сокете, и сразу отдаёт управление
+/// движку — сетевой опрос НЕ привязан к отдельному таймеру, реальная частота
+/// прихода данных задаётся подпиской RREF (`xp_link::datarefs::FAST` = 20 Гц,
+/// не трогали) и от этой константы не зависит. Раньше здесь стояли те же
+/// 50 мс, что и у HID-отправки, и тик движка (форма ШИМ/ударов) был жёстко
+/// привязан к сетевому опросу — теперь движок считает форму по своему
+/// ровному таймеру, а сеть читается с той частотой, что реально шлёт сим.
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Минимальный шаг времени между двумя подряд идущими тиками движка —
+/// страховка монотонности (см. `tick_t` ниже). 1 мс: заметно меньше
+/// `POLL_INTERVAL`, поэтому на нормальном ходу ни на что не влияет.
+const MIN_TICK_ADVANCE_S: f64 = 0.001;
 /// Ритм опроса/переподписки, пока X-Plane не отвечает — реже, чтобы не
 /// долбить localhost:49000 20 раз в секунду впустую, пока игра не запущена.
 const PROBE_INTERVAL: Duration = Duration::from_millis(1000);
@@ -105,6 +117,19 @@ pub fn xp_worker(
     // неотличимый по виду от списка опечаток, хотя сим просто выключен.
     let mut self_check_anchor: Option<Instant> = None;
     let mut self_check_done = false;
+
+    // Часы тика движка. Тик идёт 50 Гц (POLL_INTERVAL), а время симулятора
+    // приезжает датарефом SimTime с частотой подписки RREF (FAST = 20 Гц) —
+    // между двумя пакетами `fv.sim_time_s` НЕ МЕНЯЕТСЯ. Если отдать движкам
+    // его как есть, на двух-трёх тиках подряд `dt` окажется нулевым: форма
+    // (ШИМ, удары, пульсация) замрёт, выход продублируется, и учащение тика
+    // не даст ничего, кроме нагрузки на процессор. Поэтому между реальными
+    // пакетами время досчитывается по стенным часам от последнего
+    // полученного значения, а `last_tick_t` дополнительно гарантирует
+    // монотонность (оба движка считают из этого времени `dt` и фазу).
+    let mut last_sim_time = f64::NEG_INFINITY;
+    let mut sim_time_anchor = Instant::now();
+    let mut last_tick_t = f64::NEG_INFINITY;
 
     loop {
         // 1. Убеждаемся, что UDP-сокет открыт; если ещё нет — открываем и
@@ -198,7 +223,20 @@ pub fn xp_worker(
         was_owner = owns;
 
         if owns {
-            let fv = vars::to_flight_vars(&values);
+            let mut fv = vars::to_flight_vars(&values);
+
+            // См. last_sim_time/sim_time_anchor выше: якорь переставляем
+            // только когда сим реально прислал новое время, между пакетами
+            // досчитываем стенными часами.
+            let now = Instant::now();
+            if fv.sim_time_s != last_sim_time {
+                last_sim_time = fv.sim_time_s;
+                sim_time_anchor = now;
+            }
+            let tick_t = (last_sim_time + now.duration_since(sim_time_anchor).as_secs_f64())
+                .max(last_tick_t + MIN_TICK_ADVANCE_S);
+            last_tick_t = tick_t;
+            fv.sim_time_s = tick_t;
 
             // Тот же критерий "в полёте", что у MSFS-конвейера (см.
             // sim/parse.rs::flight_status) — переиспользуем функцию
@@ -208,13 +246,21 @@ pub fn xp_worker(
 
             // Запись сессии (тот же тумблер, что у WT/MSFS, см.
             // wt_link::worker/sim::worker) — только пока слот реально наш.
-            recorder.tick_flightvars(
-                recording.load(Ordering::Relaxed),
-                fv.sim_time_s,
-                &fv,
-                "xplane",
-                &logs,
-            );
+            // ТОЛЬКО на реальном пакете от сима (`drained > 0`), а не на
+            // каждом тике: тик теперь 50 Гц, а телеметрия приезжает 20 Гц —
+            // без этого условия в файл сессии писались бы 50 строк в секунду,
+            // больше половины из них дубли предыдущего кадра. Формат записи
+            // должен остаться потоком РЕАЛЬНЫХ кадров, его читает плеер
+            // (custom_fx::player) и replay-тесты.
+            if ok {
+                recorder.tick_flightvars(
+                    recording.load(Ordering::Relaxed),
+                    fv.sim_time_s,
+                    &fv,
+                    "xplane",
+                    &logs,
+                );
+            }
 
             // Смена борта — тем же путём, каким это делает wt_worker для
             // техники War Thunder: то же поле aircraft_title, та же система

@@ -7,6 +7,7 @@ pub mod profiles;
 pub mod rumble;
 pub mod settings;
 pub mod sim;
+pub mod timing;
 pub mod types;
 
 #[cfg(all(windows, feature = "app"))]

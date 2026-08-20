@@ -35,10 +35,26 @@ use crate::wt_link::vars::{self, WtVars};
 use crate::wt_link::weapon_profiles;
 use crate::{ActiveGame, ConfigShared, EffectsShared, HidCmd, LogBuffer, SimStatus};
 
-/// Ритм опроса /state и /indicators, пока WT жив — 20 Гц, как дефолт
-/// recon-инструмента (wt_probe/cli.rs) и как частота отправки HID в
-/// hid/worker.rs.
+/// Ритм ОПРОСА /state и /indicators (блокирующий HTTP-запрос) — держим
+/// примерно на прежней частоте (20 Гц, как дефолт recon-инструмента,
+/// wt_probe/cli.rs): HTTP медленный и блокирующий, гонять его на такте
+/// движка/HID (см. TICK_INTERVAL ниже) нельзя. Тик движка развязан от этого
+/// ритма — между двумя реальными опросами сети движок тикает на последнем
+/// полученном кадре телеметрии чаще, с продвинутым временем (см.
+/// `subtick_offsets` и подтиковый цикл в `wt_worker`).
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Такт тика движка/отправки на HID ВНУТРИ одного кадра сетевого опроса —
+/// тот же, что у `hid::worker::SEND_INTERVAL` и у `xp_link::worker`. Форма
+/// сигнала (ШИМ стрельбы, удары, пульсация) считается движком от времени
+/// (`WtVars::t`), не от факта прихода нового кадра телеметрии, поэтому
+/// учащение тика делает её гладкой даже на кадре сети, которому уже
+/// несколько подтиков.
+const TICK_INTERVAL: Duration = Duration::from_millis(20);
+/// Минимальный шаг времени между двумя подряд идущими тиками движка —
+/// страховка монотонности (см. `last_tick_t` в `wt_worker`). 1 мс: заметно
+/// меньше `TICK_INTERVAL`, поэтому на нормальном ходу ни на что не влияет,
+/// и при этом строго больше нуля.
+const MIN_TICK_ADVANCE_S: f64 = 0.001;
 /// Ритм опроса, пока WT ещё не отвечал (или перестал отвечать) — реже, чтобы
 /// не долбить localhost:8111 20 раз в секунду, когда игра не запущена.
 const PROBE_INTERVAL: Duration = Duration::from_millis(1000);
@@ -46,6 +62,32 @@ const HTTP_TIMEOUT: Duration = Duration::from_millis(200);
 /// Тот же грейс-период, что у MSFS-вотчдога (sim/worker.rs) — для
 /// консистентности дебаунса между двумя конвейерами.
 const GRACE_PERIOD: Duration = Duration::from_millis(2500);
+
+/// Смещения от начала кадра сетевого опроса, на которых должен сработать тик
+/// движка — k-е смещение равно `k * tick_interval`. Смещение, которое ушло бы
+/// НА или ЗА `poll_interval` (`k > 0 && offset >= poll_interval`), не
+/// включается — вместо очередного подтика начинается новый кадр реальным
+/// HTTP-опросом. Всегда возвращает хотя бы одно смещение (`Duration::ZERO`
+/// на k=0) — движок обязан тикнуть хотя бы раз за кадр, даже если
+/// `tick_interval >= poll_interval`. `tick_interval == Duration::ZERO`
+/// вернул бы бесконечную последовательность нулевых смещений — специальный
+/// случай на входе не даёт зациклиться.
+fn subtick_offsets(poll_interval: Duration, tick_interval: Duration) -> Vec<Duration> {
+    if tick_interval.is_zero() {
+        return vec![Duration::ZERO];
+    }
+    let mut offsets = Vec::new();
+    let mut k: u32 = 0;
+    loop {
+        let offset = tick_interval * k;
+        if k > 0 && offset >= poll_interval {
+            break;
+        }
+        offsets.push(offset);
+        k += 1;
+    }
+    offsets
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn wt_worker(
@@ -87,8 +129,26 @@ pub fn wt_worker(
     // try_claim не шлёт нули каждый тик, чтобы не гоняться наперегонки с
     // текущим владельцем за один и тот же tx_hid.
     let mut was_owner = false;
+    // Время последнего ТИКА, отданного движкам — монотонный сторож (см.
+    // его использование в подтиковом цикле). `WtVars::t` снимается ПОСЛЕ
+    // HTTP-запроса, поэтому при скачке задержки сети время следующего
+    // кадра может оказаться РАНЬШЕ последнего подтика предыдущего, а оба
+    // движка считают из него `dt` и фазу ШИМ от абсолютного времени —
+    // шаг назад дал бы отрицательный `dt` и рывок фазы.
+    let mut last_tick_t = f64::NEG_INFINITY;
 
     loop {
+        // Якорь подтикового цикла (см. subtick_offsets/TICK_INTERVAL ниже) —
+        // захватываем ДО самого HTTP-запроса, чтобы весь кадр (сеть + все
+        // подтики) укладывался в POLL_INTERVAL, а не добавлял его поверх
+        // времени, которое ушло на сам запрос.
+        let frame_start = Instant::now();
+        // true, если этот кадр дошёл до подтикового цикла ниже — тогда он
+        // сам уже выждал время до следующего кадра своими подтиковыми
+        // sleep(), и хвостовой sleep(POLL_INTERVAL) внизу цикла делать не
+        // нужно (см. его использование в конце итерации).
+        let mut ran_subticks = false;
+
         let c = match &client {
             Some(c) => c.clone(),
             None => match WtClient::new("127.0.0.1", 8111, HTTP_TIMEOUT) {
@@ -231,37 +291,68 @@ pub fn wt_worker(
                         }
                     }
 
-                    if preview.is_held() {
-                        // Редактор эффектов держит HID-канал под предпросмотр
-                        // (см. game_state::PreviewLock) — воркер молчит, иначе
-                        // оба источника 20 раз в секунду переписывали бы друг
-                        // друга на моторе. На ФРОНТЕ захвата шлём нули один
-                        // раз, чтобы не застыло последнее значение движка.
-                        if !preview_was_held {
-                            let _ = tx_hid.send(HidCmd::SendIntensity {
-                                joystick: 0,
-                                throttle_left: 0,
-                                throttle_right: 0,
-                            });
-                            preview_was_held = true;
+                    // Подтиковый цикл: сеть опрошена один раз в этом кадре
+                    // (state_v/indicators_v/wt_vars выше — РОВНО один раз, не
+                    // на каждый подтик: разбор/парсинг, обучение
+                    // ammo-трекера и запись сессии уже сделаны выше и здесь
+                    // не повторяются), а движок и отправка на HID тикают
+                    // чаще — каждые TICK_INTERVAL, на этом же кадре
+                    // телеметрии, но с ПРОДВИНУТЫМ временем (t_кадра +
+                    // offset), пока не подойдёт срок следующего реального
+                    // HTTP-опроса (см. subtick_offsets/POLL_INTERVAL/
+                    // TICK_INTERVAL выше). Без продвижения времени dt внутри
+                    // engine.step схлопнулся бы в защитный минимум и
+                    // сглаживание (см. crate::timing::ema_retain_for_dt)
+                    // поехало бы. hold/preview.is_held() перечитываются НА
+                    // КАЖДОМ подтике, а не один раз на весь кадр — иначе
+                    // реакция на паузу/предпросмотр деградировала бы до
+                    // целого кадра сетевого опроса вместо одного подтика.
+                    ran_subticks = true;
+                    for offset in subtick_offsets(POLL_INTERVAL, TICK_INTERVAL) {
+                        let target = frame_start + offset;
+                        let now = Instant::now();
+                        if target > now {
+                            thread::sleep(target - now);
                         }
-                    } else {
+
+                        if preview.is_held() {
+                            // Редактор эффектов держит HID-канал под предпросмотр
+                            // (см. game_state::PreviewLock) — воркер молчит, иначе
+                            // оба источника переписывали бы друг друга на моторе.
+                            // На ФРОНТЕ захвата шлём нули один раз, чтобы не
+                            // застыло последнее значение движка.
+                            if !preview_was_held {
+                                let _ = tx_hid.send(HidCmd::SendIntensity {
+                                    joystick: 0,
+                                    throttle_left: 0,
+                                    throttle_right: 0,
+                                });
+                                preview_was_held = true;
+                            }
+                            continue;
+                        }
                         preview_was_held = false;
 
                         // Встроенный и пользовательский движки эффектов больше НЕ
                         // взаимоисключающие режимы (см. custom_fx::overrides) —
-                        // оба считаются каждый тик. Вытеснение точечное:
+                        // оба считаются каждый подтик. Вытеснение точечное:
                         // пользовательский эффект гасит ТОЛЬКО тот встроенный, для
                         // которого его источник телеметрии основной (см.
                         // doc-комментарий overrides.rs). Подавление применяется к
                         // КОПИИ full_cfg.wt — WtRumbleState::step не в курсе, что
-                        // что-то подавлено, движок вибрации не тронут. Отдельного
-                        // кадра нулей на "смену режима" тут больше не нужно —
-                        // режима нет, обе стороны сами обнуляют свой вклад на этом
-                        // же тике, когда флаг выключен/эффект неактивен.
+                        // что-то подавлено, движок вибрации не тронут.
+                        let mut wt_vars_tick = wt_vars.clone();
+                        // Монотонность (см. last_tick_t выше): время тика не
+                        // может не только пойти назад, но и остановиться —
+                        // `dt == 0` схлопнул бы нормировку сглаживания в
+                        // "заморозку" (crate::timing::ema_blend_for_dt).
+                        let tick_t = (wt_vars.t + offset.as_secs_f64())
+                            .max(last_tick_t + MIN_TICK_ADVANCE_S);
+                        last_tick_t = tick_t;
+                        wt_vars_tick.t = tick_t;
+
                         let full_cfg = config.get();
-                        let t_now = wt_vars.t;
-                        let aircraft = wt_vars.vehicle_type.clone();
+                        let aircraft = wt_vars_tick.vehicle_type.clone();
                         let custom_effects = custom_fx.get();
                         let overridden = crate::custom_fx::overrides::overridden_builtins(
                             &custom_effects,
@@ -271,22 +362,22 @@ pub fn wt_worker(
                         let mut suppressed_wt_cfg = full_cfg.wt;
                         overridden.apply_to_wt_config(&mut suppressed_wt_cfg);
 
-                        let builtin_out =
-                            engine.step(&wt_vars, &suppressed_wt_cfg, hold.load(Ordering::Relaxed));
+                        let held_now = hold.load(Ordering::Relaxed);
+                        let builtin_out = engine.step(&wt_vars_tick, &suppressed_wt_cfg, held_now);
 
-                        let frame = TelemetryFrame::Wt(wt_vars.clone());
+                        let frame = TelemetryFrame::Wt(wt_vars_tick.clone());
                         let custom_out = custom_engine.step(
                             &frame,
-                            t_now,
+                            wt_vars_tick.t,
                             &custom_effects,
                             custom_fx.current_rev(),
                             &aircraft,
                             ActiveGame::Wt,
-                            hold.load(Ordering::Relaxed),
+                            held_now,
                             full_cfg.max_output,
                         );
 
-                        *last_wt_vars.lock() = Some(wt_vars);
+                        *last_wt_vars.lock() = Some(wt_vars_tick);
                         effects.apply_snapshot(&builtin_out.effects);
                         *active_custom_ids.lock() = custom_out.active_ids;
 
@@ -327,6 +418,73 @@ pub fn wt_worker(
             }
         }
 
-        thread::sleep(if alive { POLL_INTERVAL } else { PROBE_INTERVAL });
+        // Кадр, дошедший до подтикового цикла выше, уже сам выждал время до
+        // следующего опроса своими подтиковыми sleep() (см. ran_subticks) —
+        // здесь спим, только если тот цикл не запускался (не жив/не наш слот/
+        // сеть ничего не ответила).
+        if !ran_subticks {
+            thread::sleep(if alive { POLL_INTERVAL } else { PROBE_INTERVAL });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subtick_offsets_covers_frame_without_gaps_or_duplicates() {
+        let offsets = subtick_offsets(POLL_INTERVAL, TICK_INTERVAL);
+        // 50 мс / 20 мс -> подтики на 0, 20, 40 мс (60 мс уже вышло бы за
+        // рамки кадра, следующий кадр начнётся реальным HTTP-опросом).
+        assert_eq!(
+            offsets,
+            vec![
+                Duration::from_millis(0),
+                Duration::from_millis(20),
+                Duration::from_millis(40),
+            ]
+        );
+        // Строго возрастает, без дублей и пропусков — каждый следующий
+        // элемент ровно на TICK_INTERVAL дальше предыдущего.
+        for w in offsets.windows(2) {
+            assert_eq!(w[1] - w[0], TICK_INTERVAL);
+        }
+        // Все смещения строго меньше кадра.
+        assert!(offsets.iter().all(|&o| o < POLL_INTERVAL));
+    }
+
+    #[test]
+    fn subtick_offsets_always_has_at_least_one_element() {
+        // Даже вырожденный случай "тик крупнее кадра" обязан тикнуть хотя бы
+        // раз — движок не должен молчать целый кадр.
+        let offsets = subtick_offsets(Duration::from_millis(20), Duration::from_millis(50));
+        assert_eq!(offsets, vec![Duration::ZERO]);
+    }
+
+    #[test]
+    fn subtick_offsets_handles_exact_multiple() {
+        // Кадр — ровно кратное число подтиков (50/25 = 2): 0 и 25 мс входят,
+        // 50 мс уже равно границе кадра и не входит.
+        let offsets = subtick_offsets(Duration::from_millis(50), Duration::from_millis(25));
+        assert_eq!(
+            offsets,
+            vec![Duration::from_millis(0), Duration::from_millis(25)]
+        );
+    }
+
+    #[test]
+    fn subtick_offsets_zero_tick_interval_does_not_loop_forever() {
+        let offsets = subtick_offsets(POLL_INTERVAL, Duration::ZERO);
+        assert_eq!(offsets, vec![Duration::ZERO]);
+    }
+
+    #[test]
+    fn subtick_offsets_tick_equal_to_poll_gives_single_tick() {
+        // Патологический, но легальный ввод: TICK_INTERVAL == POLL_INTERVAL
+        // — ровно один подтик на кадр (то же поведение, что было ДО этой
+        // задачи, когда движок тикал раз в кадр сетевого опроса).
+        let offsets = subtick_offsets(POLL_INTERVAL, POLL_INTERVAL);
+        assert_eq!(offsets, vec![Duration::ZERO]);
     }
 }

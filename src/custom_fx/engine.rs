@@ -71,6 +71,13 @@ struct EffectState {
     changed_active_until: f64,
     // EMA сглаженной интенсивности (curve.eval, ДО shape/strength_pct).
     ema: f64,
+    // Момент предыдущего тика этого эффекта (единое время движка `t`,
+    // см. doc-комментарий `step`) — нужен, чтобы нормировать `smoothing_alpha`
+    // по фактическому `dt` между тиками (см. `crate::timing::ema_retain_for_dt`
+    // и `tick_core`). `None` — тик ещё ни разу не считался (эффект только
+    // что создан/пересоздан), тогда берём опорный dt (20 Гц), чтобы первый
+    // тик вёл себя так же, как до нормировки.
+    last_t: Option<f64>,
     // Фронт активности триггера "молчал -> активен" — общий якорь и для
     // attack_ms у Pulse, и для старта импульса OneShot.
     was_active: bool,
@@ -97,6 +104,7 @@ impl EffectState {
             // до момента времени 0" при t < 0 (in vitro/тестовые сценарии).
             changed_active_until: f64::NEG_INFINITY,
             ema: 0.0,
+            last_t: None,
             was_active: false,
             active_since_t: 0.0,
             oneshot_fired_at: None,
@@ -397,24 +405,15 @@ impl CustomFxEngine {
                 .entry(effect.id.clone())
                 .or_insert_with(EffectState::new);
 
+            // Триггер считается отдельно от tick_core (у него, в отличие от
+            // preview_trigger_active, есть гистерезис/окно удержания —
+            // см. trigger_active) — сама цепочка EMA -> форма -> сила общая
+            // с preview (см. doc-комментарий tick_core), включая нормировку
+            // smoothing_alpha по фактическому dt.
             let is_active = trigger_active(&effect.trigger, raw, t, state);
-            if is_active && !state.was_active {
-                state.active_since_t = t;
-                state.oneshot_fired_at = Some(t);
-            }
-            state.was_active = is_active;
-
-            let raw_curve = if is_active {
-                effect.curve.eval(raw)
-            } else {
-                0.0
-            };
-            let alpha = (effect.smoothing_alpha as f64).clamp(0.0, 1.0);
-            state.ema = state.ema * alpha + raw_curve * (1.0 - alpha);
-
-            let shape_mul = shape_multiplier(&effect.shape, t, state);
-            let intensity = (state.ema * shape_mul * (effect.strength_pct as f64 / 100.0) * 255.0)
-                .clamp(0.0, max_output_f);
+            let curve_value = effect.curve.eval(raw);
+            let intensity =
+                tick_core(effect, t, is_active, curve_value, state).clamp(0.0, max_output_f);
 
             if intensity > 0.0 {
                 let mut contributed = false;
@@ -466,11 +465,21 @@ fn preview_trigger_active(trigger: &Trigger, x: f64, t: f64) -> bool {
     }
 }
 
-/// Общее ядро одного превью-тика, вынесенное из `preview_tick`, чтобы
-/// `shape_waveform` могла посчитать ту же цепочку (EMA -> форма -> сила) без
-/// копипасты. `is_active` и `curve_value` уже посчитаны вызывающей стороной —
-/// `preview_tick` берёт их из триггера/кривой по реальному `raw_value`,
-/// `shape_waveform` подставляет свои константы (см. её doc-комментарий).
+/// Общее ядро одного тика эффекта (EMA -> форма -> сила): и живой
+/// `CustomFxEngine::step`, и превью (`preview_tick`/`shape_waveform`) идут
+/// через эту же функцию, чтобы график в UI честно показывал то же
+/// поведение, что и реальный движок на HID-канале. `is_active` и
+/// `curve_value` уже посчитаны вызывающей стороной — `step` берёт `is_active`
+/// из `trigger_active` (с гистерезисом), `preview_tick`/`shape_waveform` из
+/// своих упрощённых заглушек (см. их doc-комментарии).
+///
+/// `smoothing_alpha` нормируется по фактическому `dt` между тиками ЭТОГО
+/// эффекта (`state.last_t`, опорная частота 20 Гц — см.
+/// `crate::timing::ema_retain_for_dt`): без этого учащение тика движка
+/// (см. `wt_link/worker.rs`, `xp_link/worker.rs`) ослабляло бы сглаживание
+/// пропорционально частоте вызовов. Первый тик состояния (`last_t == None`,
+/// эффект только что создан/пересоздан) берёт опорный `dt`, так что первый
+/// вызов ведёт себя как до нормировки.
 fn tick_core(
     effect: &CustomEffect,
     t: f64,
@@ -485,8 +494,14 @@ fn tick_core(
     state.was_active = is_active;
 
     let raw_curve = if is_active { curve_value } else { 0.0 };
+    let dt = state
+        .last_t
+        .map(|last_t| (t - last_t).max(0.0))
+        .unwrap_or(crate::timing::REFERENCE_DT_S);
+    state.last_t = Some(t);
     let alpha = (effect.smoothing_alpha as f64).clamp(0.0, 1.0);
-    state.ema = state.ema * alpha + raw_curve * (1.0 - alpha);
+    let alpha_eff = crate::timing::ema_retain_for_dt(alpha, dt);
+    state.ema = state.ema * alpha_eff + raw_curve * (1.0 - alpha_eff);
 
     let shape_mul = shape_multiplier(&effect.shape, t, state);
     (state.ema * shape_mul * (effect.strength_pct as f64 / 100.0) * 255.0).clamp(0.0, 255.0)

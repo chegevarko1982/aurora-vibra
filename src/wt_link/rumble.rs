@@ -571,7 +571,21 @@ impl EngineState {
 
         let dt = (t - self.prev_t).max(1e-3);
         let drpm_dt = (rpm - self.prev_rpm) / dt;
-        self.drpm_dt_smoothed += ENGINE_DRPM_DT_EMA_ALPHA * (drpm_dt - self.drpm_dt_smoothed);
+        // Нормировка коэффициента EMA по фактическому dt (см.
+        // crate::timing::ema_blend_for_dt) — без неё учащение тика движка
+        // (см. wt_link/worker.rs) укорачивало бы постоянную времени этого
+        // сглаживания и сдвигало бы откалиброванный на живом железе порог
+        // "подхвата" ENGINE_CATCH_DRPM_DT. На опорной частоте (dt == 0.05)
+        // даёт исходный ENGINE_DRPM_DT_EMA_ALPHA без изменений.
+        // ВНИМАНИЕ на конвенцию: строкой ниже alpha умножается на РАЗНОСТЬ
+        // (`+= alpha * (x - y)`), то есть это вес НОВОГО значения —
+        // отсюда `ema_blend_for_dt`, а НЕ `ema_retain_for_dt` (та для
+        // записи `y = y*alpha + x*(1-alpha)`, как в custom_fx). На опорной
+        // частоте обе дают одно и то же, поэтому подмена не ловится
+        // тестами со штатным шагом 50 мс — см. doc-комментарий
+        // crate::timing::ema_blend_for_dt.
+        let drpm_dt_alpha = crate::timing::ema_blend_for_dt(ENGINE_DRPM_DT_EMA_ALPHA, dt);
+        self.drpm_dt_smoothed += drpm_dt_alpha * (drpm_dt - self.drpm_dt_smoothed);
         self.prev_rpm = rpm;
         self.prev_t = t;
 

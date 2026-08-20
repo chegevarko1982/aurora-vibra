@@ -206,7 +206,19 @@ pub fn hid_worker(
     let mut last_status_log = Instant::now() - Duration::from_secs(10);
     let mut last_missing_log = Instant::now() - Duration::from_secs(10);
 
-    const SEND_INTERVAL: Duration = Duration::from_millis(50);
+    // Верхняя граница частоты обновления интенсивности на HID-канале — по
+    // теореме Найквиста реальная частота дискретизации СИГНАЛА (не отправки
+    // пакетов) равна половине этой частоты, т.е. 1 / (2 * SEND_INTERVAL).
+    // Было 50 мс (20 Гц отправки → 10 Гц Найквиста): при потолке частоты
+    // формы `custom_fx::model::MAX_SHAPE_FREQ_HZ` = 6.5 Гц это давало только
+    // 20/6.5 ≈ 3.08 отсчёта на период — заметно на слух/ощупь как ступеньки,
+    // а не гладкая форма. 20 мс (50 Гц отправки → 25 Гц Найквиста) даёт
+    // 50/6.5 ≈ 7.7 отсчёта на период — с запасом выше минимума Найквиста (>2)
+    // для гладкого восприятия формы. Дальше учащать некуда без изменения
+    // самого протокола HID-отчёта: это порог отправки на устройство, а не
+    // порог тика движка эффектов (движки WT/X-Plane тикают ещё чаще — см.
+    // wt_link/worker.rs, xp_link/worker.rs).
+    const SEND_INTERVAL: Duration = Duration::from_millis(20);
 
     let mut desired_joystick: u8 = 0;
     let mut desired_throttle_left: u8 = 0;
