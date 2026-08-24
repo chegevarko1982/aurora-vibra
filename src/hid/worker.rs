@@ -199,6 +199,32 @@ fn prune_failed_devices(
 const SEND_INTERVAL: Duration =
     Duration::from_micros((crate::hid::protocol::SEND_INTERVAL_S * 1_000_000.0) as u64);
 
+/// Порог "пора отправлять" — НЕ равен `SEND_INTERVAL`, а на четверть такта
+/// меньше, и это принципиально.
+///
+/// Все источники (поток предпросмотра `custom_fx::preview_player`, воркеры
+/// WT и X-Plane) шлют команды РОВНО с шагом `SEND_INTERVAL`. Жёсткое
+/// `elapsed() >= SEND_INTERVAL` попадает при этом точно на границу: `last_send`
+/// ставится в момент обработки предыдущей команды, значит `elapsed` на
+/// следующей = такт ± дребезг доставки (пробуждение потока, передача через
+/// канал). Стоит дребезгу оказаться отрицательным — тик молча ТЕРЯЕТСЯ: цикл
+/// уходит обратно в `recv_timeout`, а пришедшая следом команда перетирает
+/// `desired_*`, и потерянное значение не отправляется никогда. Дребезг знак
+/// не выбирает, поэтому терялась примерно половина тиков, и ровный по данным
+/// импульс из 5 тактов выходил на моторы то 80, то 120 мс вместо 100.
+///
+/// Смысл ограничителя — не пропускать БЫСТРЫХ источников (кадры MSFS идут до
+/// 120 Гц), а не переквантовывать тех, кто и так шлёт ровно на такте. С
+/// запасом в четверть такта источник на 20 мс проходит всегда, а источник на
+/// 8 мс по-прежнему ограничивается 15 мс (~66 Гц).
+const SEND_DUE_AFTER: Duration =
+    Duration::from_micros((crate::hid::protocol::SEND_INTERVAL_S * 1_000_000.0 * 0.75) as u64);
+
+/// Пора ли отправлять очередной кадр на устройство — см. `SEND_DUE_AFTER`.
+fn send_is_due(last_send: Instant, now: Instant) -> bool {
+    now.duration_since(last_send) >= SEND_DUE_AFTER
+}
+
 pub fn hid_worker(
     controller_connected: Arc<AtomicBool>,
     throttle_connected: Arc<AtomicBool>,
@@ -466,7 +492,11 @@ pub fn hid_worker(
 
         ensure_open(&mut api, &mut devices);
 
-        if last_send.elapsed() >= SEND_INTERVAL {
+        // `due_at` фиксируем ДО записи в устройство и им же двигаем `last_send`:
+        // иначе длительность самой записи (а она плавает) добавлялась бы к
+        // следующему порогу и сдвигала бы сетку отправки.
+        let due_at = Instant::now();
+        if send_is_due(last_send, due_at) {
             let out_j = if hold { 0 } else { desired_joystick };
             let out_t_left = if hold { 0 } else { desired_throttle_left };
             let out_t_right = if hold { 0 } else { desired_throttle_right };
@@ -506,7 +536,43 @@ pub fn hid_worker(
                 last_sent_throttle_left = out_t_left;
                 last_sent_throttle_right = out_t_right;
             }
-            last_send = Instant::now();
+            last_send = due_at;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Регрессия на потерю тиков в общем выходе на устройство. Источники
+    /// шлют ровно на такте, и жёсткое сравнение с `SEND_INTERVAL` роняло
+    /// примерно половину кадров из-за дребезга доставки в доли миллисекунды
+    /// — импульс из 5 тактов выходил на моторы то 80, то 120 мс вместо 100.
+    /// См. doc-комментарий `SEND_DUE_AFTER`.
+    #[test]
+    fn producer_exactly_on_tick_never_loses_a_frame() {
+        let base = Instant::now();
+        for jitter_us in [-1000i64, -500, -100, -1, 0, 1, 100, 500, 1000] {
+            let arrival = if jitter_us >= 0 {
+                base + SEND_INTERVAL + Duration::from_micros(jitter_us as u64)
+            } else {
+                base + SEND_INTERVAL - Duration::from_micros(jitter_us.unsigned_abs())
+            };
+            assert!(
+                send_is_due(base, arrival),
+                "тик с дребезгом доставки {jitter_us} мкс потерян"
+            );
+        }
+    }
+
+    /// Но ограничитель обязан остаться ограничителем: кадры MSFS приходят до
+    /// 120 Гц, и продавливать запись в устройство чаще ~15 мс они не должны.
+    #[test]
+    fn fast_producer_is_still_rate_limited() {
+        let base = Instant::now();
+        assert!(!send_is_due(base, base + Duration::from_millis(8)));
+        assert!(!send_is_due(base, base + Duration::from_millis(14)));
+        assert!(send_is_due(base, base + Duration::from_millis(15)));
     }
 }
