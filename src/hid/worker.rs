@@ -220,6 +220,23 @@ const SEND_INTERVAL: Duration =
 const SEND_DUE_AFTER: Duration =
     Duration::from_micros((crate::hid::protocol::SEND_INTERVAL_S * 1_000_000.0 * 0.75) as u64);
 
+/// Сколько тишины на моторах должно накопиться, прежде чем поток вывода
+/// позволит себе плановое перечисление HID.
+///
+/// `HidApi::new()` — это ПОЛНОЕ перечисление USB HID, и стоит оно на живой
+/// машине ~145 мс (замерено). Раньше оно делалось раз в 2 секунды безусловно,
+/// прямо в потоке вывода: на 5 Гц (период 200 мс) такая пауза съедает больше
+/// половины периода, и вибрация ощущается рваной с регулярностью раз в две
+/// секунды. Именно этого артефакта не было у стенда `test_pattern_uniformity`
+/// — он ничего не пересканирует и потому всегда давал ровный результат.
+///
+/// Плановое перечисление нужно только для горячего ПОДКЛЮЧЕНИЯ (отключение
+/// ловится провалом write() в `prune_failed_devices`), а устройство не втыкают
+/// в тот момент, когда оно уже вибрирует. Поэтому пересканируем только когда
+/// на моторы ничего не идёт, и только если устройства вообще есть: пустой
+/// список — это как раз состояние "ждём подключения", там пауза безвредна.
+const RESCAN_IDLE_GRACE: Duration = Duration::from_millis(300);
+
 /// Пора ли отправлять очередной кадр на устройство — см. `SEND_DUE_AFTER`.
 fn send_is_due(last_send: Instant, now: Instant) -> bool {
     now.duration_since(last_send) >= SEND_DUE_AFTER
@@ -257,6 +274,10 @@ pub fn hid_worker(
     let mut last_sent_throttle_left: u8 = 255;
     let mut last_sent_throttle_right: u8 = 255;
     let mut last_send: Instant = Instant::now() - SEND_INTERVAL;
+    // Когда на моторы последний раз уходило ненулевое значение — по нему
+    // решается, можно ли сейчас позволить себе перечисление HID, см.
+    // `RESCAN_IDLE_GRACE`.
+    let mut last_nonzero: Instant = Instant::now() - RESCAN_IDLE_GRACE;
     let mut hold: bool = false;
     let mut prev_scan_sig = String::new();
 
@@ -490,7 +511,10 @@ pub fn hid_worker(
             }
         }
 
-        ensure_open(&mut api, &mut devices);
+        // Перечисление HID — только в тишине, см. `RESCAN_IDLE_GRACE`.
+        if devices.is_empty() || last_nonzero.elapsed() >= RESCAN_IDLE_GRACE {
+            ensure_open(&mut api, &mut devices);
+        }
 
         // `due_at` фиксируем ДО записи в устройство и им же двигаем `last_send`:
         // иначе длительность самой записи (а она плавает) добавлялась бы к
@@ -500,6 +524,9 @@ pub fn hid_worker(
             let out_j = if hold { 0 } else { desired_joystick };
             let out_t_left = if hold { 0 } else { desired_throttle_left };
             let out_t_right = if hold { 0 } else { desired_throttle_right };
+            if out_j != 0 || out_t_left != 0 || out_t_right != 0 {
+                last_nonzero = due_at;
+            }
             if out_j != last_sent_joystick
                 || out_t_left != last_sent_throttle_left
                 || out_t_right != last_sent_throttle_right
