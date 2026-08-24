@@ -21,6 +21,7 @@ use crate::{
     custom_fx::{
         model::{CustomEffect, new_effect},
         overrides::{self, BuiltinEffect, BuiltinMask},
+        preview_player::PreviewPlayer,
         sources::{SourceId, TelemetryFrame},
         store::CustomFxShared,
     },
@@ -614,6 +615,11 @@ pub struct UiState {
     // Владение самим предпросмотром (что играет, когда шлём кадр) живёт в
     // fx_editor::EditorState, здесь только сам замок.
     pub preview_lock: PreviewLock,
+    // Поток ручного предпросмотра на точной сетке 20мс (см.
+    // custom_fx::preview_player) — создаётся один раз в main.rs рядом с
+    // preview_lock и живёт всё время работы приложения. EditorCtx получает
+    // только ссылку на него.
+    pub preview_player: PreviewPlayer,
 
     #[cfg(debug_assertions)]
     pub test_level: u8,
@@ -1038,7 +1044,7 @@ impl eframe::App for UiState {
         // предпросмотре это просто no-op каждый кадр.
         if !(self.active_tab == Tab::Main && self.active_section == Section::Effects) {
             self.fx_editor
-                .stop_preview(&self.tx_hid, &self.preview_lock);
+                .stop_preview(&self.tx_hid, &self.preview_lock, &self.preview_player);
         }
 
         // Close to tray: перехватываем закрытие окна крестиком, если включено
@@ -1494,6 +1500,7 @@ impl eframe::App for UiState {
                             logs: &self.logs,
                             tx_hid: &self.tx_hid,
                             preview: &self.preview_lock,
+                            preview_player: &self.preview_player,
                         };
                         effects_editor::show(ui, &mut self.fx_editor, &mut ectx);
                         drop(active_ids_guard);
@@ -3610,6 +3617,7 @@ impl eframe::App for UiState {
                                 logs: &self.logs,
                                 tx_hid: &self.tx_hid,
                                 preview: &self.preview_lock,
+                                preview_player: &self.preview_player,
                             };
                             effects_editor::show(ui, &mut self.fx_editor, &mut ectx);
                             drop(active_ids_guard);

@@ -12,5 +12,9 @@ pub mod model;
 // теперь оба движка считаются каждый тик одновременно, а не как режимы.
 pub mod overrides;
 pub mod player;
+// Поток ручного предпросмотра эффекта на устройстве, на точной сетке
+// hid::protocol::SEND_INTERVAL_S — см. doc-комментарий модуля. Развязывает
+// отправку HidCmd::SendIntensity от кадров egui (см. ui::effects_editor).
+pub mod preview_player;
 pub mod sources;
 pub mod store;

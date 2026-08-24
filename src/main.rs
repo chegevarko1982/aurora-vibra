@@ -6,7 +6,7 @@
 use aurora_vibra::{
     ActiveGame, ConfigShared, EffectsShared, EffectsState, FlightVars, HidCmd, UiCmd,
     aircraft_profiles::AircraftProfiles,
-    custom_fx::store::CustomFxShared,
+    custom_fx::{preview_player::PreviewPlayer, store::CustomFxShared},
     game_state::{GameSlot, PreviewLock},
     hid::hid_worker,
     log::LogBuffer,
@@ -97,6 +97,14 @@ fn main() -> Result<()> {
     // для всех трёх воркеров, создаётся один раз и клонируется (PreviewLock
     // сам по себе Clone, см. game_state.rs).
     let preview_lock = PreviewLock::new();
+    // Поток ручного предпросмотра эффекта на точной сетке 20мс (см.
+    // custom_fx::preview_player) — единственный владелец живёт в UiState,
+    // редактор получает только ссылку. Создан здесь же, рядом с
+    // preview_lock: оба нужны ТОЛЬКО GUI-потоку конструктора эффектов, но
+    // preview_player сам по себе поднимает отдельный HID-отправляющий поток,
+    // поэтому логичнее держать его создание рядом с остальной проводкой
+    // каналов, а не внутри eframe App::default().
+    let preview_player = PreviewPlayer::spawn(tx_hid.clone());
 
     match logs.try_init_file_prefer_exe_dir() {
         Ok(p) => logs.push(format!("File logging enabled → {}", p.display())),
@@ -306,6 +314,7 @@ fn main() -> Result<()> {
         active_custom_ids: active_custom_ids.clone(),
         fx_editor: Default::default(),
         preview_lock,
+        preview_player,
 
         #[cfg(debug_assertions)]
         test_level: 0x80,

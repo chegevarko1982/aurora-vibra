@@ -20,11 +20,20 @@ use crossbeam_channel::Sender;
 use egui::{Color32, Rect, RichText, Sense, Vec2};
 
 use crate::custom_fx::engine;
+// `is_event_effect` живёт в `engine.rs` (вместе с `preview_playback_time_s` и
+// `PreviewRunner`, который тикает по ним в потоке `preview_player` —
+// см. custom_fx::preview_player) — здесь используется как есть, без
+// квалификации, чтобы не переписывать место вызова после переноса.
+// `preview_playback_time_s` самому этому файлу больше не нужна: ручной
+// предпросмотр считает свой `t` в потоке preview_player, а сессионный путь
+// (`step_session`) не заворачивает время — проигрывает запись как есть.
+use crate::custom_fx::engine::is_event_effect;
 use crate::custom_fx::model::{
     CurvePoint, CustomEffect, GameMask, LvarSpec, MAX_SHAPE_FREQ_HZ, MixMode, ResponseCurve, Shape,
     Trigger, effect_bounds, new_effect,
 };
 use crate::custom_fx::player::{self, Session, SessionFrame};
+use crate::custom_fx::preview_player::PreviewPlayer;
 use crate::custom_fx::sources::{self, SOURCES, SourceDef, SourceId, SourceKind, TelemetryFrame};
 use crate::custom_fx::store::{self, CustomFxShared};
 use crate::file_dialog;
@@ -88,19 +97,18 @@ const CURVE_POINT_HIT_SIZE: f32 = 18.0;
 /// сознательно нет (см. задачу), пользователь не обязан о ней помнить.
 const SAVE_INTERVAL: Duration = Duration::from_millis(1500);
 
-/// Троттлинг отправки `HidCmd::SendIntensity` во время предпросмотра —
-/// ровно тот же интервал, что `SEND_INTERVAL` в `hid/worker.rs` (константа
-/// там приватная модулю, не импортируется, поэтому дублируем значение, а не
-/// саму константу). Слать чаще бессмысленно: канал/устройство всё равно не
-/// пропускают обновления быстрее этого интервала.
-const PREVIEW_SEND_INTERVAL: Duration = Duration::from_millis(50);
-
-/// Пауза между повторами событийного эффекта (`is_event_effect`) в зацикленном
-/// ручном предпросмотре — см. `preview_playback_time_s`. Без паузы соседние
-/// повторы одиночного удара сливались бы в одно долгое дребезжание; величина
-/// не из спеки, ориентир — "рука успевает отпустить ощущение прошлого удара"
-/// прежде, чем прилетит следующий.
-const PREVIEW_EVENT_REPEAT_GAP_S: f64 = 0.6;
+/// Троттлинг отправки `HidCmd::SendIntensity` для СЕССИОННОГО плеера
+/// (проигрывание записанной телеметрии, Задача B) — ВЫВЕДЕНА из общей
+/// константы канала (`hid::protocol::SEND_INTERVAL_S`), а не задублирована
+/// числом руками: раньше здесь был захардкожен `Duration::from_millis(50)` с
+/// комментарием "ровно тот же интервал, что SEND_INTERVAL в hid/worker.rs" —
+/// и именно это дублирование разъехалось, когда `SEND_INTERVAL` в проде
+/// поменялся на 20 мс, а константа тут осталась 50 мс. Ручной предпросмотр
+/// (кнопка «Запустить на устройстве») эту константу больше не использует —
+/// он тикает в отдельном потоке `custom_fx::preview_player` на точной сетке
+/// `SEND_INTERVAL_S`, см. `EditorCtx::preview_player`.
+const PREVIEW_SEND_INTERVAL: Duration =
+    Duration::from_micros((crate::hid::protocol::SEND_INTERVAL_S * 1_000_000.0) as u64);
 
 /// Самые ходовые единицы SimConnect для `AddToDataDefinition` (см. doc-
 /// комментарий `LvarSpec::unit`) — предлагаются выпадающим списком в
@@ -161,10 +169,17 @@ pub struct EditorState {
     /// bool+id, которые могли бы разойтись). См. `stop_preview` ниже: это
     /// единственное место, где предпросмотр может начаться/закончиться.
     preview_effect_id: Option<String>,
-    /// Момент нажатия «Играть» — от него считается `t` в `engine::preview_level`.
+    /// Момент запуска проигрывания СЕССИОННОГО пути (Задача B, `step_session`)
+    /// — от него считается `t` в `engine::preview_level` при прогоне записи.
+    /// Ручной путь (кнопка «Играть» в `step_preview`) им больше не пользуется:
+    /// он тикает в отдельном потоке `custom_fx::preview_player` на точной
+    /// сетке, свой `t` считает сам поток (см. `PreviewPlayer::play`).
     preview_started_at: Instant,
-    /// Когда последний раз реально ушёл `HidCmd::SendIntensity` — троттлинг
-    /// до `PREVIEW_SEND_INTERVAL`.
+    /// Когда последний раз реально ушёл `HidCmd::SendIntensity` СЕССИОННОГО
+    /// пути — троттлинг до `PREVIEW_SEND_INTERVAL`, дедлайн накапливается
+    /// (`+= PREVIEW_SEND_INTERVAL`), а не переустанавливается на `now`, иначе
+    /// ошибка квантования по кадрам egui копится так же, как копилась у
+    /// ручного пути до переноса его в `preview_player`.
     preview_last_sent: Instant,
     /// Последние отправленные три канала (0..255) — только для индикации
     /// рядом с кнопкой; без неё непонятно, что вообще происходит, когда
@@ -261,10 +276,24 @@ impl EditorState {
     /// подхватит его не раньше своего следующего тика, и если не погасить
     /// моторы явно здесь, до этого тика они простоят на последнем
     /// предпросмотренном значении, а не на нуле.
-    pub fn stop_preview(&mut self, tx_hid: &Sender<HidCmd>, preview: &PreviewLock) {
+    ///
+    /// `player.stop()` вызывается ПЕРЕД собственной отправкой нулей: ручной
+    /// путь ("Играть") тикает в отдельном потоке `preview_player` на своей
+    /// сетке 20 мс, и если сперва послать нули здесь, а плеер снять только
+    /// потом, поток вполне мог успеть прислать ещё один собственный тик
+    /// между этими двумя шагами и на долю секунды снова засветить моторы.
+    /// Сессионный путь (Задача B, проигрывание записи) через `preview_player`
+    /// не идёт — для него собственная отправка нулей ниже единственная.
+    pub fn stop_preview(
+        &mut self,
+        tx_hid: &Sender<HidCmd>,
+        preview: &PreviewLock,
+        player: &PreviewPlayer,
+    ) {
         if self.preview_effect_id.is_none() {
             return;
         }
+        player.stop();
         let _ = tx_hid.send(HidCmd::SendIntensity {
             joystick: 0,
             throttle_left: 0,
@@ -290,10 +319,16 @@ pub struct EditorCtx<'a> {
     pub lang: Lang,
     pub logs: &'a LogBuffer,
     /// Канал HID-команд и замок предпросмотра — нужны шагу "Предпросмотр"
-    /// (`step_preview`), чтобы слать `SendIntensity` и захватывать/отпускать
-    /// `PreviewLock`. См. doc-комментарий `game_state::PreviewLock`.
+    /// (`step_preview`), чтобы слать `SendIntensity` (сессионный путь,
+    /// Задача B) и захватывать/отпускать `PreviewLock`. См. doc-комментарий
+    /// `game_state::PreviewLock`.
     pub tx_hid: &'a Sender<HidCmd>,
     pub preview: &'a PreviewLock,
+    /// Поток ручного предпросмотра на точной сетке 20 мс (кнопка "Играть" в
+    /// `step_preview`) — см. doc-комментарий `custom_fx::preview_player`.
+    /// Живёт всё время работы приложения (создаётся один раз в `main.rs`,
+    /// рядом с `preview_lock`), сюда попадает только ссылка на кадр.
+    pub preview_player: &'a PreviewPlayer,
 }
 
 /// Точка входа модуля — вызывается из `src/ui.rs` при `Section::Effects`.
@@ -343,7 +378,7 @@ pub fn show(ui: &mut egui::Ui, st: &mut EditorState, cx: &mut EditorCtx) {
             let still_current = st.selected_id.as_deref() == Some(playing_id.as_str())
                 && effects.iter().any(|e| e.id == playing_id);
             if !still_current {
-                st.stop_preview(cx.tx_hid, cx.preview);
+                st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
             }
         }
 
@@ -1807,40 +1842,36 @@ fn step_preview(
             };
             if ui.button(label).clicked() {
                 if is_test_playing {
-                    st.stop_preview(cx.tx_hid, cx.preview);
+                    st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
                 } else {
                     // На случай, если играл ДРУГОЙ эффект ИЛИ этот же эффект,
                     // но в режиме сессии — сначала честно гасим предыдущий,
                     // потом захватываем канал заново под ручной слайдер.
-                    st.stop_preview(cx.tx_hid, cx.preview);
+                    st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
                     cx.preview.take();
                     st.preview_effect_id = Some(effect.id.clone());
                     st.preview_source = PreviewSource::TestValue;
-                    st.preview_started_at = Instant::now();
-                    // Шлём первый кадр немедленно, не дожидаясь троттлинга.
-                    st.preview_last_sent = Instant::now() - PREVIEW_SEND_INTERVAL;
+                    // Сама отправка на устройство ушла из кадров egui в
+                    // отдельный поток на точной сетке 20мс (см.
+                    // custom_fx::preview_player) — play() поднимает
+                    // generation, поток перезапускает сетку тиков и фазу
+                    // формы с t=0 сам.
+                    cx.preview_player.play(effect.clone(), st.test_value);
                 }
             }
         });
 
         if is_test_playing {
-            let now = Instant::now();
-            if now.saturating_duration_since(st.preview_last_sent) >= PREVIEW_SEND_INTERVAL {
-                let elapsed = st.preview_started_at.elapsed().as_secs_f64();
-                let t = preview_playback_time_s(effect, elapsed);
-                let (joystick, throttle_left, throttle_right) =
-                    engine::preview_level(effect, st.test_value, t);
-                st.preview_last_levels = (joystick, throttle_left, throttle_right);
-                let _ = cx.tx_hid.send(HidCmd::SendIntensity {
-                    joystick,
-                    throttle_left,
-                    throttle_right,
-                });
-                st.preview_last_sent = now;
-            }
-            // Без этого egui перерисовывал бы окно только по вводу мыши/
-            // клавиатуры, и предпросмотр застыл бы на статичной картинке
-            // между реальными событиями ввода.
+            // Правки эффекта/слайдера в UI подхватываются потоком-плеером на
+            // лету, БЕЗ рестарта фазы (см. `PreviewPlayer::set_effect` — в
+            // отличие от `play()`, эти два вызова НЕ поднимают generation).
+            cx.preview_player.set_effect(effect.clone());
+            cx.preview_player.set_value(st.test_value);
+            st.preview_last_levels = cx.preview_player.levels();
+            // Сам HID-канал теперь качает поток `preview_player`, а не этот
+            // кадр — request_repaint здесь нужен ТОЛЬКО чтобы индикатор
+            // уровня (joystick/throttle_left/throttle_right ниже) обновлялся
+            // на глаз, а не только по вводу мыши/клавиатуры.
             ui.ctx().request_repaint();
         }
 
@@ -1916,7 +1947,7 @@ fn step_session(
                         // (следующий тик step_session ниже прочитал бы кадры
                         // новой записи под старым progress-курсором).
                         if is_session_playing {
-                            st.stop_preview(cx.tx_hid, cx.preview);
+                            st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
                         }
                     }
                     Err(e) => cx
@@ -1937,9 +1968,9 @@ fn step_session(
             .clicked()
         {
             if is_session_playing {
-                st.stop_preview(cx.tx_hid, cx.preview);
+                st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
             } else {
-                st.stop_preview(cx.tx_hid, cx.preview);
+                st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
                 cx.preview.take();
                 st.preview_effect_id = Some(effect.id.clone());
                 st.preview_source = PreviewSource::Session;
@@ -2051,10 +2082,20 @@ fn step_session(
                 throttle_left: levels.1,
                 throttle_right: levels.2,
             });
-            st.preview_last_sent = now;
+            // Накопление дедлайна (`+=`), а не `= now`: `= now` каждый раз
+            // отсчитывает следующий порог от факта срабатывания текущего
+            // кадра egui, и ошибка квантования по кадрам копится точно так
+            // же, как копилась у ручного пути до его переноса в
+            // `preview_player`. Если кадры egui пришли реже, чем раз в
+            // PREVIEW_SEND_INTERVAL (окно свёрнуто, лаг), подтягиваем к
+            // `now`, а не шлём пачку "запоздавших" тиков разом.
+            st.preview_last_sent += PREVIEW_SEND_INTERVAL;
+            if st.preview_last_sent < now {
+                st.preview_last_sent = now;
+            }
 
             if finished {
-                st.stop_preview(cx.tx_hid, cx.preview);
+                st.stop_preview(cx.tx_hid, cx.preview, cx.preview_player);
             }
         }
         ui.ctx().request_repaint();
@@ -2436,61 +2477,6 @@ fn session_x_bounds(duration_s: f64) -> (f64, f64) {
 // ---------------------------------------------------------------------
 // Мелкие чистые помощники (покрыты юнит-тестами ниже)
 // ---------------------------------------------------------------------
-
-/// Эффект "событийный" — срабатывает по фронту и естественным образом гаснет
-/// сам, а не удерживается непрерывно: `Shape::OneShot` (огибающая
-/// attack->hold->decay) или `Trigger::Changed` (импульс на изменение,
-/// держится ровно `hold_s`). В реальной игре (`CustomFxEngine::step`) такой
-/// эффект честно срабатывает один раз на событие — поэтому его РУЧНОЙ
-/// предпросмотр обязан зацикливаться (`preview_playback_time_s`), иначе после
-/// первого же удара индикаторы навсегда повисают на нуле, а кнопка
-/// продолжает показывать "Стоп", как будто что-то ещё играет.
-fn is_event_effect(effect: &CustomEffect) -> bool {
-    matches!(effect.shape, Shape::OneShot { .. })
-        || matches!(effect.trigger, Trigger::Changed { .. })
-}
-
-/// Длительность одного события эффекта, секунды — максимум из полной
-/// огибающей `Shape::OneShot` (attack+hold+decay) и `hold_s` у
-/// `Trigger::Changed`. Оба поля независимы друг от друга (эффект может иметь
-/// OneShot-форму без Changed-триггера или наоборот), отсюда максимум, а не
-/// сумма и не выбор одного варианта.
-fn event_duration_s(effect: &CustomEffect) -> f64 {
-    let mut duration = 0.0f64;
-    if let Shape::OneShot {
-        attack_ms,
-        hold_ms,
-        decay_ms,
-        ..
-    } = effect.shape
-    {
-        duration = duration.max((attack_ms as f64 + hold_ms as f64 + decay_ms as f64) / 1000.0);
-    }
-    if let Trigger::Changed { hold_s, .. } = effect.trigger {
-        duration = duration.max(hold_s);
-    }
-    duration
-}
-
-/// Время, которое реально подаётся в `engine::preview_level` на тике ручного
-/// предпросмотра — ЧИСТАЯ функция (без egui/Instant), вынесена отдельно ради
-/// юнит-тестов. Для событийных эффектов (`is_event_effect`) заворачивает
-/// `elapsed_s` по модулю периода (длительность события + пауза
-/// `PREVIEW_EVENT_REPEAT_GAP_S`) — так `preview_level` раз за разом видит
-/// свежий фронт "молчал -> активен" в t=0 и удар повторяется циклически. Для
-/// остальных форм/триггеров (Constant/Pulse/Sine/Sawtooth с непрерывным
-/// триггером) возвращает `elapsed_s` без изменений — там `t` обязан расти
-/// монотонно, иначе поедет фаза периодического сигнала.
-fn preview_playback_time_s(effect: &CustomEffect, elapsed_s: f64) -> f64 {
-    if !is_event_effect(effect) {
-        return elapsed_s;
-    }
-    let period = event_duration_s(effect) + PREVIEW_EVENT_REPEAT_GAP_S;
-    if period <= 0.0 {
-        return elapsed_s;
-    }
-    elapsed_s.rem_euclid(period)
-}
 
 fn default_source_for_game(game: ActiveGame) -> SourceId {
     match game {
@@ -3013,101 +2999,13 @@ mod tests {
     }
 
     // -------------------------------------------------------------
-    // Зацикливание ручного предпросмотра событийных эффектов (Shape::OneShot
-    // / Trigger::Changed): удар должен повторяться, а не играть один раз.
+    // Зацикливание ручного предпросмотра событийных эффектов
+    // (Shape::OneShot / Trigger::Changed) — тесты перенесены вместе с
+    // is_event_effect/event_duration_s/preview_playback_time_s в
+    // src/custom_fx/engine.rs (см. её тесты oneshot_preview_period_*,
+    // continuous_effect_time_is_not_wrapped,
+    // changed_trigger_alone_gives_period_no_shorter_than_hold_s).
     // -------------------------------------------------------------
-
-    fn impact_effect() -> CustomEffect {
-        // Ровно заготовка "Удар" из задачи: attack 100ms + hold 200ms +
-        // decay 190ms = 0.49s огибающая, Trigger::Changed { hold_s: 0.6 }.
-        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
-        e.trigger = Trigger::Changed {
-            eps: 1.0,
-            hold_s: 0.6,
-        };
-        e.shape = Shape::OneShot {
-            attack_ms: 100.0,
-            hold_ms: 200.0,
-            decay_ms: 190.0,
-            decay_exp: 2,
-        };
-        e
-    }
-
-    #[test]
-    fn oneshot_preview_period_covers_full_envelope_plus_gap() {
-        let e = impact_effect();
-        // Огибающая OneShot 0.49s против hold_s 0.6s триггера — максимум 0.6s.
-        let expected_period = 0.6 + PREVIEW_EVENT_REPEAT_GAP_S;
-        assert!(is_event_effect(&e));
-        assert!((event_duration_s(&e) - 0.6).abs() < 1e-9);
-
-        // Чуть меньше периода — не завёрнуто.
-        let t = expected_period - 0.05;
-        assert!((preview_playback_time_s(&e, t) - t).abs() < 1e-9);
-
-        // Ровно на границе периода — заворачивается в 0 (новый фронт).
-        assert!(preview_playback_time_s(&e, expected_period).abs() < 1e-9);
-
-        // Спустя несколько периодов — фаза внутри цикла та же, что в начале.
-        let phase = 0.2;
-        let wrapped = preview_playback_time_s(&e, expected_period * 3.0 + phase);
-        assert!((wrapped - phase).abs() < 1e-6);
-    }
-
-    #[test]
-    fn oneshot_preview_period_uses_longer_envelope_when_shape_dominates() {
-        let mut e = impact_effect();
-        // Огибающая OneShot длиннее hold_s триггера — период обязан покрыть
-        // именно её, иначе следующий цикл оборвал бы decay на середине.
-        e.shape = Shape::OneShot {
-            attack_ms: 500.0,
-            hold_ms: 500.0,
-            decay_ms: 500.0,
-            decay_exp: 1,
-        };
-        let expected_envelope = 1.5; // 0.5 + 0.5 + 0.5
-        assert!((event_duration_s(&e) - expected_envelope).abs() < 1e-9);
-    }
-
-    #[test]
-    fn continuous_effect_time_is_not_wrapped() {
-        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
-        e.trigger = Trigger::Always;
-        e.shape = Shape::Sine {
-            freq_hz: 2.0,
-            depth_pct: 100.0,
-        };
-        assert!(!is_event_effect(&e));
-
-        for t in [0.0, 1.5, 100.0, 999.25] {
-            assert_eq!(
-                preview_playback_time_s(&e, t),
-                t,
-                "непрерывный эффект не должен заворачиваться, иначе поедет фаза"
-            );
-        }
-    }
-
-    #[test]
-    fn changed_trigger_alone_gives_period_no_shorter_than_hold_s() {
-        let mut e = new_effect("T".into(), SourceId::FlightFlapsPct);
-        e.shape = Shape::Constant; // без OneShot — событийность только от триггера
-        e.trigger = Trigger::Changed {
-            eps: 1.0,
-            hold_s: 5.0,
-        };
-        assert!(is_event_effect(&e));
-        assert!(event_duration_s(&e) >= 5.0);
-
-        // Внутри hold_s — не завёрнуто (эффект ещё должен звучать).
-        assert!((preview_playback_time_s(&e, 4.9) - 4.9).abs() < 1e-9);
-        // Период обязан быть НЕ короче hold_s (плюс пауза) — иначе долгий
-        // hold_s обрубился бы циклом раньше, чем сам успел отыграть.
-        let period = event_duration_s(&e) + PREVIEW_EVENT_REPEAT_GAP_S;
-        assert!(period >= 5.0);
-        assert!((preview_playback_time_s(&e, period + 0.1) - 0.1).abs() < 1e-9);
-    }
 
     // -------------------------------------------------------------
     // Задача 3 (custom LVAR source)

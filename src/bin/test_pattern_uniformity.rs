@@ -28,20 +28,15 @@ use aurora_vibra::hid::protocol::{
     build_orion_throttle_vibe_frames, build_simapp_vibe_frame, build_throttle_vibe_frame,
     is_orion_joystick, is_orion_throttle, is_ursa_minor_throttle, ursa_model_name,
 };
+use aurora_vibra::timing::sleep_until;
 use hidapi::{HidApi, HidDevice};
 use std::ffi::CString;
-use std::thread;
 use std::time::{Duration, Instant};
 
 // Report ID и длина буфера одинаковы для всех Winwing Ursa Minor устройств —
 // см. golden bytes в hid/protocol.rs и все test_*.rs стенды в этой папке.
 const REPORT_ID: u8 = 0x02;
 const OUT_LEN: u16 = 14;
-
-// Штатная гранулярность сна на Windows — около 15.6мс. Спим до дедлайна
-// минус этот запас, а последние миллисекунды докручиваем busy-wait'ом, иначе
-// голый thread::sleep разрушит сетку 20мс.
-const SPIN_MARGIN: Duration = Duration::from_millis(2);
 
 /// Значение паттерна на такте `i`. ЦЕЛОЧИСЛЕННО, без float — это и есть тот
 /// самый "ровный" генератор, который проверяет весь стенд.
@@ -315,25 +310,6 @@ fn send_tick(dev: &HidDevice, pid: u16, kind: DeviceKindFound, byte: u8) -> Dura
         }
     }
     t0.elapsed()
-}
-
-/// Спит до `deadline` по абсолютному времени: сон крупными шагами, пока до
-/// дедлайна больше SPIN_MARGIN (штатная гранулярность сна на Windows ~15.6мс
-/// не даёт спать точнее), затем busy-wait на spin_loop() для последних
-/// миллисекунд.
-fn sleep_until(deadline: Instant) {
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            return;
-        }
-        let remaining = deadline - now;
-        if remaining > SPIN_MARGIN {
-            thread::sleep(remaining - SPIN_MARGIN);
-        } else {
-            std::hint::spin_loop();
-        }
-    }
 }
 
 fn print_report(deviations_ms: &[f64], instants: &[Instant], write_ms: &[f64]) {

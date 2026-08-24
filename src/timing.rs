@@ -16,6 +16,42 @@
 //! [`ema_retain_for_dt`] пересчитывает `alpha` под фактический `dt`, взяв
 //! 20 Гц (`dt = 0.05` с) опорной частотой — той, на которой всё уже
 //! откалибровано сегодня.
+//!
+//! [`sleep_until`] — общий примитив точного сна по абсолютному дедлайну,
+//! вынесенный сюда из `src/bin/test_pattern_uniformity.rs` (диагностический
+//! стенд равномерности паттерна, подтверждён на живом железе) для повторного
+//! использования потоком предпросмотра эффектов (`custom_fx::preview_player`).
+
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Запас перед дедлайном, на котором `thread::sleep` уступает busy-wait'у.
+/// Штатная гранулярность таймера сна на Windows — около 15.6 мс (системный
+/// quantum), поэтому голый `thread::sleep(remaining)` систематически
+/// просыпается позже запрошенного и не способен держать сетку с шагом 20 мс:
+/// ошибка одного `sleep()` уже сравнима с самим тактом. Спим крупными шагами
+/// до `deadline - SPIN_MARGIN`, а последний короткий хвост докручиваем
+/// `spin_loop()` — он не подчиняется квантованию планировщика ОС.
+const SPIN_MARGIN: Duration = Duration::from_millis(2);
+
+/// Спит до `deadline` по АБСОЛЮТНОМУ времени (не `sleep(tick)` в цикле —
+/// иначе на каждой итерации накапливалась бы ошибка квантования сна поверх
+/// времени, потраченного на сам полезный код между итерациями). Если
+/// `deadline` уже в прошлом — возвращается немедленно.
+pub fn sleep_until(deadline: Instant) {
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        let remaining = deadline - now;
+        if remaining > SPIN_MARGIN {
+            thread::sleep(remaining - SPIN_MARGIN);
+        } else {
+            std::hint::spin_loop();
+        }
+    }
+}
 
 /// Опорный интервал между тиками (20 Гц), на котором откалибровано текущее
 /// поведение EMA-сглаживаний в проекте (было `hid::worker::SEND_INTERVAL`
@@ -243,5 +279,31 @@ mod tests {
         let a_fast = ema_retain_for_dt(alpha, 0.02);
         let a_slow = ema_retain_for_dt(alpha, 0.05);
         assert!(a_fast > a_slow);
+    }
+
+    /// Таймингом на CI не проверить точность в общем, но грубый допуск обязан
+    /// держаться: дедлайн через 30 мс не должен быть пропущен больше чем на
+    /// 5 мс (спящий поток разбужен) и не должен вернуться раньше дедлайна
+    /// вообще (иначе теряется весь смысл функции).
+    #[test]
+    fn sleep_until_hits_deadline_within_5ms() {
+        let deadline = Instant::now() + Duration::from_millis(30);
+        sleep_until(deadline);
+        let now = Instant::now();
+        assert!(now >= deadline, "проснулись раньше дедлайна");
+        let overshoot = now.saturating_duration_since(deadline);
+        assert!(
+            overshoot <= Duration::from_millis(5),
+            "промахнулись мимо дедлайна на {overshoot:?}"
+        );
+    }
+
+    /// Дедлайн уже в прошлом — возвращается немедленно, без сна.
+    #[test]
+    fn sleep_until_past_deadline_returns_immediately() {
+        let deadline = Instant::now() - Duration::from_millis(10);
+        let started = Instant::now();
+        sleep_until(deadline);
+        assert!(started.elapsed() < Duration::from_millis(5));
     }
 }

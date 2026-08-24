@@ -329,6 +329,19 @@ fn combine(acc: f64, v: f64, mix: MixMode) -> f64 {
     }
 }
 
+/// Маршрутизация ОДНОГО уже посчитанного уровня `v` по трём каналам мотора
+/// согласно `effect.out` — общий хелпер для `PreviewRunner::tick` и
+/// `preview_level`, чтобы правило "выключенный канал -> всегда 0, а не
+/// последний уровень" не расходилось между живым предпросмотром на устройстве
+/// и офлайн-прогоном записи/слайдера.
+fn route_channels(effect: &CustomEffect, v: u8) -> (u8, u8, u8) {
+    (
+        if effect.out.joystick { v } else { 0 },
+        if effect.out.throttle_left { v } else { 0 },
+        if effect.out.throttle_right { v } else { 0 },
+    )
+}
+
 pub struct CustomFxEngine {
     states: HashMap<String, EffectState>,
     last_rev: u64,
@@ -629,11 +642,109 @@ pub fn preview_level(effect: &CustomEffect, raw_value: f64, t: f64) -> (u8, u8, 
     }
 
     let v = intensity.clamp(0.0, 255.0) as u8;
-    (
-        if effect.out.joystick { v } else { 0 },
-        if effect.out.throttle_left { v } else { 0 },
-        if effect.out.throttle_right { v } else { 0 },
-    )
+    route_channels(effect, v)
+}
+
+/// Живой пошаговый предпросмотр на устройстве (кнопка «Запустить на
+/// устройстве» в конструкторе) — в отличие от `preview_level` (которая на
+/// КАЖДЫЙ вызов переигрывает историю с t=0, см. её doc-комментарий), состояние
+/// эффекта (`EffectState`) здесь живёт МЕЖДУ вызовами `tick`, как в реальном
+/// движке `CustomFxEngine`. Это принципиально для потока `preview_player`,
+/// который тикает раз в 20 мс на точной сетке: переигрывание истории заново на
+/// каждом тике либо стоило бы всё дороже с ростом времени работы плеера, либо
+/// упиралось бы в `preview_level::MAX_STEPS` и рвало форму сигнала.
+///
+/// Зерно джиттера ФИКСИРОВАНО (`EffectState::new_preview`), как у остальных
+/// preview-путей — повторный запуск кнопки «Играть» с теми же настройками
+/// обязан звучать одинаково, а не зависеть от системных часов.
+pub struct PreviewRunner {
+    state: EffectState,
+}
+
+impl PreviewRunner {
+    pub fn new() -> Self {
+        Self {
+            state: EffectState::new_preview(),
+        }
+    }
+
+    /// Один тик: `raw_value` — текущее сырое значение источника (ручной
+    /// слайдер или кадр записи), `t` — точное время сетки предпросмотра
+    /// (кратное `hid::protocol::SEND_INTERVAL_S`, см. `preview_player`), а не
+    /// настенные часы. Возвращает уже смаршрутизированные три канала.
+    pub fn tick(&mut self, effect: &CustomEffect, raw_value: f64, t: f64) -> (u8, u8, u8) {
+        let intensity = preview_tick(effect, raw_value, t, &mut self.state);
+        let v = intensity.clamp(0.0, 255.0) as u8;
+        route_channels(effect, v)
+    }
+}
+
+impl Default for PreviewRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Пауза между повторами событийного эффекта (`is_event_effect`) в
+/// зацикленном ручном предпросмотре — см. `preview_playback_time_s`. Без
+/// паузы соседние повторы одиночного удара сливались бы в одно долгое
+/// дребезжание; величина не из спеки, ориентир — "рука успевает отпустить
+/// ощущение прошлого удара" прежде, чем прилетит следующий.
+pub const PREVIEW_EVENT_REPEAT_GAP_S: f64 = 0.6;
+
+/// Эффект "событийный" — срабатывает по фронту и естественным образом гаснет
+/// сам, а не удерживается непрерывно: `Shape::OneShot` (огибающая
+/// attack->hold->decay) или `Trigger::Changed` (импульс на изменение,
+/// держится ровно `hold_s`). В реальной игре (`CustomFxEngine::step`) такой
+/// эффект честно срабатывает один раз на событие — поэтому его РУЧНОЙ
+/// предпросмотр обязан зацикливаться (`preview_playback_time_s`), иначе после
+/// первого же удара индикаторы навсегда повисают на нуле, а кнопка
+/// продолжает показывать "Стоп", как будто что-то ещё играет.
+pub fn is_event_effect(effect: &CustomEffect) -> bool {
+    matches!(effect.shape, Shape::OneShot { .. })
+        || matches!(effect.trigger, Trigger::Changed { .. })
+}
+
+/// Длительность одного события эффекта, секунды — максимум из полной
+/// огибающей `Shape::OneShot` (attack+hold+decay) и `hold_s` у
+/// `Trigger::Changed`. Оба поля независимы друг от друга (эффект может иметь
+/// OneShot-форму без Changed-триггера или наоборот), отсюда максимум, а не
+/// сумма и не выбор одного варианта.
+fn event_duration_s(effect: &CustomEffect) -> f64 {
+    let mut duration = 0.0f64;
+    if let Shape::OneShot {
+        attack_ms,
+        hold_ms,
+        decay_ms,
+        ..
+    } = effect.shape
+    {
+        duration = duration.max((attack_ms as f64 + hold_ms as f64 + decay_ms as f64) / 1000.0);
+    }
+    if let Trigger::Changed { hold_s, .. } = effect.trigger {
+        duration = duration.max(hold_s);
+    }
+    duration
+}
+
+/// Время, которое реально подаётся в `preview_level`/`PreviewRunner::tick` на
+/// тике ручного предпросмотра — ЧИСТАЯ функция (без egui/Instant), вынесена
+/// отдельно ради юнит-тестов. Для событийных эффектов (`is_event_effect`)
+/// заворачивает `elapsed_s` по модулю периода (длительность события + пауза
+/// `PREVIEW_EVENT_REPEAT_GAP_S`) — так предпросмотр раз за разом видит свежий
+/// фронт "молчал -> активен" в t=0 и удар повторяется циклически. Для
+/// остальных форм/триггеров (Constant/Pulse/Sine/Sawtooth с непрерывным
+/// триггером) возвращает `elapsed_s` без изменений — там `t` обязан расти
+/// монотонно, иначе поедет фаза периодического сигнала.
+pub fn preview_playback_time_s(effect: &CustomEffect, elapsed_s: f64) -> f64 {
+    if !is_event_effect(effect) {
+        return elapsed_s;
+    }
+    let period = event_duration_s(effect) + PREVIEW_EVENT_REPEAT_GAP_S;
+    if period <= 0.0 {
+        return elapsed_s;
+    }
+    elapsed_s.rem_euclid(period)
 }
 
 #[cfg(test)]
@@ -1297,5 +1408,104 @@ mod tests {
             255,
         );
         assert!(out.joystick > 0, "регистронезависимое совпадение подстроки");
+    }
+
+    // -------------------------------------------------------------
+    // Зацикливание ручного предпросмотра событийных эффектов (Shape::OneShot
+    // / Trigger::Changed): удар должен повторяться, а не играть один раз.
+    // Перенесено из ui/effects_editor.rs вместе с preview_playback_time_s/
+    // is_event_effect — они нужны потоку src/custom_fx/preview_player.rs.
+    // -------------------------------------------------------------
+
+    fn impact_effect() -> CustomEffect {
+        // Ровно заготовка "Удар" из задачи: attack 100ms + hold 200ms +
+        // decay 190ms = 0.49s огибающая, Trigger::Changed { hold_s: 0.6 }.
+        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        e.trigger = Trigger::Changed {
+            eps: 1.0,
+            hold_s: 0.6,
+        };
+        e.shape = Shape::OneShot {
+            attack_ms: 100.0,
+            hold_ms: 200.0,
+            decay_ms: 190.0,
+            decay_exp: 2,
+        };
+        e
+    }
+
+    #[test]
+    fn oneshot_preview_period_covers_full_envelope_plus_gap() {
+        let e = impact_effect();
+        // Огибающая OneShot 0.49s против hold_s 0.6s триггера — максимум 0.6s.
+        let expected_period = 0.6 + PREVIEW_EVENT_REPEAT_GAP_S;
+        assert!(is_event_effect(&e));
+        assert!((event_duration_s(&e) - 0.6).abs() < 1e-9);
+
+        // Чуть меньше периода — не завёрнуто.
+        let t = expected_period - 0.05;
+        assert!((preview_playback_time_s(&e, t) - t).abs() < 1e-9);
+
+        // Ровно на границе периода — заворачивается в 0 (новый фронт).
+        assert!(preview_playback_time_s(&e, expected_period).abs() < 1e-9);
+
+        // Спустя несколько периодов — фаза внутри цикла та же, что в начале.
+        let phase = 0.2;
+        let wrapped = preview_playback_time_s(&e, expected_period * 3.0 + phase);
+        assert!((wrapped - phase).abs() < 1e-6);
+    }
+
+    #[test]
+    fn oneshot_preview_period_uses_longer_envelope_when_shape_dominates() {
+        let mut e = impact_effect();
+        // Огибающая OneShot длиннее hold_s триггера — период обязан покрыть
+        // именно её, иначе следующий цикл оборвал бы decay на середине.
+        e.shape = Shape::OneShot {
+            attack_ms: 500.0,
+            hold_ms: 500.0,
+            decay_ms: 500.0,
+            decay_exp: 1,
+        };
+        let expected_envelope = 1.5; // 0.5 + 0.5 + 0.5
+        assert!((event_duration_s(&e) - expected_envelope).abs() < 1e-9);
+    }
+
+    #[test]
+    fn continuous_effect_time_is_not_wrapped() {
+        let mut e = new_effect("T".into(), SourceId::FlightAirspeedKn);
+        e.trigger = Trigger::Always;
+        e.shape = Shape::Sine {
+            freq_hz: 2.0,
+            depth_pct: 100.0,
+        };
+        assert!(!is_event_effect(&e));
+
+        for t in [0.0, 1.5, 100.0, 999.25] {
+            assert_eq!(
+                preview_playback_time_s(&e, t),
+                t,
+                "непрерывный эффект не должен заворачиваться, иначе поедет фаза"
+            );
+        }
+    }
+
+    #[test]
+    fn changed_trigger_alone_gives_period_no_shorter_than_hold_s() {
+        let mut e = new_effect("T".into(), SourceId::FlightFlapsPct);
+        e.shape = Shape::Constant; // без OneShot — событийность только от триггера
+        e.trigger = Trigger::Changed {
+            eps: 1.0,
+            hold_s: 5.0,
+        };
+        assert!(is_event_effect(&e));
+        assert!(event_duration_s(&e) >= 5.0);
+
+        // Внутри hold_s — не завёрнуто (эффект ещё должен звучать).
+        assert!((preview_playback_time_s(&e, 4.9) - 4.9).abs() < 1e-9);
+        // Период обязан быть НЕ короче hold_s (плюс пауза) — иначе долгий
+        // hold_s обрубился бы циклом раньше, чем сам успел отыграть.
+        let period = event_duration_s(&e) + PREVIEW_EVENT_REPEAT_GAP_S;
+        assert!(period >= 5.0);
+        assert!((preview_playback_time_s(&e, period + 0.1) - 0.1).abs() < 1e-9);
     }
 }
