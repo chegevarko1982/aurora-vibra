@@ -1645,11 +1645,7 @@ fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
                 floor_pct,
                 attack_ms,
             } => {
-                ui.horizontal(|ui| {
-                    ui.label(cx.t.lbl_fx_freq);
-                    ui.add(egui::Slider::new(freq_hz, 0.2..=MAX_SHAPE_FREQ_HZ).suffix(" Hz"))
-                        .on_hover_text(cx.t.hover_fx_freq);
-                });
+                freq_slider(ui, cx, freq_hz);
                 ui.horizontal(|ui| {
                     ui.label(cx.t.lbl_fx_duty);
                     ui.add(egui::Slider::new(duty_pct, 0.0..=100.0).suffix("%"));
@@ -1688,22 +1684,14 @@ fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
                 });
             }
             Shape::Sine { freq_hz, depth_pct } => {
-                ui.horizontal(|ui| {
-                    ui.label(cx.t.lbl_fx_freq);
-                    ui.add(egui::Slider::new(freq_hz, 0.2..=MAX_SHAPE_FREQ_HZ).suffix(" Hz"))
-                        .on_hover_text(cx.t.hover_fx_freq);
-                });
+                freq_slider(ui, cx, freq_hz);
                 ui.horizontal(|ui| {
                     ui.label(cx.t.lbl_fx_depth);
                     ui.add(egui::Slider::new(depth_pct, 0.0..=100.0).suffix("%"));
                 });
             }
             Shape::Sawtooth { freq_hz, depth_pct } => {
-                ui.horizontal(|ui| {
-                    ui.label(cx.t.lbl_fx_freq);
-                    ui.add(egui::Slider::new(freq_hz, 0.2..=MAX_SHAPE_FREQ_HZ).suffix(" Hz"))
-                        .on_hover_text(cx.t.hover_fx_freq);
-                });
+                freq_slider(ui, cx, freq_hz);
                 ui.horizontal(|ui| {
                     ui.label(cx.t.lbl_fx_depth);
                     ui.add(egui::Slider::new(depth_pct, 0.0..=100.0).suffix("%"));
@@ -2305,6 +2293,60 @@ fn draw_mini_graph(
 /// фигурах — а колебания вроде Sine/Sawtooth на пару герц за 2 секунды дают
 /// именно такую, многократно ныряющую к нулю фигуру. Столбики корректны при
 /// любой форме сигнала и всё равно читаются как "залитая кривая".
+/// Сколько тактов отправки на устройство укладывается в один период формы.
+/// Ровно то число, которое решает, будут ли все импульсы одной длины: такт —
+/// `hid::protocol::SEND_INTERVAL_S`, и период, не кратный ему, физически
+/// нельзя отправить одинаковыми порциями. 5 Гц — это ровно 10 тактов, 4 Гц —
+/// 12.5, поэтому на 4 Гц импульсы честно чередуются 140/120 мс.
+fn ticks_per_period(freq_hz: f32) -> f64 {
+    if freq_hz <= 0.0 {
+        return f64::INFINITY;
+    }
+    1.0 / (freq_hz as f64 * crate::hid::protocol::SEND_INTERVAL_S)
+}
+
+/// Ползунок частоты формы плюс подпись с точным числом тактов на период.
+/// Подпись именно числовая и без вердиктов: пользователь видит «10.0» против
+/// «12.5» и делает вывод сам — предупреждать за него не о чем, тут не
+/// эвристика, а арифметика такта отправки.
+fn freq_slider(ui: &mut egui::Ui, cx: &EditorCtx, freq_hz: &mut f32) {
+    ui.horizontal(|ui| {
+        ui.label(cx.t.lbl_fx_freq);
+        ui.add(egui::Slider::new(freq_hz, 0.2..=MAX_SHAPE_FREQ_HZ).suffix(" Hz"))
+            .on_hover_text(cx.t.hover_fx_freq);
+        let ticks = ticks_per_period(*freq_hz);
+        let whole = (ticks - ticks.round()).abs() < 1e-6;
+        let text = RichText::new(format!("{:.1} {}", ticks, cx.t.lbl_fx_ticks_per_period))
+            .monospace()
+            .color(if whole {
+                palette::TEXT_SECONDARY
+            } else {
+                palette::ACCENT_LIVE
+            });
+        ui.label(text).on_hover_text(cx.t.hover_fx_ticks_per_period);
+    });
+}
+
+/// Геометрия столбиков осциллографа в ФИЗИЧЕСКИХ пикселях: возвращает
+/// (левый край полосы столбиков, ширину одного отсчёта). Вынесена из
+/// `draw_oscilloscope` отдельной функцией ради юнит-теста — сам рисунок
+/// тестом не проверить, а вот то, что все импульсы получают одинаковую
+/// ширину при любом масштабе экрана и любом дробном левом крае, — вполне.
+fn oscilloscope_bar_grid(rect_left: f32, rect_width: f32, ppp: f32, n: usize) -> (f32, f32) {
+    let left_px = (rect_left * ppp).round();
+    let width_px = rect_width * ppp;
+    let px_per_sample = (width_px / n as f32).floor().max(1.0);
+    if px_per_sample >= 2.0 {
+        let used_px = px_per_sample * n as f32;
+        (
+            left_px + ((width_px - used_px) * 0.5).floor(),
+            px_per_sample,
+        )
+    } else {
+        (left_px, width_px / n as f32)
+    }
+}
+
 fn draw_oscilloscope(ui: &mut egui::Ui, samples: &[f32], height: f32) {
     let desired = Vec2::new(ui.available_width(), height);
     let (rect, _resp) = ui.allocate_exact_size(desired, Sense::hover());
@@ -2323,41 +2365,42 @@ fn draw_oscilloscope(ui: &mut egui::Ui, samples: &[f32], height: f32) {
     }
     let n = samples.len();
 
-    // ЦЕЛОЕ число пикселей на отсчёт — иначе ровный по данным паттерн
-    // выглядит рваным. egui прибивает края прямоугольников к целым пикселям
-    // (сглаживания краёв тут нет — проверено по пикселям скриншота), поэтому
-    // при дробной ширине отсчёта импульс из 5 отсчётов рисовался то 23, то
-    // 24 пикселя, и разброс складывался в хорошо заметный узор
-    // 23,23,23,24,24 — при том что сами данные идеально ровные (см. тест
-    // `pulse_is_exactly_uniform_when_period_divides_output_tick`).
+    // ЦЕЛОЕ число ФИЗИЧЕСКИХ пикселей на отсчёт — иначе ровный по данным
+    // паттерн выглядит рваным. Раньше здесь считалось в точках egui, и этого
+    // было мало по двум причинам сразу:
     //
-    // Поэтому холст рисуем во всю ширину (рамка и фон — на месте), а сами
+    //  * целое число ТОЧЕК на отсчёт ещё не значит целое число пикселей: при
+    //    масштабе экрана 125%/150% ровные 5.0 точки — это 6.25 пикселя, и
+    //    края столбиков снова расходятся, то 6, то 7;
+    //  * сам `rect.left()` в общем случае дробный (зависит от накопленной
+    //    вёрстки выше), поэтому вся сетка съезжает с пиксельной границы даже
+    //    при масштабе 100%.
+    //
+    // Поэтому всю арифметику ведём в пикселях и переводим в точки только на
+    // выходе. Холст рисуем во всю ширину (рамка и фон — на месте), а сами
     // столбики укладываем в ЦЕНТРИРОВАННУЮ полосу шириной, кратной числу
     // отсчётов. Остаток по краям — фон, он меньше одного отсчёта на каждую
-    // сторону и не выглядит обрезкой. Если на отсчёт не набирается даже
-    // двух пикселей (очень узкое окно), равномерность недостижима в
-    // принципе — тогда честнее занять всю ширину, чем ужимать график вдвое.
-    let px_per_sample = (rect.width() / n as f32).floor().max(1.0);
-    let (bars_left, bar_w) = if px_per_sample >= 2.0 {
-        let used = px_per_sample * n as f32;
-        (
-            rect.left() + ((rect.width() - used) * 0.5).floor(),
-            px_per_sample,
-        )
-    } else {
-        (rect.left(), rect.width() / n as f32)
-    };
+    // сторону и не выглядит обрезкой. Если на отсчёт не набирается даже двух
+    // пикселей (очень узкое окно), равномерность недостижима в принципе —
+    // тогда честнее занять всю ширину, чем ужимать график вдвое.
+    //
+    // Сами данные ровные по построению, см. тест
+    // `pulse_is_exactly_uniform_when_period_divides_output_tick` в engine.rs.
+    let ppp = ui.ctx().pixels_per_point();
+    let (bars_left_px, bar_w_px) = oscilloscope_bar_grid(rect.left(), rect.width(), ppp, n);
 
+    let bottom_px = (rect.bottom() * ppp).round();
+    let height_px = rect.height() * ppp;
     for (i, &s) in samples.iter().enumerate() {
         let frac = (s / 255.0).clamp(0.0, 1.0);
-        let bar_h = (frac * rect.height()).round();
+        let bar_h_px = (frac * height_px).round();
         // x1 текущего столбика равен x0 следующего по построению — соседние
         // столбики смыкаются без щелей в заливке.
-        let x0 = bars_left + bar_w * i as f32;
-        let x1 = bars_left + bar_w * (i + 1) as f32;
+        let x0 = (bars_left_px + bar_w_px * i as f32) / ppp;
+        let x1 = (bars_left_px + bar_w_px * (i + 1) as f32) / ppp;
         let bar = Rect::from_min_max(
-            egui::pos2(x0, rect.bottom() - bar_h),
-            egui::pos2(x1, rect.bottom()),
+            egui::pos2(x0, (bottom_px - bar_h_px) / ppp),
+            egui::pos2(x1, bottom_px / ppp),
         );
         painter.rect_filled(bar, 0u8, palette::ACCENT_LIVE.gamma_multiply(0.85));
     }
@@ -2607,6 +2650,51 @@ fn px_y_to_value(px: f32, bounds: (f64, f64), rect: Rect) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// Регрессия на «столбики осциллографа расходятся по ширине». Данные
+    /// ровные по построению (см. `pulse_is_exactly_uniform_when_period_
+    /// divides_output_tick` в engine.rs: 5 отсчётов импульс, 5 пауза), но
+    /// раньше сетка квантовалась в ТОЧКАХ egui, и при масштабе экрана
+    /// 125%/150% или просто дробном `rect.left()` края съезжали с пиксельной
+    /// границы — импульсы выходили то 24, то 26 пикселей.
+    #[test]
+    fn oscilloscope_bars_are_pixel_uniform_at_any_scale_and_offset() {
+        const N: usize = 100; // 2 с / 20 мс — как OSCILLOSCOPE_SAMPLES
+        for &ppp in &[1.0f32, 1.25, 1.5, 1.75, 2.0] {
+            for &left in &[0.0f32, 12.0, 22.5, 137.3, 200.7] {
+                for &width in &[532.0f32, 640.0, 733.5, 901.25] {
+                    let (bars_left_px, bar_w_px) = oscilloscope_bar_grid(left, width, ppp, N);
+                    assert_eq!(
+                        bar_w_px,
+                        bar_w_px.floor(),
+                        "ширина отсчёта {bar_w_px} не целое число пикселей                          (ppp={ppp}, left={left}, width={width})"
+                    );
+                    assert_eq!(
+                        bars_left_px,
+                        bars_left_px.floor(),
+                        "левый край {bars_left_px} не на пиксельной границе"
+                    );
+
+                    // Импульс 5 Гц / 50%: отсчёты 0..5 включены, 5..10 нет.
+                    // Ширина каждого импульса обязана быть ОДНА И ТА ЖЕ.
+                    let mut widths = Vec::new();
+                    for cycle in 0..10usize {
+                        let i0 = cycle * 10;
+                        let x0 = bars_left_px + bar_w_px * i0 as f32;
+                        let x1 = bars_left_px + bar_w_px * (i0 + 5) as f32;
+                        widths.push(x1 - x0);
+                    }
+                    let first = widths[0];
+                    for (k, w) in widths.iter().enumerate() {
+                        assert_eq!(
+                            *w, first,
+                            "импульс #{k} шириной {w} против {first}                              (ppp={ppp}, left={left}, width={width})"
+                        );
+                    }
+                }
+            }
+        }
+    }
     use super::*;
 
     fn test_rect() -> Rect {
