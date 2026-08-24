@@ -1,6 +1,6 @@
 # Changelog
 
-## v4.5.0
+## v5.0.0
 
 Feature release. Until now the set of tactile effects was fixed in code: you could switch an
 effect on, set its strength, and choose which motors it drove — but if the effect you wanted
@@ -38,10 +38,39 @@ that you name yourself.
 - **The session recorder now covers all three simulators**, not just War Thunder. War Thunder
   files are written in exactly the same format as before.
 
+**Fixes:**
+- **Output to the motors was dropping roughly half of all frames.** The rate limiter in the
+  device thread compared the elapsed time against the send interval exactly, while every
+  producer emits on exactly that interval — so the comparison sat precisely on the boundary and
+  delivery jitter of a fraction of a millisecond decided it. When it fell short the frame was
+  lost silently: the loop went back to waiting and the next command overwrote it. A five-tick
+  pulse reached the motors as 80 or 120 ms instead of 100. This affected every simulator and
+  every built-in effect, not just the new editor.
+- **The device thread stalled for ~145 ms every two seconds.** Hot-plug detection re-enumerated
+  all USB HID devices on a timer, synchronously, in the same thread that writes to the motors.
+  At 5 Hz that pause swallows most of a period, so the vibration broke up on a two-second
+  rhythm. Enumeration now waits for a moment when the motors are idle — unplugging is still
+  caught immediately by the write failing, and nobody plugs a device in while it is vibrating.
+- **The editor's preview ran off the window's frame clock.** Playback was driven from repaints,
+  so it inherited the monitor's refresh rate and the accumulated rounding of a throttle that
+  reset itself on every send. Preview now runs on its own thread on an exact 20 ms grid, with
+  the effect's time derived from the tick number rather than from a wall clock.
+- **The oscilloscope quantised bars in interface units instead of pixels.** Five whole units are
+  6.25 physical pixels at 125% display scaling, so a waveform that was uniform by construction
+  was drawn ragged. Bar geometry is now computed in physical pixels.
+- **Built-in help was wrong about the two engines.** It still described built-in and custom
+  effects as mutually exclusive, which stopped being true when the mode switch was removed. The
+  section was rewritten in both languages and now covers the whole editor: sources, triggers,
+  curve, shapes, mixing, both preview modes and the recorder.
+
 **Note:**
 - Vibration frequency is capped at 6.5 Hz throughout, including on imported files. The device
-  channel updates every 50 ms, so anything above that limit aliases into noise instead of
-  producing a faster vibration.
+  channel updates every 20 ms, so anything above that limit aliases into noise instead of
+  producing a faster vibration. Next to the rate slider the editor prints how many 20 ms ticks
+  fit into one period: a whole number means every pulse comes out the same length, a fractional
+  one means the lengths alternate. 5 Hz is 10.0 ticks and is perfectly even; 4 Hz is 12.5 and
+  its pulses genuinely run 140/120 ms. That is the send rate itself and no software can round
+  it away, so the editor states the number rather than pretending otherwise.
 - Built-in effects, their calibration, telemetry handling, and device output are untouched —
   a custom effect suppresses a built-in one by switching it off for that tick, not by altering
   its formula. Settings and aircraft profiles carry over. An installation that never opens the

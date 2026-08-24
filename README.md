@@ -90,7 +90,7 @@ War Thunder need no client library at all.
 The updater verifies the downloaded archive against the release's published SHA-256
 before installing anything, and refuses to proceed if it does not match.
 
-Release candidates (tags like `v4.3.0-rc1`) are published as GitHub pre-releases and are
+Release candidates (tags like `v5.1.0-rc1`) are published as GitHub pre-releases and are
 deliberately **not** offered by the auto-updater — download them by hand if you want to
 test one.
 
@@ -107,7 +107,7 @@ test one.
   areas) keeps physical vibration, cockpit instruments, and sound modules in sync.
 - Add-on-specific variables are read unconditionally and self-neutralise on aircraft that
   do not define them, so nothing has to be toggled per flight.
-- **Not limited to the add-ons listed here:** since v4.5.0 you can name an L:Var yourself in
+- **Not limited to the add-ons listed here:** since v5.0.0 you can name an L:Var yourself in
   the Effect Editor and build an effect on it, without waiting for the aircraft to be
   supported explicitly. See feature 7 below.
 
@@ -166,11 +166,18 @@ test one.
 - **Any MSFS variable you can name:** type an L:Var (the simulator's own developer menu lists
   them), pick its unit, and drive an effect from it. The name travels inside the effect, so an
   exported effect keeps working for whoever you share it with.
-- **Feel it before you fly:** *Play on device* drives your hardware straight from the editor —
+- **Feel it before you fly:** *Start on device* drives your hardware straight from the editor —
   event effects repeat on a loop so a half-second thump can be tuned by feel. *Replay a
   recording* runs a captured flight through the effect offline and plots the result.
 - **Start from a template** — *Impact*, *Hum*, *Pulsation*, *Growing* — carrying the numbers of
   effects already calibrated on real hardware, then adjust from there.
+- **The vibration comes out as you drew it.** The device is fed every 20 ms, and the editor
+  prints how many of those ticks fit into one period of your shape right next to the rate
+  slider. A whole number means every pulse reaches the motors at exactly the same length; a
+  fractional one means the lengths alternate, and that is the send rate itself rather than
+  something software can round away. 5 Hz is 10.0 ticks and is dead even, 4 Hz is 12.5 and its
+  pulses genuinely run 140/120 ms. The editor states the number instead of hiding the
+  difference.
 - **Keep the built-ins, replace only what you want:** both engines run together, so you can
   build two effects of your own and leave the other eleven alone. A custom effect built on a
   telemetry source takes that source over — the built-in effect using it steps aside, and its
