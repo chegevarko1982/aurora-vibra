@@ -111,6 +111,15 @@ name = "test_vibroTH"
 path = "src/bin/test_vibroTH.rs"
 required-features = ["dev-tools"]
 
+# Стенд «математически выверенный ровный паттерн»: пишет в устройство напрямую
+# по абсолютным дедлайнам, минуя движок эффектов, egui и телеметрию, и печатает
+# фактическое отклонение сетки отправок от идеала. Нужен, чтобы отличить
+# неравномерность тракта от инерции самих вибромоторов.
+[[bin]]
+name = "test_pattern_uniformity"
+path = "src/bin/test_pattern_uniformity.rs"
+required-features = ["dev-tools"]
+
 # Автономная разведывательная утилита для War Thunder HTTP-телеметрии
 # (localhost:8111/state, /indicators, /hudmsg, ...). Кроссплатформенная
 # (Windows + Linux, в т.ч. --replay в CI без запущенной игры), поэтому не под
