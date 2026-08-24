@@ -468,7 +468,7 @@ pub const EN: Strings = Strings {
     btn_resume: "▶ Resume",
     btn_options: "Options",
     hover_help: "Help",
-    help_text: "Aurora Vibra drives tactile feedback (rumble) on the joystick and throttle (WinWing and compatible): runway-joint thumps on taxi, gear touchdown kick, flap/spoiler vibration, stall and overspeed effects, engine start spool-up. Everything is computed from the aircraft's real telemetry via SimConnect, not from the cockpit switch positions.
+    help_text: "Aurora Vibra drives tactile feedback (rumble) on the joystick and throttle (WinWing and compatible): runway-joint thumps on taxi, gear touchdown kick, flap/spoiler vibration, stall and overspeed effects, engine start spool-up. Everything is computed from the aircraft's real telemetry, not from the cockpit switch positions: Microsoft Flight Simulator over SimConnect, X-Plane over UDP, and War Thunder over its local telemetry API — the app picks up whichever of the three is running.
 
 ## 1. Launch & connection
 The top bar shows the SimConnect link status (Connected/Disconnected/In Flight) and two dots — Sidestick and Throttle — that light up once each physical device is detected. If it says \"SimConnect.dll not found\" next to the status, there's no telemetry to read from; that's not an MSFS problem, restarting the sim won't help (hover it for where to look in AuroraVibra.log).
@@ -900,7 +900,7 @@ pub const RU: Strings = Strings {
     btn_resume: "▶ Продолжить",
     btn_options: "Опции",
     hover_help: "Справка",
-    help_text: "Aurora Vibra отдаёт на джойстик и РУД (WinWing и совместимые) тактильную отдачу: удары стоек ВПП на рулении, отдачу шасси при касании, вибрацию закрылков/спойлеров, эффекты сваливания и превышения скорости, раскрутку двигателя при запуске. Всё считается из реальной телеметрии борта через SimConnect, а не из положения переключателей в кабине.
+    help_text: "Aurora Vibra отдаёт на джойстик и РУД (WinWing и совместимые) тактильную отдачу: удары стоек ВПП на рулении, отдачу шасси при касании, вибрацию закрылков/спойлеров, эффекты сваливания и превышения скорости, раскрутку двигателя при запуске. Всё считается из реальной телеметрии борта, а не из положения переключателей в кабине: Microsoft Flight Simulator — через SimConnect, X-Plane — по UDP, War Thunder — через его локальный API телеметрии; программа подхватывает ту из трёх игр, что сейчас запущена.
 
 ## 1. Запуск и подключение
 Верхняя панель показывает статус связи с симулятором (Connected/Disconnected/In Flight) и два индикатора — Sidestick и Throttle: горят, когда соответствующее физическое устройство опознано. Если рядом со статусом связи написано «SimConnect.dll не найдена» — телеметрию читать нечем; это не проблема MSFS, перезапуск симулятора не поможет (наведите — там же путь, куда смотреть в AuroraVibra.log).
