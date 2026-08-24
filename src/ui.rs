@@ -1077,10 +1077,22 @@ impl eframe::App for UiState {
                 .show(&ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // Лёгкая markdown-подобная разметка: "## " -> heading,
-                        // пустая строка -> отступ, всё остальное -> абзац/пункт
-                        // с переносом по ширине окна.
+                        // "### " -> подзаголовок, пустая строка -> отступ, всё
+                        // остальное -> абзац/пункт с переносом по ширине окна.
+                        // Цвет подзаголовка задан явно: полагаться на дефолт
+                        // Visuals тут нельзя, см. историю с читаемостью тёмной
+                        // темы.
                         for line in t.help_text.lines() {
-                            if let Some(h) = line.strip_prefix("## ") {
+                            if let Some(h) = line.strip_prefix("### ") {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(h)
+                                        .strong()
+                                        .size(15.0)
+                                        .color(palette::TEXT_PRIMARY),
+                                );
+                                ui.add_space(1.0);
+                            } else if let Some(h) = line.strip_prefix("## ") {
                                 ui.add_space(8.0);
                                 ui.heading(h);
                                 ui.add_space(2.0);

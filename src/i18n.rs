@@ -507,7 +507,62 @@ Stop/Resume in the left column mutes all effects temporarily without touching th
 \"Check for updates…\" in the \"...\" menu → Options runs a one-off version check; if a newer release exists, it offers to install it and restart the app automatically.
 
 ## 6. Building your own effect
-The Effect Editor (\"My effects\" section) builds a custom effect in 4 steps: 1) pick a telemetry source; 2) pick when it fires; 3) draw the response curve; 4) pick a shape and where it plays. \"+ New effect\" opens a menu of 4 ready-made starting points (Impact, Hum, Pulsation, Growing) instead of a blank effect. Important: built-in and custom effects are mutually exclusive — only the engine selected at the top of that screen (Built-in effects / My effects) actually drives the motors.",
+The \"My effects\" section is a full effect constructor: you pick a telemetry channel, decide when it should fire, draw how hard it responds, choose the vibration shape, and send it to the motors — all with the mouse, no files to edit.
+
+Built-in and custom effects run AT THE SAME TIME. A custom effect does not switch the built-in set off. The only thing it can do is take over one built-in effect: if you build an effect on the same telemetry source that a built-in effect uses as its main input, that built-in one goes quiet and yours plays instead. Step 1 tells you exactly which one, or tells you that this source overrides nothing and both will simply run together.
+
+Everything is saved automatically to AuroraVibra.effects.json next to the app — there is deliberately no Save button here.
+
+### The list on the left
+\"+ New effect\" does not create a blank effect; it opens four ready-made starting points:
+- Impact — a short kick on an event, fires once and fades;
+- Hum — a textured buzz while a value stays above a threshold, the same texture as the built-in gunfire effect;
+- Pulsation — a soft, smooth pulse while a value stays above a threshold;
+- Growing — strength simply follows the source value, no threshold.
+Duplicate and Delete work on the selected effect. Import…/Export… move a chosen set of effects as a file — that is how you share an effect with someone else.
+
+Each row has a checkbox (on/off) and lights up while the effect is actually firing right now. Below the name you set Games (MSFS / X-Plane / War Thunder — one effect can serve several) and \"Only for aircraft\", a substring filter: leave it empty and the effect works on every aircraft.
+
+### Step 1. Source
+The dropdown is grouped by game so you can see at a glance what belongs where: flight parameters shared by MSFS and X-Plane, War Thunder channels, and MSFS custom variables.
+
+A custom variable (LVAR) is for values the sim does not publish as a standard channel. Find the exact name inside the sim — Developer Mode > Behaviors, or the local variables list; such names usually start with \"L:\". Then set the unit and the value range (from / to). That range is not cosmetic: it sets the scale of every graph and threshold slider on this screen, because only you know what your variable means. Custom variables exist in MSFS only, so the Games checkboxes lock to MSFS.
+
+Next to the source you see its live value and a rolling graph of the last few seconds — useful for finding out what the number actually does in flight before you build anything on it.
+
+### Step 2. When it fires
+- Always — no condition, the curve alone decides.
+- Above threshold / Below threshold — the usual case.
+- In range — fires between two values.
+- When on — for yes/no channels.
+- While changing — fires while the value keeps moving, then stops. This is what the built-in flap and gear effects use. \"Minimum step\" is how much movement counts as movement, \"Hold\" is how long it keeps vibrating after the movement stops.
+
+\"Hysteresis\" is a dead band around the threshold. Without it an effect sitting exactly at its threshold switches on and off many times a second, which feels like a rattle rather than a warning.
+
+### Step 3. Response curve
+The horizontal axis is your source in its own units, the vertical axis is strength from 0 to 100%. Drag a point to move it, click the line to add one, right-click a point to remove it. A vertical marker shows where the live telemetry value sits on the curve right now, so you can see which part of the curve you are actually flying in.
+
+### Step 4. Shape and output
+Shape is what the vibration does over time once the effect is firing:
+- Steady — a constant level;
+- Pulsing — a square pulse train (Rate, Pulse width, Roughness, Between pulses, Attack);
+- Single hit — one strike with Attack / Hold / Decay and a decay exponent;
+- Wave — a smooth oscillation (Rate, Depth);
+- Sawtooth — a rising ramp that drops sharply, the shape used by the built-in stall effect.
+
+About Rate, and this one matters. The device is fed every 20 ms — one tick, 50 times a second. Next to the Rate slider the app prints how many ticks fit into one period of your shape. A whole number means every pulse comes out exactly the same length. A fractional number means the lengths alternate, and no amount of software can round that away — it is the send rate itself. 5 Hz is 10.0 ticks and comes out perfectly even; 4 Hz is 12.5 ticks and its pulses honestly run 140/120 ms. Rates that divide evenly: 1, 1.25, 2, 2.5, 3.125, 5 and 6.25 Hz. The slider stops at 6.5 Hz because faster pulses are lost between ticks.
+
+The oscilloscope under the parameters shows the shape at FULL response — how the effect looks at the peak of its curve, not at the current telemetry value. It is there to shape the feel, not to monitor the flight.
+
+\"Strength\" is the overall ceiling. \"Smoothing\" softens fast jumps of the source. \"If effects overlap\" decides how this effect combines with your other custom effects on the same motor: \"Take the strongest\" (the default, and what the built-in set does internally) or \"Add up\". \"Send to\" routes it to the joystick, the left throttle motor, the right one, or any combination.
+
+### Trying it without flying
+\"Start on device\" plays the effect on the real hardware right now, and the \"Test value\" slider feeds it any source value you want — so you can feel the difference between 60% and 80% strength with your hand instead of guessing. While the preview holds the channel the games do not write to the motors; pressing Stop, or leaving the section, gives it back. Effects that fire once per event are looped in the preview so you can dial them in.
+
+\"Open recording…\" runs the effect over a real recorded flight instead. Turn on \"Record session (debug)\" in the \"…\" menu > Options, fly, and the app writes the raw telemetry to wt_probe_sessions next to itself. Load that file and the whole flight is replayed offline: a graph of output strength over time with the trigger points marked, a scrub bar, and playback on the hardware. This is the honest way to check whether an effect fires where you meant it to — the recording is the same flight every time, unlike the sim.
+
+### The warnings
+Three notices can appear, and they are statements of fact rather than guesses: the effect is not routed to any motor; the effect will vibrate non-stop (no threshold plus a steady shape); the source does not exist in the game that is currently running.",
     hover_help_us: "Donate",
     help_us_text: "Your support helps keep Aurora Vibra up to date — adding new hardware devices, simulators, and custom aircraft support.
 
@@ -884,7 +939,62 @@ pub const RU: Strings = Strings {
 Пункт «Проверить обновления…» в меню «...» → Опции запускает разовую проверку версии; при наличии новой — предложит установить и перезапустить приложение автоматически.
 
 ## 6. Как собрать свой эффект
-Раздел «Редактор эффектов» («Мои эффекты») собирает пользовательский эффект в 4 шага: 1) выбери источник телеметрии; 2) выбери, когда он срабатывает; 3) нарисуй кривую отклика; 4) выбери форму сигнала и куда её отправить. Кнопка «+ Новый эффект» открывает меню из 4 готовых заготовок (Удар, Гул, Пульсация, Нарастание) вместо пустого эффекта. Важно: встроенные и пользовательские эффекты взаимоисключающие — моторы реально ведёт только тот движок, что выбран вверху этого экрана (Встроенные эффекты / Мои эффекты).",
+Раздел «Мои эффекты» — это полноценный конструктор: вы выбираете канал телеметрии, задаёте условие срабатывания, рисуете силу отклика, выбираете форму вибрации и отправляете её на моторы. Всё мышью, без правки файлов.
+
+Встроенные и пользовательские эффекты работают ОДНОВРЕМЕННО. Свой эффект не выключает встроенный набор. Единственное, что он может, — заменить собой один встроенный: если вы строите эффект на том же источнике телеметрии, который для встроенного является основным входом, встроенный замолкает, а играет ваш. Шаг 1 прямо говорит, какой именно, либо сообщает, что этот источник ничего не вытесняет и оба будут работать рядом.
+
+Всё сохраняется само в AuroraVibra.effects.json рядом с программой — кнопки «Сохранить» здесь намеренно нет.
+
+### Список слева
+«+ Новый эффект» не создаёт пустышку, а предлагает четыре готовые заготовки:
+- Удар — короткий толчок на событие, срабатывает один раз и затухает;
+- Гул — фактурное жужжание, пока значение держится выше порога; та же фактура, что у встроенного эффекта стрельбы;
+- Пульсация — мягкая плавная пульсация, пока значение выше порога;
+- Нарастание — сила просто следует за значением источника, без порога.
+«Дублировать» и «Удалить» работают с выбранным эффектом. «Импорт…» и «Экспорт…» переносят выбранный набор эффектов файлом — так эффектом делятся с другими.
+
+У каждой строки есть галочка включения, и строка подсвечивается, пока эффект реально срабатывает. Ниже имени задаются «Игры» (MSFS / X-Plane / War Thunder — один эффект может обслуживать несколько) и «Только для самолёта» — фильтр по подстроке; оставьте пустым, и эффект работает на любом борту.
+
+### Шаг 1. Источник
+Выпадающий список сгруппирован по играм, чтобы сразу было видно, что откуда: параметры полёта, общие для MSFS и X-Plane, каналы War Thunder и своя переменная MSFS.
+
+Своя переменная (LVAR) нужна для величин, которых симулятор не отдаёт стандартным каналом. Точное имя ищется в самом симуляторе — Developer Mode > Behaviors или список локальных переменных; такие имена обычно начинаются с «L:». Дальше задаются единица измерения и диапазон значений («от» и «до»). Диапазон здесь не украшение: он задаёт масштаб всех графиков и ползунков порога на этом экране, потому что смысл вашей переменной знаете только вы. Свои переменные существуют только в MSFS, поэтому галочки игр фиксируются на MSFS.
+
+Рядом с источником показано его живое значение и график за последние секунды — полезно сначала посмотреть, что число вообще делает в полёте, и только потом строить на нём эффект.
+
+### Шаг 2. Когда срабатывает
+- Всегда — без условия, решает одна кривая.
+- Выше порога / Ниже порога — обычный случай.
+- В диапазоне — срабатывает между двумя значениями.
+- Когда включено — для каналов «да/нет».
+- Пока меняется — работает, пока значение движется, и умолкает, когда оно остановилось. Именно так устроены встроенные эффекты закрылков и шасси. «Минимальный шаг» — какое движение считать движением, «Удержание» — сколько вибрировать после остановки.
+
+«Гистерезис» — мёртвая зона вокруг порога. Без неё эффект, зависший ровно на пороге, включается и выключается по нескольку раз в секунду, и это ощущается как дребезг, а не как предупреждение.
+
+### Шаг 3. Кривая отклика
+По горизонтали — ваш источник в своих единицах, по вертикали — сила от 0 до 100%. Точку тянут мышью, клик по линии добавляет новую, правый клик по точке удаляет. Вертикальный маркер показывает, где сейчас находится живое значение телеметрии, — видно, в какой части кривой вы реально летите.
+
+### Шаг 4. Форма и выход
+Форма — это то, что вибрация делает во времени, пока эффект срабатывает:
+- Ровная — постоянный уровень;
+- Пульсирующая — прямоугольные импульсы (частота, ширина импульса, шероховатость, уровень между импульсами, атака);
+- Одиночный удар — один толчок с атакой, удержанием, спадом и показателем спада;
+- Волна — плавные колебания (частота, глубина);
+- Пила — нарастание с резким сбросом, форма встроенного эффекта сваливания.
+
+Про частоту — и это важно. На устройство мы шлём раз в 20 мс, это один такт, 50 раз в секунду. Рядом с ползунком частоты программа печатает, сколько тактов укладывается в один период вашей формы. Целое число означает, что все импульсы выходят ровно одной длины. Дробное — что длины чередуются, и округлить это нельзя никакой программой: так устроена сама частота отправки. 5 Гц — это 10.0 такта и идеально ровный результат; 4 Гц — это 12.5 такта, и его импульсы честно идут 140/120 мс. Частоты, которые делятся нацело: 1, 1.25, 2, 2.5, 3.125, 5 и 6.25 Гц. Ползунок останавливается на 6.5 Гц: более частые импульсы теряются между тактами.
+
+Осциллограф под параметрами показывает форму на ПОЛНОМ ОТКЛИКЕ — как эффект выглядит на пике своей кривой, а не при текущем значении телеметрии. Он нужен, чтобы поставить ощущение, а не следить за полётом.
+
+«Сила» — общий потолок. «Сглаживание» смягчает резкие скачки источника. «Если эффекты накладываются» решает, как этот эффект сводится с вашими же другими на том же моторе: «Взять сильнейший» (по умолчанию, и так же встроенный набор сводит себя внутри) или «Сложить». «Отправлять на» направляет эффект на джойстик, левый мотор РУД, правый или любое сочетание.
+
+### Как попробовать, не взлетая
+«Запустить на устройстве» проигрывает эффект на настоящем железе прямо сейчас, а ползунок «Тестовое значение» подаёт на вход любое значение источника — можно рукой почувствовать разницу между 60% и 80% силы, а не гадать. Пока предпросмотр держит канал, игры в моторы не пишут; «Стоп» или уход из раздела возвращают канал. Эффекты, которые в игре срабатывают раз на событие, в предпросмотре зациклены, чтобы их можно было настроить.
+
+«Открыть запись…» прогоняет эффект по настоящему записанному полёту. Включите «Записывать сессию (отладка)» в меню «…» > Опции, слетайте, и программа запишет сырую телеметрию в папку wt_probe_sessions рядом с собой. Загрузите этот файл — весь полёт прогоняется офлайн: график силы по времени с отметками срабатываний, ползунок перемотки и воспроизведение на железе. Это честный способ проверить, срабатывает ли эффект там, где вы задумали: запись каждый раз одна и та же, в отличие от полёта.
+
+### Предупреждения
+Их три, и это утверждения факта, а не догадки: эффект не направлен ни на один мотор; эффект будет вибрировать без остановки (нет порога плюс ровная форма); источника нет в той игре, которая сейчас запущена.",
     hover_help_us: "Поддержать",
     help_us_text: "Ваша поддержка помогает актуализировать Aurora Vibra — добавлять поддержку новых устройств, симуляторов и кастомных самолётов.
 
