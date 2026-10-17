@@ -32,6 +32,12 @@ pub const WW_PID_URSA_MINOR_THROTTLE: u16 = 0xB920;
 // по исходникам rswilem/winctrl-xplane-plugin, product-ursa-minor-throttle.h
 // (ProductUrsaMinorThrottle::ThrottleIdentifierByte не зависит от PID).
 pub const WW_PID_URSA_MINOR_THROTTLE_R: u16 = 0xB930;
+// "URSA MINOR Combat Throttle EX" — РУД с двумя грип-моторами. ВНИМАНИЕ:
+// протокол вибрации для этого PID нигде не задокументирован; предполагается
+// тот же, что у WW_PID_URSA_MINOR_THROTTLE (заголовок 0x10,0xB9 и адреса
+// моторов 0x0E/0x10). Требует проверки на реальном железе
+// (`test_pattern_uniformity --list`, `--pid 0xB970`).
+pub const WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX: u16 = 0xB970;
 
 // Линейка WINWING Orion (Joystick Base II / Throttle Base II) — отдельное от
 // Ursa Minor семейство устройств с другим протоколом вибрации (см.
@@ -54,18 +60,21 @@ pub fn ursa_model_name(pid: u16) -> &'static str {
         WW_PID_URSA_MINOR_SPACE_R => "URSA MINOR SPACE R",
         WW_PID_URSA_MINOR_THROTTLE => "URSA MINOR THROTTLE",
         WW_PID_URSA_MINOR_THROTTLE_R => "URSA MINOR THROTTLE R",
+        WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX => "URSA MINOR COMBAT THROTTLE EX",
         WW_PID_ORION_JOYSTICK => "ORION JOYSTICK",
         WW_PID_ORION_THROTTLE => "ORION THROTTLE",
         _ => "UNKNOWN",
     }
 }
 
-/// РУД линейки Ursa Minor (оба физических блока, L и R) — отдельное
-/// устройство, не джойстик.
+/// РУД линейки Ursa Minor (оба физических блока, L и R, и Combat Throttle
+/// EX) — отдельное устройство, не джойстик.
 pub fn is_ursa_minor_throttle(pid: u16) -> bool {
     matches!(
         pid,
-        WW_PID_URSA_MINOR_THROTTLE | WW_PID_URSA_MINOR_THROTTLE_R
+        WW_PID_URSA_MINOR_THROTTLE
+            | WW_PID_URSA_MINOR_THROTTLE_R
+            | WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX
     )
 }
 
@@ -402,7 +411,20 @@ mod tests {
         assert!(is_supported_throttle(WW_PID_URSA_MINOR_THROTTLE));
         assert!(is_supported_throttle(WW_PID_URSA_MINOR_THROTTLE_R));
         assert!(is_supported_throttle(WW_PID_ORION_THROTTLE));
+        assert!(is_supported_throttle(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX));
         assert!(!is_supported_joystick(WW_PID_ORION_THROTTLE));
         assert!(!is_supported_throttle(WW_PID_ORION_JOYSTICK));
+    }
+
+    #[test]
+    fn combat_throttle_ex_is_throttle_with_name() {
+        assert!(is_ursa_minor_throttle(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX));
+        assert!(!is_ursa_minor_joystick(
+            WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX
+        ));
+        assert_eq!(
+            ursa_model_name(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX),
+            "URSA MINOR COMBAT THROTTLE EX"
+        );
     }
 }
