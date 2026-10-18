@@ -24,9 +24,11 @@
 // устройство может быть открыто только одним процессом одновременно.
 
 use aurora_vibra::hid::protocol::{
-    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_orion_joystick_vibe_frame,
+    COMBAT_EX_MOTOR_A, COMBAT_EX_MOTOR_B, THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID,
+    build_combat_throttle_ex_vibe_frame, build_orion_joystick_vibe_frame,
     build_orion_throttle_vibe_frames, build_simapp_vibe_frame, build_throttle_vibe_frame,
-    is_orion_joystick, is_orion_throttle, is_ursa_minor_throttle, ursa_model_name,
+    is_combat_throttle_ex, is_orion_joystick, is_orion_throttle, is_ursa_minor_throttle,
+    ursa_model_name,
 };
 use aurora_vibra::timing::sleep_until;
 use hidapi::{HidApi, HidDevice};
@@ -166,6 +168,7 @@ fn parse_args() -> Args {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DeviceKindFound {
     UrsaThrottle,
+    CombatThrottleEx,
     OrionThrottle,
     OrionJoystick,
     UrsaJoystick,
@@ -175,6 +178,8 @@ impl DeviceKindFound {
     fn of(pid: u16) -> Self {
         if is_ursa_minor_throttle(pid) {
             Self::UrsaThrottle
+        } else if is_combat_throttle_ex(pid) {
+            Self::CombatThrottleEx
         } else if is_orion_throttle(pid) {
             Self::OrionThrottle
         } else if is_orion_joystick(pid) {
@@ -185,12 +190,16 @@ impl DeviceKindFound {
     }
 
     fn is_throttle(self) -> bool {
-        matches!(self, Self::UrsaThrottle | Self::OrionThrottle)
+        matches!(
+            self,
+            Self::UrsaThrottle | Self::CombatThrottleEx | Self::OrionThrottle
+        )
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::UrsaThrottle => "РУД Ursa Minor (моторы L/R раздельно)",
+            Self::CombatThrottleEx => "РУД Ursa Minor Combat Throttle EX (два мотора)",
             Self::OrionThrottle => "РУД Orion (два кадра, одна интенсивность)",
             Self::OrionJoystick => "джойстик Orion",
             Self::UrsaJoystick => "джойстик Ursa Minor / SimApp",
@@ -249,6 +258,12 @@ fn stop_motors(dev: &HidDevice, pid: u16, kind: DeviceKindFound) {
             THROTTLE_MOTOR_RIGHT,
             0,
         ));
+    } else if kind == DeviceKindFound::CombatThrottleEx {
+        for motor in [COMBAT_EX_MOTOR_A, COMBAT_EX_MOTOR_B] {
+            let _ = dev.write(&build_combat_throttle_ex_vibe_frame(
+                REPORT_ID, OUT_LEN, motor, 0,
+            ));
+        }
     } else if kind == DeviceKindFound::OrionThrottle {
         for frame in build_orion_throttle_vibe_frames(REPORT_ID, OUT_LEN, 0) {
             let _ = dev.write(&frame);
@@ -286,6 +301,14 @@ fn send_tick(dev: &HidDevice, pid: u16, kind: DeviceKindFound, byte: u8) -> Dura
                 let frame = build_throttle_vibe_frame(REPORT_ID, OUT_LEN, addr, byte);
                 if let Err(e) = dev.write(&frame) {
                     eprintln!("  !! write() FAILED (мотор 0x{addr:02X}): {e}");
+                }
+            }
+        }
+        DeviceKindFound::CombatThrottleEx => {
+            for motor in [COMBAT_EX_MOTOR_A, COMBAT_EX_MOTOR_B] {
+                let frame = build_combat_throttle_ex_vibe_frame(REPORT_ID, OUT_LEN, motor, byte);
+                if let Err(e) = dev.write(&frame) {
+                    eprintln!("  !! write() FAILED (Combat Throttle EX): {e}");
                 }
             }
         }

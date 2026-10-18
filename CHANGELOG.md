@@ -9,7 +9,7 @@ is built from scratch with the mouse, and effects bound to **custom MSFS variabl
 that you name yourself.
 
 **New:**
-- **WINCTRL Ursa Minor Combat Throttle EX (PID 0xB970)** is detected and driven as an Ursa Minor throttle (two grip motors). The vibration protocol for this PID is assumed identical to the Ursa Minor Throttle and is not yet verified on hardware.
+- **WINCTRL Ursa Minor Combat Throttle EX (PID 0xB970)** is detected and driven with its own two-motor vibration frame, found by probing real hardware. Which motor is the left and which the right grip still needs confirming.
 - **Effect Editor.** A new section in the main window builds an effect in four numbered steps,
   each with its own graph: pick a telemetry source (32 of them across the three simulators),
   choose when it fires (threshold with hysteresis, range, boolean, "while changing"), draw the

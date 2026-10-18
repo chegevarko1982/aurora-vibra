@@ -32,11 +32,11 @@ pub const WW_PID_URSA_MINOR_THROTTLE: u16 = 0xB920;
 // по исходникам rswilem/winctrl-xplane-plugin, product-ursa-minor-throttle.h
 // (ProductUrsaMinorThrottle::ThrottleIdentifierByte не зависит от PID).
 pub const WW_PID_URSA_MINOR_THROTTLE_R: u16 = 0xB930;
-// "URSA MINOR Combat Throttle EX" — РУД с двумя грип-моторами. ВНИМАНИЕ:
-// протокол вибрации для этого PID нигде не задокументирован; предполагается
-// тот же, что у WW_PID_URSA_MINOR_THROTTLE (заголовок 0x10,0xB9 и адреса
-// моторов 0x0E/0x10). Требует проверки на реальном железе
-// (`test_pattern_uniformity --list`, `--pid 0xB970`).
+// "URSA MINOR Combat Throttle EX" — РУД с двумя грип-моторами. Протокол
+// вибрации отличается от WW_PID_URSA_MINOR_THROTTLE и найден перебором на
+// реальном железе (src/bin/probe_ex_throttle.rs, шаги 44 и 81): кадр
+// `[rid, ident, 0xB9, 0, 0, 3, 0x49, addr, intensity, ...]`, где пары
+// (ident, addr) — COMBAT_EX_MOTOR_A / COMBAT_EX_MOTOR_B.
 pub const WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX: u16 = 0xB970;
 
 // Линейка WINWING Orion (Joystick Base II / Throttle Base II) — отдельное от
@@ -49,6 +49,11 @@ pub const WW_PID_ORION_THROTTLE: u16 = 0xBD64; // Orion Throttle Base II + F15EX
 // Адреса моторов в протоколе Throttle (buf[7] в 14-байтовом Output Report).
 pub const THROTTLE_MOTOR_LEFT: u8 = 0x0E;
 pub const THROTTLE_MOTOR_RIGHT: u8 = 0x10;
+
+/// Пары (ident, addr) двух моторов Combat Throttle EX (buf[1], buf[7]).
+/// Какой из них физически левый/правый — уточняется на железе.
+pub const COMBAT_EX_MOTOR_A: (u8, u8) = (0x04, 0x0E);
+pub const COMBAT_EX_MOTOR_B: (u8, u8) = (0x08, 0x10);
 
 pub fn ursa_model_name(pid: u16) -> &'static str {
     match pid {
@@ -67,15 +72,18 @@ pub fn ursa_model_name(pid: u16) -> &'static str {
     }
 }
 
-/// РУД линейки Ursa Minor (оба физических блока, L и R, и Combat Throttle
-/// EX) — отдельное устройство, не джойстик.
+/// РУД линейки Ursa Minor (оба физических блока, L и R) — отдельное
+/// устройство, не джойстик.
 pub fn is_ursa_minor_throttle(pid: u16) -> bool {
     matches!(
         pid,
-        WW_PID_URSA_MINOR_THROTTLE
-            | WW_PID_URSA_MINOR_THROTTLE_R
-            | WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX
+        WW_PID_URSA_MINOR_THROTTLE | WW_PID_URSA_MINOR_THROTTLE_R
     )
+}
+
+/// Ursa Minor Combat Throttle EX — свой формат кадра вибрации.
+pub fn is_combat_throttle_ex(pid: u16) -> bool {
+    pid == WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX
 }
 
 pub fn is_orion_joystick(pid: u16) -> bool {
@@ -91,9 +99,9 @@ pub fn is_supported_joystick(pid: u16) -> bool {
     is_ursa_minor_joystick(pid) || is_orion_joystick(pid)
 }
 
-/// Любой поддерживаемый РУД (throttle), Ursa Minor или Orion.
+/// Любой поддерживаемый РУД (throttle): Ursa Minor, Combat Throttle EX или Orion.
 pub fn is_supported_throttle(pid: u16) -> bool {
-    is_ursa_minor_throttle(pid) || is_orion_throttle(pid)
+    is_ursa_minor_throttle(pid) || is_combat_throttle_ex(pid) || is_orion_throttle(pid)
 }
 
 pub fn is_ursa_minor_left(pid: u16) -> bool {
@@ -232,6 +240,31 @@ pub fn build_throttle_vibe_frame(
 ) -> Vec<u8> {
     let body: [u8; 13] = [
         0x10, 0xB9, 0x00, 0x00, 0x03, 0x49, motor_addr, intensity, 0, 0, 0, 0, 0,
+    ];
+
+    let len = out_len as usize;
+    let mut buf = vec![0u8; len];
+
+    if len == 0 {
+        return buf;
+    }
+
+    buf[0] = report_id;
+    let copy_len = body.len().min(len.saturating_sub(1));
+    buf[1..1 + copy_len].copy_from_slice(&body[..copy_len]);
+    buf
+}
+
+/// Кадр вибрации одного мотора Ursa Minor Combat Throttle EX:
+/// `[report_id, ident, 0xB9, 0, 0, 0x03, 0x49, addr, intensity, 0,0,0,0,0]`.
+pub fn build_combat_throttle_ex_vibe_frame(
+    report_id: u8,
+    out_len: u16,
+    motor: (u8, u8),
+    intensity: u8,
+) -> Vec<u8> {
+    let body: [u8; 13] = [
+        motor.0, 0xB9, 0x00, 0x00, 0x03, 0x49, motor.1, intensity, 0, 0, 0, 0, 0,
     ];
 
     let len = out_len as usize;
@@ -417,8 +450,9 @@ mod tests {
     }
 
     #[test]
-    fn combat_throttle_ex_is_throttle_with_name() {
-        assert!(is_ursa_minor_throttle(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX));
+    fn combat_throttle_ex_detection_and_name() {
+        assert!(is_combat_throttle_ex(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX));
+        assert!(!is_ursa_minor_throttle(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX));
         assert!(!is_ursa_minor_joystick(
             WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX
         ));
@@ -426,5 +460,20 @@ mod tests {
             ursa_model_name(WW_PID_URSA_MINOR_COMBAT_THROTTLE_EX),
             "URSA MINOR COMBAT THROTTLE EX"
         );
+    }
+
+    #[test]
+    fn combat_throttle_ex_frames_match_golden_bytes() {
+        let a = build_combat_throttle_ex_vibe_frame(0x02, 14, COMBAT_EX_MOTOR_A, 0x7F);
+        assert_eq!(
+            a,
+            vec![0x02, 0x04, 0xB9, 0x00, 0x00, 0x03, 0x49, 0x0E, 0x7F, 0, 0, 0, 0, 0]
+        );
+        let b = build_combat_throttle_ex_vibe_frame(0x02, 14, COMBAT_EX_MOTOR_B, 0xFF);
+        assert_eq!(
+            b,
+            vec![0x02, 0x08, 0xB9, 0x00, 0x00, 0x03, 0x49, 0x10, 0xFF, 0, 0, 0, 0, 0]
+        );
+        assert!(build_combat_throttle_ex_vibe_frame(0x02, 0, COMBAT_EX_MOTOR_A, 1).is_empty());
     }
 }
