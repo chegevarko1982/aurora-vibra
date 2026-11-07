@@ -201,7 +201,10 @@ libloading = "0.8"
 # utils
 anyhow = "1.0"
 thiserror = "1.0"
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# 9+, а не 0.6: RUSTSEC-2026-0367/-0368/-0429 (privilege escalation через
+# SUID-биты при extract, unsafe path traversal) исправлены только в >= 9.0.0.
+# Фича "deflate" из 0.6 переименована в "deflate-flate2".
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # Проверка SHA-256 скачанного обновления против опубликованного SHA256SUMS.txt
 # (см. src/updater.rs) — этот путь кода при необходимости поднимает права
 # через UAC, так что архив обязан быть проверен до распаковки.
