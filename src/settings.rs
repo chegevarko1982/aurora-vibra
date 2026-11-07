@@ -303,10 +303,8 @@ mod tests {
     fn atomic_write_overwrites_existing_file_and_leaves_no_tmp() {
         // Уникальная подпапка в temp — тесты одного процесса могут идти
         // параллельно, а tmp-файл atomic_write строится по имени целевого.
-        let dir = std::env::temp_dir().join(format!(
-            "aurora-atomic-write-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("aurora-atomic-write-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let target = dir.join("settings.json");
 
