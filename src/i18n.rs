@@ -72,6 +72,10 @@ pub struct Strings {
     pub hover_help_us: &'static str,
     pub help_us_text: &'static str,
     pub chk_close_to_tray: &'static str,
+    pub chk_high_contrast: &'static str,
+    pub hover_high_contrast: &'static str,
+    pub hover_aircraft_saved_profile: &'static str,
+    pub hover_aircraft_custom_telemetry: &'static str,
     pub hover_close_to_tray: &'static str,
     pub chk_record_wt_session: &'static str,
     pub hover_record_wt_session: &'static str,
@@ -485,8 +489,8 @@ Workflow: adjust the effects, then click Save to write them as the current aircr
 
 ## 3. Tuning effects
 The middle of the window has 5 sections (buttons on the left): Aerodynamics, Taxi Thump, Engines Start/Stop, Gears Touchdown, Telemetry. Every effect is a card with the same layout:
-- the checkbox on the left enables/disables the effect;
-- the card's border lights up while the effect is actually triggering right now — handy for dialing in the strength in flight without looking away;
+- the switch on the left enables/disables the effect;
+- the effect's row lights up while the effect is actually triggering right now — handy for dialing in the strength in flight without looking away;
 - the intensity slider sets the vibration strength as a percentage;
 - the two icons on the right (joystick/throttle) route the effect to a device — one, both, or neither;
 - some effects have extra fields, e.g. a speed/angle/deployment threshold above which the effect switches on.
@@ -501,7 +505,7 @@ Section summary:
 The Reset button at the bottom restores the effects to factory defaults — but only live: nothing is written to disk until Save is pressed, and Load would still bring back the previously saved profile.
 
 ## 4. Pause & background
-Stop/Resume in the left column mutes all effects temporarily without touching the settings — handy to kill the rumble for a minute without losing the configuration. The \"Close to tray\" option (\"...\" menu → Options) makes closing the window with the X button hide it to the system tray instead of quitting — the app keeps running in the background. The tray icon offers the same Stop/Resume plus a full Exit.
+Stop/Resume in the top right corner mutes all effects temporarily without touching the settings — handy to kill the rumble for a minute without losing the configuration. The \"Close to tray\" option (\"...\" menu → Options) makes closing the window with the X button hide it to the system tray instead of quitting — the app keeps running in the background. The tray icon offers the same Stop/Resume plus a full Exit.
 
 ## 5. Updates
 \"Check for updates…\" in the \"...\" menu → Options runs a one-off version check; if a newer release exists, it offers to install it and restart the app automatically.
@@ -575,6 +579,10 @@ bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5
 YooMoney:
 https://yoomoney.ru/to/410011348629282",
     chk_close_to_tray: "Close to tray",
+    chk_high_contrast: "High contrast (black and white, larger)",
+    hover_high_contrast: "Black and white interface with larger text for low vision. States are shown by shape and words instead of color. Shortcut: Ctrl+Shift+H.",
+    hover_aircraft_saved_profile: "This aircraft has its own saved profile, and it is loaded",
+    hover_aircraft_custom_telemetry: "This aircraft has built-in custom telemetry handling",
     hover_close_to_tray: "When enabled, closing the window with the X button hides it to the system tray instead of quitting — the app keeps running in the background. Right-click the tray icon to Stop or Exit.",
     chk_record_wt_session: "Record session (debug)",
     hover_record_wt_session: "Writes raw telemetry from whichever game is currently active (War Thunder /state + /indicators, or MSFS/X-Plane flight vars) to wt_probe_sessions/session_<timestamp>.jsonl next to the app — for diagnosing missing/incorrect effects on specific aircraft. Off by default, not saved between restarts.",
@@ -917,8 +925,8 @@ pub const RU: Strings = Strings {
 
 ## 3. Настройка эффектов
 Средняя часть окна разбита на 5 разделов (кнопки слева): Аэродинамика, Стыки ВПП, Двигатели: Запуск/Останов, Стойки шасси: касание, Телеметрия. Каждый эффект — карточка с одинаковым устройством:
-- чекбокс слева включает/выключает эффект;
-- рамка карточки подсвечивается, когда эффект срабатывает прямо сейчас — удобно подбирать силу вживую, не отрываясь от полёта;
+- переключатель слева включает/выключает эффект;
+- строка эффекта подсвечивается, когда эффект срабатывает прямо сейчас — удобно подбирать силу вживую, не отрываясь от полёта;
 - слайдер интенсивности задаёт силу вибрации в процентах;
 - две иконки справа (джойстик/РУД) переключают, на какое устройство эффект отправляется — на одно, на оба или ни на одно;
 - у части эффектов есть дополнительные поля — например, порог по скорости/углу/проценту выпуска, после которого эффект включается.
@@ -933,7 +941,7 @@ pub const RU: Strings = Strings {
 Кнопка «Сброс» внизу возвращает эффекты к заводским значениям — но только на лету: пока не нажата «Сохранить», на диск это не пишется, и «Загрузить» вернёт прежний сохранённый профиль.
 
 ## 4. Пауза и фон
-«Стоп/Продолжить» в левой колонке временно глушит все эффекты, не трогая настройки — удобно, если нужно на минуту отвлечься от вибрации, не теряя конфигурацию. Опция «Сворачивать в трей» (меню «...» → Опции) делает так, что закрытие окна крестиком прячет его в системный трей вместо выхода — программа продолжает работать в фоне. Через иконку в трее доступны те же Стоп/Продолжить и полный выход.
+«Стоп/Продолжить» в правом верхнем углу временно глушит все эффекты, не трогая настройки — удобно, если нужно на минуту отвлечься от вибрации, не теряя конфигурацию. Опция «Сворачивать в трей» (меню «...» → Опции) делает так, что закрытие окна крестиком прячет его в системный трей вместо выхода — программа продолжает работать в фоне. Через иконку в трее доступны те же Стоп/Продолжить и полный выход.
 
 ## 5. Обновления
 Пункт «Проверить обновления…» в меню «...» → Опции запускает разовую проверку версии; при наличии новой — предложит установить и перезапустить приложение автоматически.
@@ -1007,6 +1015,10 @@ bc1p5txluxsen8uqhy0k3j0v9s6afemt5zkyftzjv4asc5uh3lw44u7snkplr5
 YooMoney:
 https://yoomoney.ru/to/410011348629282",
     chk_close_to_tray: "Сворачивать в трей",
+    chk_high_contrast: "Высокий контраст (чёрно-белый, крупнее)",
+    hover_high_contrast: "Чёрно-белый интерфейс с крупным текстом для слабовидящих. Состояния показаны формой и словами, а не цветом. Горячая клавиша: Ctrl+Shift+H.",
+    hover_aircraft_saved_profile: "У этого самолёта есть свой сохранённый профиль, он загружен",
+    hover_aircraft_custom_telemetry: "Для этого самолёта есть встроенная обработка телеметрии",
     hover_close_to_tray: "Если включено, закрытие окна крестиком прячет его в системный трей вместо выхода — приложение продолжает работать в фоне. Правый клик по иконке в трее — Stop или Exit.",
     chk_record_wt_session: "Записывать сессию (отладка)",
     hover_record_wt_session: "Пишет сырую телеметрию активной в данный момент игры (War Thunder /state + /indicators, либо параметры полёта MSFS/X-Plane) в wt_probe_sessions/session_<timestamp>.jsonl рядом с программой — для диагностики отсутствующих/неверных эффектов на конкретных самолётах. По умолчанию выключено, между перезапусками не сохраняется.",

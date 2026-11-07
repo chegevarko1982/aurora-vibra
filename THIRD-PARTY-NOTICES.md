@@ -65,6 +65,15 @@ it will be done.
 
 ---
 
+## IBM Plex fonts
+
+The interface font files in `assets/fonts/` (IBM Plex Sans and IBM Plex Mono) are embedded in
+the executable. They are Copyright 2017 IBM Corp. and are licensed under the SIL Open Font
+License, Version 1.1, not under this project's MIT license. The full license text is in
+[`assets/fonts/OFL.txt`](assets/fonts/OFL.txt).
+
+---
+
 ## Rust dependencies
 
 All Rust crate dependencies are permissively licensed (MIT, Apache-2.0, or dual

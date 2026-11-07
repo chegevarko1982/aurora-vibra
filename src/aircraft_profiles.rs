@@ -149,6 +149,7 @@ pub fn save_active(
         close_to_tray: settings::close_to_tray(),
         simconnect_dll_path: settings::simconnect_dll_path(),
         monitor_collapsed: settings::monitor_collapsed(),
+        high_contrast: settings::high_contrast(),
         // wt_enabled — производное от game_override, см. комментарий у поля
         // в SettingsFile (settings.rs): единственный источник истины теперь
         // game_override, wt_enabled существует только для миграции старых файлов.

@@ -34,6 +34,17 @@ pub fn set_monitor_collapsed(v: bool) {
     MONITOR_COLLAPSED.store(v, Ordering::Relaxed);
 }
 
+// Тот же приём: иначе каждый Save профиля сбрасывал бы чёрно-белый режим.
+static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
+
+pub fn high_contrast() -> bool {
+    HIGH_CONTRAST.load(Ordering::Relaxed)
+}
+
+pub fn set_high_contrast(v: bool) {
+    HIGH_CONTRAST.store(v, Ordering::Relaxed);
+}
+
 // Тот же приём, что и у CURRENT_LANG (i18n.rs) — AtomicU8, а не AtomicBool,
 // потому что GameOverride четырёхвариантный. Читается воркерами
 // (sim/worker.rs, wt_link/worker.rs, а с этапа 3 — и xp_link/worker.rs) на
@@ -101,6 +112,7 @@ pub struct SettingsFile {
     // Свёрнут ли столбец Live Monitor (правая панель). По умолчанию развёрнут —
     // старые файлы без этого поля десериализуются в false.
     pub monitor_collapsed: bool,
+    pub high_contrast: bool,
     // Legacy-поле дореализации автоопределения игры: раньше единственный
     // источник истины для чекбокса "War Thunder" в Опциях. Теперь ПРОИЗВОДНОЕ
     // от game_override (см. UiState::save_global_settings) — сохраняется как
@@ -187,6 +199,7 @@ pub fn load() -> Option<SettingsFile> {
                     close_to_tray: false,
                     simconnect_dll_path: None,
                     monitor_collapsed: false,
+                    high_contrast: false,
                     wt_enabled: false,
                     game_override: GameOverride::default(),
                 };

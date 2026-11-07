@@ -15,7 +15,7 @@ use crate::hid::protocol::{
     is_ursa_minor_throttle, ursa_model_name,
 };
 use crate::hid::win32::hid_query_caps_from_path;
-use crate::{HidCmd, LogBuffer};
+use crate::{HidCmd, LogBuffer, types::MotorMonitor};
 
 struct HidEntry {
     dev: HidDevice,
@@ -247,6 +247,7 @@ pub fn hid_worker(
     throttle_connected: Arc<AtomicBool>,
     rx: Receiver<HidCmd>,
     logs: LogBuffer,
+    motors: Arc<MotorMonitor>,
 ) {
     logs.push("HID: worker starting…");
 
@@ -524,6 +525,7 @@ pub fn hid_worker(
             let out_j = if hold { 0 } else { desired_joystick };
             let out_t_left = if hold { 0 } else { desired_throttle_left };
             let out_t_right = if hold { 0 } else { desired_throttle_right };
+            motors.record([out_j, out_t_left, out_t_right]);
             if out_j != 0 || out_t_left != 0 || out_t_right != 0 {
                 last_nonzero = due_at;
             }

@@ -48,7 +48,9 @@ use super::palette;
 /// Ширина левой колонки со списком эффектов. Кнопки под списком рисуются
 /// каждая на своей строке (а не в ряд) именно из-за этой узкой колонки —
 /// русские подписи ("Дублировать", "Удалить") в ряд туда не влезли бы.
-const EFFECT_LIST_WIDTH: f32 = 230.0;
+const EFFECT_LIST_WIDTH: f32 = 200.0;
+/// Ширина области шагов, с которой они раскладываются сеткой 2x2.
+const STEPS_GRID_MIN_WIDTH: f32 = 620.0;
 const EFFECT_LIST_SCROLL_HEIGHT: f32 = 220.0;
 
 /// Окно живой истории для мини-графиков шагов 1 и 2 — секунд достаточно,
@@ -357,7 +359,7 @@ pub fn show(ui: &mut egui::Ui, st: &mut EditorState, cx: &mut EditorCtx) {
     ui.label(
         RichText::new(cx.t.msg_fx_effects_coexist)
             .italics()
-            .color(palette::TEXT_SECONDARY),
+            .color(palette::get().text_secondary),
     );
     ui.add_space(6.0);
 
@@ -423,7 +425,9 @@ pub fn show(ui: &mut egui::Ui, st: &mut EditorState, cx: &mut EditorCtx) {
                 None => {
                     ui.add_space(40.0);
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new(cx.t.empty_fx_hint).color(palette::TEXT_SECONDARY));
+                        ui.label(
+                            RichText::new(cx.t.empty_fx_hint).color(palette::get().text_secondary),
+                        );
                     });
                 }
             }
@@ -734,7 +738,7 @@ fn show_effect_row(
 
     let frame_resp = egui::Frame::new()
         .fill(if selected {
-            palette::SELECTED_BG
+            palette::get().selected_bg
         } else {
             Color32::TRANSPARENT
         })
@@ -743,19 +747,22 @@ fn show_effect_row(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let dot_color = if active {
+                let dot_color = if selected && palette::get().high_contrast {
+                    // На белой подложке выбранной строки белая точка исчезла бы.
+                    palette::get().selected_fg
+                } else if active {
                     Color32::WHITE
                 } else {
-                    palette::BORDER_ACTIVE
+                    palette::get().border_active
                 };
                 dot_indicator_pub(ui, dot_color, active, 8.0);
 
                 let name_color = if selected {
-                    palette::SELECTED_FG
+                    palette::get().selected_fg
                 } else if effect.enabled {
-                    palette::TEXT_PRIMARY
+                    palette::get().text_primary
                 } else {
-                    palette::TEXT_DISABLED
+                    palette::get().text_disabled
                 };
                 ui.label(RichText::new(&effect.name).color(name_color));
 
@@ -794,13 +801,27 @@ fn show_editor_steps(
 ) {
     update_live_history(st, cx, effect);
 
-    step_source(ui, st, cx, effect);
-    ui.add_space(6.0);
-    step_trigger(ui, st, cx, effect);
-    ui.add_space(6.0);
-    step_curve(ui, cx, effect);
-    ui.add_space(6.0);
-    step_shape(ui, cx, effect);
+    // Шаги сеткой 2x2, чтобы вся цепочка от источника до формы была видна сразу.
+    // В узком окне графикам не хватит ширины, там шаги идут столбцом.
+    if ui.available_width() >= STEPS_GRID_MIN_WIDTH {
+        ui.columns(2, |cols| {
+            step_source(&mut cols[0], st, cx, effect);
+            step_trigger(&mut cols[1], st, cx, effect);
+        });
+        ui.add_space(6.0);
+        ui.columns(2, |cols| {
+            step_curve(&mut cols[0], cx, effect);
+            step_shape(&mut cols[1], cx, effect);
+        });
+    } else {
+        step_source(ui, st, cx, effect);
+        ui.add_space(6.0);
+        step_trigger(ui, st, cx, effect);
+        ui.add_space(6.0);
+        step_curve(ui, cx, effect);
+        ui.add_space(6.0);
+        step_shape(ui, cx, effect);
+    }
     ui.add_space(6.0);
     show_warnings(ui, cx, effect);
     ui.add_space(6.0);
@@ -858,7 +879,7 @@ fn update_live_history(st: &mut EditorState, cx: &EditorCtx, effect: &CustomEffe
 // ---------------------------------------------------------------------
 
 fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut CustomEffect) {
-    UiState::effect_card(ui, true, false, |ui| {
+    UiState::panel_card(ui, |ui| {
         ui.label(RichText::new(cx.t.step_fx_source).strong().size(15.0));
         ui.add_space(4.0);
 
@@ -871,7 +892,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
         let cur_def = sources::def(effect.source);
         egui::ComboBox::from_id_salt("fx_source_select")
             .selected_text(source_label(cur_def, cx.lang))
-            .width(260.0)
+            .width(ui.available_width().min(260.0))
             .show_ui(ui, |ui| {
                 let mut prev_group: Option<SourceGroup> = None;
                 for s in SOURCES.iter() {
@@ -889,7 +910,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
                         ui.label(
                             RichText::new(source_group_header(group, cx.t))
                                 .strong()
-                                .color(palette::TEXT_SECONDARY),
+                                .color(palette::get().text_secondary),
                         );
                         prev_group = Some(group);
                     }
@@ -916,14 +937,14 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
                         cx.t.lbl_fx_overrides_builtin,
                         super::builtin_effect_display_name(builtin, cx.t)
                     ))
-                    .color(palette::STATUS_ATTENTION)
+                    .color(palette::get().status_attention)
                     .italics(),
                 );
             }
             None => {
                 ui.label(
                     RichText::new(cx.t.lbl_fx_overrides_builtin_none)
-                        .color(palette::TEXT_SECONDARY)
+                        .color(palette::get().text_secondary)
                         .italics(),
                 );
             }
@@ -949,7 +970,9 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
                     ui.label(RichText::new(text).strong());
                 }
                 None => {
-                    ui.label(RichText::new(cx.t.lbl_fx_no_signal).color(palette::TEXT_DISABLED));
+                    ui.label(
+                        RichText::new(cx.t.lbl_fx_no_signal).color(palette::get().text_disabled),
+                    );
                 }
             }
         });
@@ -958,7 +981,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
         // по смыслу: игры нет вообще, а не "не той". Показываем ТОЛЬКО
         // когда игра реально активна и источник для неё не подходит.
         if cx.active_game != ActiveGame::None && !def.games.allows(cx.active_game) {
-            ui.colored_label(palette::STATUS_WARN, cx.t.warn_fx_wrong_game);
+            ui.colored_label(palette::get().status_warn, cx.t.warn_fx_wrong_game);
         }
 
         draw_mini_graph(
@@ -982,7 +1005,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
             coerce_lvar_game_mask(&mut effect.games);
         }
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(cx.t.lbl_fx_games);
             ui.add_enabled(
                 !lvar_locked,
@@ -1001,7 +1024,7 @@ fn step_source(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut
             ui.label(
                 RichText::new(cx.t.msg_fx_lvar_msfs_only)
                     .italics()
-                    .color(palette::TEXT_SECONDARY),
+                    .color(palette::get().text_secondary),
             );
         }
 
@@ -1088,13 +1111,13 @@ fn show_lvar_source_fields(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut Custo
     ui.label(
         RichText::new(cx.t.lbl_fx_lvar_hint)
             .small()
-            .color(palette::TEXT_DISABLED),
+            .color(palette::get().text_disabled),
     );
     if lvar_name_missing_prefix_hint(&spec.name) {
         ui.label(
             RichText::new(cx.t.lbl_fx_lvar_prefix_hint)
                 .small()
-                .color(palette::TEXT_DISABLED),
+                .color(palette::get().text_disabled),
         );
     }
 
@@ -1151,7 +1174,7 @@ fn show_lvar_source_fields(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut Custo
     ui.label(
         RichText::new(cx.t.hint_fx_lvar_range)
             .small()
-            .color(palette::TEXT_DISABLED),
+            .color(palette::get().text_disabled),
     );
 
     effect.lvar = Some(spec);
@@ -1271,7 +1294,7 @@ fn overlay_for_trigger(t: &Trigger) -> TriggerOverlay {
 }
 
 fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mut CustomEffect) {
-    UiState::effect_card(ui, true, false, |ui| {
+    UiState::panel_card(ui, |ui| {
         ui.label(RichText::new(cx.t.step_fx_when).strong().size(15.0));
         ui.add_space(4.0);
 
@@ -1365,7 +1388,7 @@ fn step_trigger(ui: &mut egui::Ui, st: &EditorState, cx: &EditorCtx, effect: &mu
 // ---------------------------------------------------------------------
 
 fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
-    UiState::effect_card(ui, true, false, |ui| {
+    UiState::panel_card(ui, |ui| {
         ui.label(RichText::new(cx.t.step_fx_curve).strong().size(15.0));
         ui.add_space(4.0);
 
@@ -1396,11 +1419,11 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
         let (rect, response) = ui.allocate_exact_size(desired, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
 
-        painter.rect_filled(rect, 4u8, palette::BG_APP);
+        painter.rect_filled(rect, 4u8, palette::get().bg_app);
         painter.rect_stroke(
             rect,
             4u8,
-            egui::Stroke::new(1.0, palette::BORDER_DEFAULT),
+            egui::Stroke::new(1.0, palette::get().border_default),
             egui::StrokeKind::Inside,
         );
 
@@ -1410,7 +1433,7 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
             let y = value_to_px_y(pct, y_bounds, rect);
             painter.line_segment(
                 [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                egui::Stroke::new(1.0, palette::BORDER_DEFAULT.gamma_multiply(0.6)),
+                egui::Stroke::new(1.0, palette::get().border_default.gamma_multiply(0.6)),
             );
         }
         let font = egui::FontId::proportional(10.0);
@@ -1419,14 +1442,14 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
             egui::Align2::LEFT_TOP,
             "100%",
             font.clone(),
-            palette::TEXT_DISABLED,
+            palette::get().text_disabled,
         );
         painter.text(
             egui::pos2(rect.left() + 3.0, rect.bottom() - 2.0),
             egui::Align2::LEFT_BOTTOM,
             "0%",
             font,
-            palette::TEXT_DISABLED,
+            palette::get().text_disabled,
         );
 
         // Живое значение источника — вертикальная линия прямо на кривой,
@@ -1435,7 +1458,7 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
             let x = value_to_px_x(raw, bounds, rect).clamp(rect.left(), rect.right());
             painter.line_segment(
                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                egui::Stroke::new(1.5, palette::ACCENT_LIVE),
+                egui::Stroke::new(1.5, palette::get().accent_live),
             );
         }
 
@@ -1455,7 +1478,7 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
         for w in screen_points.windows(2) {
             painter.line_segment(
                 [w[0], w[1]],
-                egui::Stroke::new(2.0, palette::ACCENT_PRIMARY),
+                egui::Stroke::new(2.0, palette::get().accent_primary),
             );
         }
 
@@ -1492,7 +1515,7 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
             let point_color = if presp.dragged() || presp.hovered() {
                 Color32::WHITE
             } else {
-                palette::ACCENT_PRIMARY
+                palette::get().accent_primary
             };
             painter.circle_filled(center, CURVE_POINT_RADIUS, point_color);
         }
@@ -1519,20 +1542,20 @@ fn step_curve(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
             ui.label(
                 RichText::new(format!("{:.0}{}", bounds.0, unit_suffix(def)))
                     .small()
-                    .color(palette::TEXT_DISABLED),
+                    .color(palette::get().text_disabled),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(format!("{:.0}{}", bounds.1, unit_suffix(def)))
                         .small()
-                        .color(palette::TEXT_DISABLED),
+                        .color(palette::get().text_disabled),
                 );
             });
         });
         ui.label(
             RichText::new(cx.t.lbl_fx_curve_hint)
                 .small()
-                .color(palette::TEXT_DISABLED),
+                .color(palette::get().text_disabled),
         );
     });
 }
@@ -1614,7 +1637,7 @@ fn default_shape_for_kind(k: ShapeKind) -> Shape {
 }
 
 fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
-    UiState::effect_card(ui, true, false, |ui| {
+    UiState::panel_card(ui, |ui| {
         ui.label(RichText::new(cx.t.step_fx_shape).strong().size(15.0));
         ui.add_space(4.0);
 
@@ -1715,7 +1738,7 @@ fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
         ui.label(
             RichText::new(cx.t.lbl_fx_oscilloscope_hint)
                 .italics()
-                .color(palette::TEXT_DISABLED),
+                .color(palette::get().text_disabled),
         );
 
         ui.add_space(4.0);
@@ -1727,12 +1750,12 @@ fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
             ui.label(cx.t.lbl_fx_smoothing);
             ui.add(egui::Slider::new(&mut effect.smoothing_alpha, 0.0..=0.99));
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(cx.t.lbl_fx_mix);
             ui.radio_value(&mut effect.mix, MixMode::Max, cx.t.mix_max);
             ui.radio_value(&mut effect.mix, MixMode::Add, cx.t.mix_add);
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(cx.t.lbl_fx_output);
             ui.checkbox(&mut effect.out.joystick, cx.t.lbl_fx_out_joystick);
             ui.checkbox(&mut effect.out.throttle_left, cx.t.lbl_fx_out_throttle_left);
@@ -1747,13 +1770,13 @@ fn step_shape(ui: &mut egui::Ui, cx: &EditorCtx, effect: &mut CustomEffect) {
 fn show_warnings(ui: &mut egui::Ui, cx: &EditorCtx, effect: &CustomEffect) {
     let no_output = !(effect.out.joystick || effect.out.throttle_left || effect.out.throttle_right);
     if no_output {
-        ui.colored_label(palette::STATUS_WARN, cx.t.warn_fx_no_output);
+        ui.colored_label(palette::get().status_warn, cx.t.warn_fx_no_output);
     }
     let always_on = matches!(effect.trigger, Trigger::Always)
         && matches!(effect.shape, Shape::Constant)
         && effect.strength_pct > 80.0;
     if always_on {
-        ui.colored_label(palette::STATUS_WARN, cx.t.warn_fx_always_on);
+        ui.colored_label(palette::get().status_warn, cx.t.warn_fx_always_on);
     }
 }
 
@@ -1775,7 +1798,7 @@ fn step_preview(
     cx: &EditorCtx,
     effect: &mut CustomEffect,
 ) {
-    UiState::effect_card(ui, true, false, |ui| {
+    UiState::panel_card(ui, |ui| {
         ui.label(RichText::new(cx.t.heading_fx_preview).strong().size(15.0));
         ui.add_space(4.0);
 
@@ -1886,7 +1909,7 @@ fn step_preview(
             ui.label(
                 RichText::new(cx.t.lbl_fx_preview_loops_events)
                     .italics()
-                    .color(palette::TEXT_DISABLED),
+                    .color(palette::get().text_disabled),
             );
         }
 
@@ -1972,7 +1995,7 @@ fn step_session(
     });
 
     let Some(session) = st.session.as_ref() else {
-        ui.label(RichText::new(cx.t.lbl_fx_session_none).color(palette::TEXT_DISABLED));
+        ui.label(RichText::new(cx.t.lbl_fx_session_none).color(palette::get().text_disabled));
         return;
     };
 
@@ -2204,11 +2227,11 @@ fn draw_no_signal_placeholder(painter: &egui::Painter, rect: Rect, text: &str) {
     let galley = painter.layout(
         text.to_owned(),
         egui::FontId::proportional(11.0),
-        palette::TEXT_DISABLED,
+        palette::get().text_disabled,
         (rect.width() - 16.0).max(32.0),
     );
     let pos = rect.center() - galley.size() / 2.0;
-    painter.galley(pos, galley, palette::TEXT_DISABLED);
+    painter.galley(pos, galley, palette::get().text_disabled);
 }
 
 fn draw_mini_graph(
@@ -2223,11 +2246,11 @@ fn draw_mini_graph(
     let (rect, _resp) = ui.allocate_exact_size(desired, Sense::hover());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 3u8, palette::BG_APP);
+    painter.rect_filled(rect, 3u8, palette::get().bg_app);
     painter.rect_stroke(
         rect,
         3u8,
-        egui::Stroke::new(1.0, palette::BORDER_DEFAULT),
+        egui::Stroke::new(1.0, palette::get().border_default),
         egui::StrokeKind::Inside,
     );
 
@@ -2246,14 +2269,18 @@ fn draw_mini_graph(
                 egui::pos2(rect.left(), y0.min(y1).max(rect.top())),
                 egui::pos2(rect.right(), y0.max(y1).min(rect.bottom())),
             );
-            painter.rect_filled(band, 0u8, palette::SELECTED_BG.gamma_multiply(0.7));
+            painter.rect_filled(band, 0u8, palette::get().selected_bg.gamma_multiply(0.7));
         }
         TriggerOverlay::Line(v) => {
             let y = value_to_px_y(v, bounds, rect).clamp(rect.top(), rect.bottom());
-            painter.line_segment(
-                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                egui::Stroke::new(1.5, palette::STATUS_WARN),
-            );
+            let ends = [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)];
+            let stroke = egui::Stroke::new(1.5, palette::get().status_warn);
+            if palette::get().high_contrast {
+                // Порог и сигнал здесь одного цвета, различает их штрих.
+                painter.extend(egui::Shape::dashed_line(&ends, stroke, 7.0, 5.0));
+            } else {
+                painter.line_segment(ends, stroke);
+            }
         }
         TriggerOverlay::None => {}
     }
@@ -2277,10 +2304,13 @@ fn draw_mini_graph(
             })
             .collect();
         for w in points.windows(2) {
-            painter.line_segment([w[0], w[1]], egui::Stroke::new(1.5, palette::ACCENT_LIVE));
+            painter.line_segment(
+                [w[0], w[1]],
+                egui::Stroke::new(1.5, palette::get().accent_live),
+            );
         }
         if let Some(&last) = points.last() {
-            painter.circle_filled(last, 2.5, palette::ACCENT_LIVE);
+            painter.circle_filled(last, 2.5, palette::get().accent_live);
         }
     }
 }
@@ -2319,9 +2349,9 @@ fn freq_slider(ui: &mut egui::Ui, cx: &EditorCtx, freq_hz: &mut f32) {
         let text = RichText::new(format!("{:.1} {}", ticks, cx.t.lbl_fx_ticks_per_period))
             .monospace()
             .color(if whole {
-                palette::TEXT_SECONDARY
+                palette::get().text_secondary
             } else {
-                palette::ACCENT_LIVE
+                palette::get().accent_live
             });
         ui.label(text).on_hover_text(cx.t.hover_fx_ticks_per_period);
     });
@@ -2352,11 +2382,11 @@ fn draw_oscilloscope(ui: &mut egui::Ui, samples: &[f32], height: f32) {
     let (rect, _resp) = ui.allocate_exact_size(desired, Sense::hover());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 3u8, palette::BG_APP);
+    painter.rect_filled(rect, 3u8, palette::get().bg_app);
     painter.rect_stroke(
         rect,
         3u8,
-        egui::Stroke::new(1.0, palette::BORDER_DEFAULT),
+        egui::Stroke::new(1.0, palette::get().border_default),
         egui::StrokeKind::Inside,
     );
 
@@ -2402,7 +2432,7 @@ fn draw_oscilloscope(ui: &mut egui::Ui, samples: &[f32], height: f32) {
             egui::pos2(x0, (bottom_px - bar_h_px) / ppp),
             egui::pos2(x1, bottom_px / ppp),
         );
-        painter.rect_filled(bar, 0u8, palette::ACCENT_LIVE.gamma_multiply(0.85));
+        painter.rect_filled(bar, 0u8, palette::get().accent_live.gamma_multiply(0.85));
     }
 }
 
@@ -2437,33 +2467,48 @@ fn draw_session_graph(
     let (rect, response) = ui.allocate_exact_size(desired, sense);
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 3u8, palette::BG_APP);
+    painter.rect_filled(rect, 3u8, palette::get().bg_app);
     painter.rect_stroke(
         rect,
         3u8,
-        egui::Stroke::new(1.0, palette::BORDER_DEFAULT),
+        egui::Stroke::new(1.0, palette::get().border_default),
         egui::StrokeKind::Inside,
     );
 
     // Три канала — три тона, уже используемых где-то ещё в модуле для
-    // живых индикаций (ACCENT_LIVE/STATUS_OK/STATUS_ATTENTION), а не новые
+    // живых индикаций (ACCENT_LIVE/ACCENT_PRIMARY/STATUS_ATTENTION), а не новые
     // константы palette: задача прямо требует брать тона ТОЛЬКО из palette,
     // и этих трёх достаточно, чтобы линии не сливались друг с другом на
     // тёмном фоне.
-    const CHANNEL_COLORS: [Color32; 3] = [
-        palette::ACCENT_LIVE,
-        palette::STATUS_OK,
-        palette::STATUS_ATTENTION,
+    let channel_colors: [Color32; 3] = [
+        palette::get().accent_live,
+        palette::get().accent_primary,
+        palette::get().status_attention,
     ];
+    // В чёрно-белом режиме каналы различает рисунок линии: сплошная толстая,
+    // штрих и редкий штрих.
+    let high_contrast = palette::get().high_contrast;
+    let channel_visible = |channel: usize, frame: usize| match (high_contrast, channel) {
+        (false, _) | (true, 0) => true,
+        (true, 1) => (frame / 4).is_multiple_of(2),
+        (true, _) => (frame / 2).is_multiple_of(4),
+    };
+    let channel_width = |channel: usize| {
+        if high_contrast && channel == 0 {
+            3.0
+        } else {
+            1.5
+        }
+    };
 
     let mut any_signal = false;
     if let Some(series) = series {
         // Рисуем ломаную КАЖДОГО канала отдельно, разрывая её на границе
         // любого None-кадра (другая игра — см. `recompute_session_series`)
         // — иначе прямая линия через дыру соврала бы, будто там есть данные.
-        for (ch, &color) in CHANNEL_COLORS.iter().enumerate() {
+        for (ch, &color) in channel_colors.iter().enumerate() {
             let mut prev: Option<egui::Pos2> = None;
-            for (sf, lv) in session.frames.iter().zip(series.levels.iter()) {
+            for (i, (sf, lv)) in session.frames.iter().zip(series.levels.iter()).enumerate() {
                 let Some(levels) = lv else {
                     prev = None;
                     continue;
@@ -2477,8 +2522,10 @@ fn draw_session_graph(
                 let x = value_to_px_x(sf.t - t0, bounds, rect);
                 let y = value_to_px_y(v as f64, y_bounds, rect);
                 let p = egui::pos2(x, y);
-                if let Some(prev_p) = prev {
-                    painter.line_segment([prev_p, p], egui::Stroke::new(1.5, color));
+                if let Some(prev_p) = prev
+                    && channel_visible(ch, i)
+                {
+                    painter.line_segment([prev_p, p], egui::Stroke::new(channel_width(ch), color));
                 }
                 prev = Some(p);
             }
@@ -2495,7 +2542,7 @@ fn draw_session_graph(
             egui::pos2(cursor_x, rect.top()),
             egui::pos2(cursor_x, rect.bottom()),
         ],
-        egui::Stroke::new(1.5, palette::TEXT_PRIMARY),
+        egui::Stroke::new(1.5, palette::get().text_primary),
     );
 
     // Скраб: клик или драг где угодно по холсту передвигает курсор.

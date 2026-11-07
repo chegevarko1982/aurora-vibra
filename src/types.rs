@@ -1,10 +1,11 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
+use std::time::{Duration, Instant};
 
 /// Сырая телеметрия из симулятора: нужна для записи сессий в JSONL и прогона
 /// их в редакторе эффектов. `#[serde(default)]` — чтобы записи, сделанные
@@ -612,6 +613,81 @@ pub enum HidCmd {
     SetHold(bool),
 }
 
+/// Что `hid_worker` реально отправляет на три мотора: джойстик, левый и правый
+/// мотор РУД. Пишет один поток устройства, читает GUI для осциллограмм.
+///
+/// Кроме текущего значения хранится пик с прошлого чтения: устройство кормится
+/// каждые 20 мс, а GUI читает реже, и короткий импульс иначе мог бы проскочить
+/// между кадрами и не попасть на график.
+#[derive(Default)]
+pub struct MotorMonitor {
+    current: [AtomicU8; 3],
+    peak: [AtomicU8; 3],
+}
+
+impl MotorMonitor {
+    pub fn record(&self, levels: [u8; 3]) {
+        for (i, level) in levels.into_iter().enumerate() {
+            self.current[i].store(level, Ordering::Relaxed);
+            self.peak[i].fetch_max(level, Ordering::Relaxed);
+        }
+    }
+
+    /// Наибольшее значение с прошлого вызова, но не меньше текущего: при ровной
+    /// вибрации устройство новых значений не шлёт, а мотор при этом работает.
+    pub fn sample(&self) -> [u8; 3] {
+        std::array::from_fn(|i| {
+            let peak = self.peak[i].swap(0, Ordering::Relaxed);
+            peak.max(self.current[i].load(Ordering::Relaxed))
+        })
+    }
+}
+
+/// История вывода на моторы для осциллограмм Live Monitor. Отсчёты идут по
+/// своему таймеру, а не по кадрам: движение мыши добавляет кадры, и шкала
+/// времени на графике от этого плавала бы.
+pub struct MotorHistory {
+    motors: [VecDeque<u8>; 3],
+    next_sample: Instant,
+}
+
+impl Default for MotorHistory {
+    fn default() -> Self {
+        Self {
+            motors: std::array::from_fn(|_| VecDeque::with_capacity(Self::CAPACITY)),
+            next_sample: Instant::now(),
+        }
+    }
+}
+
+impl MotorHistory {
+    /// 120 отсчётов по 33 мс, то есть около четырёх секунд на графике.
+    pub const CAPACITY: usize = 120;
+    const INTERVAL: Duration = Duration::from_millis(33);
+
+    pub fn tick(&mut self, monitor: &MotorMonitor) {
+        let now = Instant::now();
+        if now < self.next_sample {
+            return;
+        }
+        self.next_sample = now + Self::INTERVAL;
+        self.push(monitor.sample());
+    }
+
+    fn push(&mut self, levels: [u8; 3]) {
+        for (motor, level) in self.motors.iter_mut().zip(levels) {
+            if motor.len() == Self::CAPACITY {
+                motor.pop_front();
+            }
+            motor.push_back(level);
+        }
+    }
+
+    pub fn motors(&self) -> &[VecDeque<u8>; 3] {
+        &self.motors
+    }
+}
+
 pub struct ConfigShared {
     inner: Mutex<RumbleConfig>,
     rev: AtomicU64,
@@ -888,5 +964,38 @@ mod flight_vars_tests {
         let old_record = "{}";
         let restored_old: FlightVars = serde_json::from_str(old_record).unwrap();
         assert!(restored_old.lvars.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod motor_monitor_tests {
+    use super::{MotorHistory, MotorMonitor};
+
+    #[test]
+    fn short_pulse_between_reads_is_not_lost() {
+        let monitor = MotorMonitor::default();
+        monitor.record([200, 0, 0]);
+        monitor.record([0, 0, 0]);
+        assert_eq!(monitor.sample(), [200, 0, 0]);
+        assert_eq!(monitor.sample(), [0, 0, 0]);
+    }
+
+    #[test]
+    fn steady_output_stays_visible_without_new_records() {
+        let monitor = MotorMonitor::default();
+        monitor.record([0, 90, 90]);
+        assert_eq!(monitor.sample(), [0, 90, 90]);
+        assert_eq!(monitor.sample(), [0, 90, 90]);
+    }
+
+    #[test]
+    fn history_keeps_only_the_newest_samples() {
+        let mut history = MotorHistory::default();
+        for i in 0..MotorHistory::CAPACITY + 5 {
+            history.push([i as u8, 0, 0]);
+        }
+        let [stick, ..] = history.motors();
+        assert_eq!(stick.len(), MotorHistory::CAPACITY);
+        assert_eq!(stick.front().copied(), Some(5));
     }
 }
