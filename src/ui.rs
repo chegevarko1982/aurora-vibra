@@ -276,7 +276,11 @@ pub(crate) mod palette {
             visuals.disabled_alpha = 1.0;
         }
 
-        ctx.set_visuals(visuals);
+        // Тема всегда тёмная, независимо от Windows. set_visuals пишет только в
+        // стиль текущей темы, а при светлой теме Windows egui переключался на
+        // нетронутый светлый стиль: тёмный текст на тёмных карточках.
+        ctx.set_theme(egui::Theme::Dark);
+        ctx.set_visuals_of(egui::Theme::Dark, visuals);
         install_fonts(ctx, high_contrast);
         ctx.set_zoom_factor(p.zoom);
         ctx.all_styles_mut(|style| {
@@ -4374,5 +4378,32 @@ mod palette_tests {
         // Рельс должен быть различим и на чёрном фоне, и рядом с белой заливкой.
         assert!(contrast(MONO.rail, MONO.bg_app) >= 3.0);
         assert!(contrast(MONO.rail, MONO.selected_bg) >= 3.0);
+    }
+
+    /// Windows в светлом режиме. eframe сообщает системную тему, и egui берёт
+    /// светлый стиль: тёмный текст на тёмных карточках, которые красятся
+    /// палитрой напрямую. Проверяем оба порядка: тема известна до apply и
+    /// приходит уже после него, как на первом кадре.
+    #[test]
+    fn theme_stays_dark_when_windows_uses_light_mode() {
+        let light = || egui::RawInput {
+            system_theme: Some(egui::Theme::Light),
+            ..Default::default()
+        };
+        for light_known_before_apply in [false, true] {
+            let ctx = egui::Context::default();
+            if light_known_before_apply {
+                let _ = ctx.run_ui(light(), |_| {});
+            }
+            super::palette::apply(&ctx, false);
+            let _ = ctx.run_ui(light(), |_| {});
+            let style = ctx.global_style();
+            assert!(style.visuals.dark_mode, "{light_known_before_apply}");
+            assert_eq!(
+                style.visuals.panel_fill,
+                super::palette::DARK.bg_app,
+                "{light_known_before_apply}"
+            );
+        }
     }
 }
