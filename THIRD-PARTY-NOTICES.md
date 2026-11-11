@@ -69,7 +69,8 @@ it will be done.
 
 The interface font files in `assets/fonts/` (IBM Plex Sans and IBM Plex Mono) are embedded in
 the executable. They are Copyright 2017 IBM Corp. and are licensed under the SIL Open Font
-License, Version 1.1, not under this project's MIT license. The full license text is in
+License, Version 1.1, not under this project's MIT license. The full license text ships next
+to the executable as `OFL-IBM-Plex.txt` and is kept in the source tree as
 [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt).
 
 ---

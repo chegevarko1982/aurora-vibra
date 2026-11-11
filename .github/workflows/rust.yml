@@ -72,10 +72,13 @@ jobs:
           # Bundle: the EXE (renamed inside zip to the nice BIN_NAME) plus the
           # license texts. MIT requires its notice to ship with every copy, and
           # THIRD-PARTY-NOTICES.md covers the embedded Microsoft SimConnect.dll.
+          # Шрифты IBM Plex вшиты в exe, а OFL требует прикладывать полный текст
+          # лицензии к каждой копии, так что кладём его рядом под понятным именем.
           $tmpDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "bundle") | Select-Object -ExpandProperty FullName
           Copy-Item $exePath (Join-Path $tmpDir "$($env:BIN_NAME).exe")
           Copy-Item "LICENSE" $tmpDir
           Copy-Item "THIRD-PARTY-NOTICES.md" $tmpDir
+          Copy-Item "assets/fonts/OFL.txt" (Join-Path $tmpDir "OFL-IBM-Plex.txt")
           Copy-Item "CHANGELOG.md" $tmpDir
 
           # README ссылается на assets/aurora-vibra-logo.png, которого в архиве
