@@ -1,9 +1,10 @@
 # Changelog
 
-## v5.1.0-rc1
+## v5.1.0-rc2
 
 Release candidate — not distributed through the in-app auto-updater; download it manually from
-the GitHub Releases page if you want to test it.
+the GitHub Releases page if you want to test it. Supersedes `v5.1.0-rc1`, which had the
+unreadable-text bug below and shipped without the font license text.
 
 This release redraws the whole interface and adds an optional black-and-white mode for
 low-vision users. Effects, their calibration, telemetry and device output are unchanged.
@@ -25,6 +26,11 @@ low-vision users. Effects, their calibration, telemetry and device output are un
   ★ or ✔, and graph lines differ by dash pattern. Text contrast is at least 7:1 (WCAG AAA).
 
 **Fixes:**
+- **Text was unreadable when Windows is in light mode.** The program took its text colours from
+  the Windows light/dark setting while the effect cards are always drawn dark, so with light
+  mode the labels on the cards came out dark grey on dark blue and showed up only when
+  selected with the mouse. This affected v5.0.0 and v5.1.0-rc1. The interface now stays dark
+  whatever Windows is set to; nothing changes for anyone already using dark mode.
 - **Settings could be lost if the program was killed while saving.** The settings file was
   overwritten in place, so a crash or power cut mid-write left it truncated and every profile
   and custom effect went with it. It is now written to a temporary file next to it and swapped
@@ -32,6 +38,9 @@ low-vision users. Effects, their calibration, telemetry and device output are un
 - **Dependencies updated to close 16 published security advisories**, including `zip` 0.6 → 9
   (used to unpack downloaded updates), `rustls`, `rustls-webpki`, `webpki-roots`, `quinn-proto`,
   `tokio` and `webbrowser`.
+- **The release archive now includes the IBM Plex font license** as `OFL-IBM-Plex.txt`; the
+  fonts are embedded in the executable and their license requires the full text to travel
+  with it.
 
 **Note:**
 - The window now opens at 1120×720 and cannot be made narrower than 1000 points; below that
