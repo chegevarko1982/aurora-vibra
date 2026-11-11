@@ -1,5 +1,45 @@
 # Changelog
 
+## v5.1.0-rc1
+
+Release candidate — not distributed through the in-app auto-updater; download it manually from
+the GitHub Releases page if you want to test it.
+
+This release redraws the whole interface and adds an optional black-and-white mode for
+low-vision users. Effects, their calibration, telemetry and device output are unchanged.
+
+**New:**
+- **Redesigned interface.** Navigation moves to a sidebar with icons, the top bar carries the
+  connection status, the current aircraft, both devices and the Stop button, and effects are
+  listed as slim rows instead of cards. Text is set in IBM Plex, which covers Cyrillic; the
+  font files ship with the program under the SIL Open Font License.
+- **Live Monitor shows what the motors actually do.** A panel on the right draws the output of
+  the joystick and both throttle motors as three oscilloscope traces and lists the effects that
+  are firing. The traces come from the values sent to the device, not from the effects'
+  settings, so they show the mixed result.
+- **Black-and-white mode for low-vision users.** Press **Ctrl+Shift+H** or pick the first item
+  in the "..." menu; the choice is remembered. The interface switches to black, white and grey
+  only, grows by 25%, uses a heavier font and thicker outlines. Nothing in this mode is told
+  apart by colour alone: a firing effect gets a thick frame, a switched-off one a thin grey
+  frame and the word Off, unsaved changes show as `Save *`, the aircraft name is marked with
+  ★ or ✔, and graph lines differ by dash pattern. Text contrast is at least 7:1 (WCAG AAA).
+
+**Fixes:**
+- **Settings could be lost if the program was killed while saving.** The settings file was
+  overwritten in place, so a crash or power cut mid-write left it truncated and every profile
+  and custom effect went with it. It is now written to a temporary file next to it and swapped
+  in only once complete.
+- **Dependencies updated to close 16 published security advisories**, including `zip` 0.6 → 9
+  (used to unpack downloaded updates), `rustls`, `rustls-webpki`, `webpki-roots`, `quinn-proto`,
+  `tokio` and `webbrowser`.
+
+**Note:**
+- The window now opens at 1120×720 and cannot be made narrower than 1000 points; below that
+  the top bar and the editor overlapped. In black-and-white mode the window grows to about
+  1400×900 with a minimum of about 1250×750, which leaves little room on a 1366×768 screen.
+- The window title bar is drawn by Windows and keeps its usual colour in black-and-white mode.
+- Not yet tried in flight on real hardware — that is what this candidate is for.
+
 ## v5.0.0
 
 Feature release. Until now the set of tactile effects was fixed in code: you could switch an
