@@ -97,6 +97,8 @@ fn main() -> Result<()> {
     // для всех трёх воркеров, создаётся один раз и клонируется (PreviewLock
     // сам по себе Clone, см. game_state.rs).
     let preview_lock = PreviewLock::new();
+    // Реальный вывод на моторы: пишет hid_worker, читают осциллограммы Live Monitor.
+    let motor_monitor = Arc::new(aurora_vibra::types::MotorMonitor::default());
     // Поток ручного предпросмотра эффекта на точной сетке 20мс (см.
     // custom_fx::preview_player) — единственный владелец живёт в UiState,
     // редактор получает только ссылку. Создан здесь же, рядом с
@@ -128,6 +130,8 @@ fn main() -> Result<()> {
     aurora_vibra::settings::set_close_to_tray(close_to_tray);
     let monitor_collapsed = settings_file.monitor_collapsed;
     aurora_vibra::settings::set_monitor_collapsed(monitor_collapsed);
+    let high_contrast = settings_file.high_contrast;
+    aurora_vibra::settings::set_high_contrast(high_contrast);
     let game_override = settings_file.game_override;
     aurora_vibra::settings::set_game_override(game_override);
     aurora_vibra::settings::set_simconnect_dll_path(settings_file.simconnect_dll_path.clone());
@@ -146,7 +150,8 @@ fn main() -> Result<()> {
         let throttle_flag = throttle_connected.clone();
         let rx = rx_hid.clone();
         let logs = logs.clone();
-        thread::spawn(move || hid_worker(controller_flag, throttle_flag, rx, logs));
+        let motors = motor_monitor.clone();
+        thread::spawn(move || hid_worker(controller_flag, throttle_flag, rx, logs, motors));
     }
 
     {
@@ -283,8 +288,8 @@ fn main() -> Result<()> {
             // RumbleConfig::telemetry_expanded). Точные значения не проверены
             // визуально в этой среде — подгони при первом запуске, если не
             // совпадёт с реальным рендером/экраном.
-            .with_inner_size([1000.0, 660.0])
-            .with_min_inner_size([700.0, 600.0])
+            .with_inner_size([1120.0, 720.0])
+            .with_min_inner_size([1000.0, 600.0])
             .with_resizable(true) // Разрешили изменение размера
             .with_maximize_button(true)
             .with_minimize_button(true)
@@ -337,7 +342,11 @@ fn main() -> Result<()> {
         active_tab: Tab::Main,
         active_section: aurora_vibra::ui::Section::Rumble,
         monitor_show_disabled: false,
+        motor_monitor,
+        motor_history: aurora_vibra::types::MotorHistory::default(),
         monitor_collapsed,
+        high_contrast,
+        window_fit_pending: high_contrast,
         hold,
         recording,
         close_to_tray,
@@ -362,7 +371,7 @@ fn main() -> Result<()> {
         native_options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            aurora_vibra::ui::apply_theme(&cc.egui_ctx);
+            aurora_vibra::ui::apply_theme(&cc.egui_ctx, high_contrast);
             let ctx = cc.egui_ctx.clone();
             aurora_vibra::tray::spawn_tray_with_ctx(
                 tx_ui_for_tray.clone(),
