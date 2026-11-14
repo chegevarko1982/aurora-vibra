@@ -242,7 +242,7 @@ Eight effects: **Weapon 1** and **Weapon 2** gunfire, **Stall buffet**,
 - **Simulators:** Microsoft Flight Simulator (2020 / 2024) via SimConnect, X-Plane 12 via
   UDP RREF, War Thunder via its local telemetry server
 - **Supported hardware:** FFB & vibration-capable flight controls — WinWing Combat
-  Joystick R, Orion joystick and throttle, Ursa Minor throttle, and similar
+  Joystick R, Orion joystick and throttle, Ursa Minor throttle (including Combat Throttle EX), and similar
 
 To build from source (requires the **Rust** toolchain, 1.88 or newer):
 

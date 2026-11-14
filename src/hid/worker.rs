@@ -9,10 +9,11 @@ use crossbeam_channel::Receiver;
 use hidapi::{HidApi, HidDevice};
 
 use crate::hid::protocol::{
-    THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID, build_orion_joystick_vibe_frame,
+    COMBAT_EX_MOTOR_A, COMBAT_EX_MOTOR_B, THROTTLE_MOTOR_LEFT, THROTTLE_MOTOR_RIGHT, WW_VID,
+    build_combat_throttle_ex_vibe_frame, build_orion_joystick_vibe_frame,
     build_orion_throttle_vibe_frames, build_simapp_vibe_frame, build_throttle_vibe_frame,
-    is_orion_joystick, is_orion_throttle, is_supported_joystick, is_supported_throttle,
-    is_ursa_minor_throttle, ursa_model_name,
+    is_combat_throttle_ex, is_orion_joystick, is_orion_throttle, is_supported_joystick,
+    is_supported_throttle, is_ursa_minor_throttle, ursa_model_name,
 };
 use crate::hid::win32::hid_query_caps_from_path;
 use crate::{HidCmd, LogBuffer, types::MotorMonitor};
@@ -94,6 +95,27 @@ fn hid_send_out(
             fail += t_fail;
             if t_fail > 0 {
                 failed_paths.push(d.path.clone());
+            }
+            continue;
+        }
+
+        if is_combat_throttle_ex(d.pid) {
+            // Combat Throttle EX: два мотора, свой формат кадра.
+            for (motor, intensity) in [
+                (COMBAT_EX_MOTOR_A, throttle_left_intensity),
+                (COMBAT_EX_MOTOR_B, throttle_right_intensity),
+            ] {
+                let frame =
+                    build_combat_throttle_ex_vibe_frame(d.report_id, d.out_len, motor, intensity);
+                match d.dev.write(&frame) {
+                    Ok(n) if n == frame.len() => ok += 1,
+                    _ => {
+                        fail += 1;
+                        if !failed_paths.contains(&d.path) {
+                            failed_paths.push(d.path.clone());
+                        }
+                    }
+                }
             }
             continue;
         }

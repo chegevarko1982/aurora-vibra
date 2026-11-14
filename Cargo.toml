@@ -127,6 +127,11 @@ name = "test_pattern_uniformity"
 path = "src/bin/test_pattern_uniformity.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "probe_ex_throttle"
+path = "src/bin/probe_ex_throttle.rs"
+required-features = ["dev-tools"]
+
 # Автономная разведывательная утилита для War Thunder HTTP-телеметрии
 # (localhost:8111/state, /indicators, /hudmsg, ...). Кроссплатформенная
 # (Windows + Linux, в т.ч. --replay в CI без запущенной игры), поэтому не под
