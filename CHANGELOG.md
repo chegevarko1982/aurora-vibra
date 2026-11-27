@@ -1,9 +1,10 @@
 # Changelog
 
-## v5.1.0-rc2
+## v5.1.0-rc3
 
 Release candidate — not distributed through the in-app auto-updater; download it manually from
-the GitHub Releases page if you want to test it. Supersedes `v5.1.0-rc1`, which had the
+the GitHub Releases page if you want to test it. Supersedes `v5.1.0-rc2`, adding the
+**Capture idle** button and two dependency security fixes; `v5.1.0-rc1` also had the
 unreadable-text bug below and shipped without the font license text.
 
 This release redraws the whole interface and adds an optional black-and-white mode for
@@ -24,6 +25,12 @@ low-vision users. Effects, their calibration, telemetry and device output are un
   apart by colour alone: a firing effect gets a thick frame, a switched-off one a thin grey
   frame and the word Off, unsaved changes show as `Save *`, the aircraft name is marked with
   ★ or ✔, and graph lines differ by dash pattern. Text contrast is at least 7:1 (WCAG AAA).
+- **Capture idle in one press.** Engines → Engine Start now has a **Capture idle** button next
+  to N2 Idle%, showing engine 1's current N2. With the engines settled at idle, press it and
+  N2 Idle% is set to that value minus 1.5% — no more tuning it by hand. The button is greyed
+  out until the sim is connected and engine 1 is running. As with any setting, press Save to
+  keep it for the aircraft. This existed before only as a small (SET) next to N2 on the
+  Telemetry tab, which is still there.
 
 **Fixes:**
 - **Text was unreadable when Windows is in light mode.** The program took its text colours from
@@ -37,7 +44,8 @@ low-vision users. Effects, their calibration, telemetry and device output are un
   in only once complete.
 - **Dependencies updated to close 16 published security advisories**, including `zip` 0.6 → 9
   (used to unpack downloaded updates), `rustls`, `rustls-webpki`, `webpki-roots`, `quinn-proto`,
-  `tokio` and `webbrowser`.
+  `tokio` and `webbrowser`. Since rc2 two more were closed: `quinn-udp` 0.5.16
+  (RUSTSEC-2026-0538) and `url` 2.5.9 (RUSTSEC-2026-0592); `rustix` is also updated to 1.1.6.
 - **The release archive now includes the IBM Plex font license** as `OFL-IBM-Plex.txt`; the
   fonts are embedded in the executable and their license requires the full text to travel
   with it.
