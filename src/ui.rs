@@ -2777,6 +2777,17 @@ impl eframe::App for UiState {
 
                         let mut _changed = false;
 
+                        // Текущий N2 первого двигателя для кнопки «Захватить холостой»
+                        // рядом с N2 Холостой%. None — нет телеметрии или двигатель
+                        // не горит: писать порог с остановленного мотора бессмысленно.
+                        let live_idle_n2: Option<f64> = self
+                            .last_vars
+                            .lock()
+                            .as_ref()
+                            .filter(|v| v.eng1_combustion > 0.5)
+                            .map(|v| v.eng1_n2_percent);
+                        let mut idle_n2_captured: Option<f32> = None;
+
                         let ground_active = self.effects.ground_active.load(Ordering::Relaxed);
                         let ground_thump_active =
                             self.effects.ground_thump_active.load(Ordering::Relaxed);
@@ -3369,6 +3380,33 @@ let n2_hint = t.hover_n2_idle;
                                                         if n2_resp.changed() {
                                                             _changed = true;
                                                         }
+                                                        // Один клик вместо подбора руками: N2 Eng1
+                                                        // на холостом минус 1.5% (как (SET) в Телеметрии).
+                                                        let capture_text = match live_idle_n2 {
+                                                            Some(n2) => format!(
+                                                                "{} ({:.1}%)",
+                                                                t.btn_capture_idle_n2, n2
+                                                            ),
+                                                            None => t.btn_capture_idle_n2.to_string(),
+                                                        };
+                                                        let capture_resp = ui
+                                                            .add_enabled(
+                                                                live_idle_n2.is_some(),
+                                                                egui::Button::new(capture_text),
+                                                            )
+                                                            .on_hover_text(t.hover_capture_idle_n2)
+                                                            .on_disabled_hover_text(
+                                                                t.hover_capture_idle_n2_disabled,
+                                                            );
+                                                        if capture_resp.clicked()
+                                                            && let Some(n2) = live_idle_n2
+                                                        {
+                                                            let new_val =
+                                                                (n2 - 1.5).clamp(10.0, 100.0) as f32;
+                                                            cfg.engine_idle_n2 = new_val;
+                                                            idle_n2_captured = Some(new_val);
+                                                            _changed = true;
+                                                        }
                                                     });
                                                     if ui
                                                         .checkbox(
@@ -3828,6 +3866,12 @@ let n2_hint = t.hover_n2_idle;
                                 // Конфиг уже обновлен через with_mut
                             }
                         });
+
+                        if let Some(val) = idle_n2_captured {
+                            self.logs.push(
+                                t.log_n2_idle_set.replace("{val:.1}", &format!("{val:.1}")),
+                            );
+                        }
 
                         ui.add_space(8.0);
                         if self.active_section != Section::Effects && ui.button(t.btn_reset_defaults).clicked() {
